@@ -5,7 +5,8 @@ import { fileURLToPath } from 'url';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync } from 'fs';
 import { logger } from '../../utils/logger.js';
 import { CONTEXT_TAG_OPEN, CONTEXT_TAG_CLOSE, injectContextIntoMarkdownFile } from '../../utils/context-injection.js';
-import { getWorkerPort } from '../../shared/worker-utils.js';
+import { buildWorkerUrl } from '../../shared/worker-utils.js';
+import { buildContextInjectPath } from '../../shared/query-utils.js';
 
 export function getOpenCodeConfigDirectory(): string {
   if (process.env.OPENCODE_CONFIG_DIR) {
@@ -88,11 +89,10 @@ export function injectContextIntoAgentsMd(contextContent: string): number {
 }
 
 export async function syncContextToAgentsMd(
-  port: number,
   project: string,
 ): Promise<void> {
   try {
-    await fetchAndInjectOpenCodeContext(port, project);
+    await fetchAndInjectOpenCodeContext(project);
   } catch (error) {
     if (error instanceof Error) {
       logger.debug('WORKER', 'Worker not available during context sync', {}, error);
@@ -103,12 +103,11 @@ export async function syncContextToAgentsMd(
 }
 
 async function fetchRealContextFromWorker(): Promise<string | null> {
-  const workerPort = getWorkerPort();
-  const healthResponse = await fetch(`http://127.0.0.1:${workerPort}/api/readiness`);
+  const healthResponse = await fetch(buildWorkerUrl('/api/readiness'));
   if (!healthResponse.ok) return null;
 
   const contextResponse = await fetch(
-    `http://127.0.0.1:${workerPort}/api/context/inject?project=opencode`,
+    buildWorkerUrl(buildContextInjectPath(['opencode'])),
   );
   if (!contextResponse.ok) return null;
 
@@ -116,9 +115,9 @@ async function fetchRealContextFromWorker(): Promise<string | null> {
   return realContext && realContext.trim() ? realContext : null;
 }
 
-async function fetchAndInjectOpenCodeContext(port: number, project: string): Promise<void> {
+async function fetchAndInjectOpenCodeContext(project: string): Promise<void> {
   const response = await fetch(
-    `http://127.0.0.1:${port}/api/context/inject?project=${encodeURIComponent(project)}`,
+    buildWorkerUrl(buildContextInjectPath([project])),
   );
   if (!response.ok) return;
 

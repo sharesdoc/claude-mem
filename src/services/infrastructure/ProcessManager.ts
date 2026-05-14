@@ -10,6 +10,7 @@ import { HOOK_TIMEOUTS } from '../../shared/hook-constants.js';
 import { sanitizeEnv } from '../../supervisor/env-sanitizer.js';
 import { getSupervisor, validateWorkerPidFile, type ValidateWorkerPidStatus } from '../../supervisor/index.js';
 import { paths } from '../../shared/paths.js';
+import { getProjectContext } from '../../utils/project-name.js';
 
 const execAsync = promisify(exec);
 
@@ -253,7 +254,7 @@ export function runOneTimeChromaMigration(dataDirectory?: string): void {
   logger.info('SYSTEM', 'Chroma migration marker written', { markerPath });
 }
 
-const CWD_REMAP_MARKER_FILENAME = '.cwd-remap-applied-v1';
+const CWD_REMAP_MARKER_FILENAME = '.cwd-remap-applied-v3';
 
 type CwdClassification =
   | { kind: 'main'; project: string }
@@ -280,17 +281,13 @@ function classifyCwdForRemap(cwd: string): CwdClassification {
 
   const toplevel = gitQuery(cwd, ['rev-parse', '--show-toplevel']);
   if (!toplevel) return { kind: 'skip' };
-  const leaf = path.basename(toplevel);
+  const project = getProjectContext(toplevel).primary;
 
   if (gitDir === commonDir) {
-    return { kind: 'main', project: leaf };
+    return { kind: 'main', project };
   }
 
-  const parentRepoDir = commonDir.endsWith('/.git')
-    ? path.dirname(commonDir)
-    : commonDir.replace(/\.git$/, '');
-  const parent = path.basename(parentRepoDir);
-  return { kind: 'worktree', project: `${parent}/${leaf}` };
+  return { kind: 'worktree', project };
 }
 
 export function runOneTimeCwdRemap(dataDirectory?: string): void {
@@ -518,4 +515,3 @@ export function touchPidFile(): void {
 export function cleanStalePidFile(): ValidateWorkerPidStatus {
   return validateWorkerPidFile({ logAlive: false });
 }
-

@@ -314,7 +314,7 @@ async function syncAndBroadcastSummary(
     created_at_epoch: result.createdAtEpoch
   });
 
-  updateCursorContextForProject(session.project, getWorkerPort()).catch(error => {
+  updateCursorContextForProject(session.project).catch(error => {
     logger.warn('CURSOR', 'Context update failed (non-critical)', { project: session.project }, error as Error);
   });
 }

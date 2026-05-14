@@ -4,16 +4,12 @@ import path from 'path';
 
 export interface WorktreeInfo {
   isWorktree: boolean;
-  worktreeName: string | null;     
-  parentRepoPath: string | null;   
-  parentProjectName: string | null; 
+  parentRepoPath: string | null;
 }
 
 const NOT_A_WORKTREE: WorktreeInfo = {
   isWorktree: false,
-  worktreeName: null,
   parentRepoPath: null,
-  parentProjectName: null
 };
 
 export function detectWorktree(cwd: string): WorktreeInfo {
@@ -46,7 +42,10 @@ export function detectWorktree(cwd: string): WorktreeInfo {
     return NOT_A_WORKTREE;
   }
 
-  const gitdirPath = match[1];
+  const rawGitdirPath = match[1];
+  const gitdirPath = path.isAbsolute(rawGitdirPath)
+    ? rawGitdirPath
+    : path.resolve(cwd, rawGitdirPath);
 
   const worktreesMatch = gitdirPath.match(/^(.+)[/\\]\.git[/\\]worktrees[/\\]([^/\\]+)$/);
   if (!worktreesMatch) {
@@ -54,13 +53,9 @@ export function detectWorktree(cwd: string): WorktreeInfo {
   }
 
   const parentRepoPath = worktreesMatch[1];
-  const worktreeName = path.basename(cwd);
-  const parentProjectName = path.basename(parentRepoPath);
 
   return {
     isWorktree: true,
-    worktreeName,
     parentRepoPath,
-    parentProjectName
   };
 }

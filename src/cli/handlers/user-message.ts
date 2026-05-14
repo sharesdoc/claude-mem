@@ -1,5 +1,4 @@
 
-import { basename } from 'path';
 import type { EventHandler, NormalizedHookInput, HookResult } from '../types.js';
 import {
   executeWithWorkerFallback,
@@ -7,15 +6,18 @@ import {
   getWorkerPort,
 } from '../../shared/worker-utils.js';
 import { HOOK_EXIT_CODES } from '../../shared/hook-constants.js';
+import { getProjectContext } from '../../utils/project-name.js';
+import { buildContextInjectPath } from '../../shared/query-utils.js';
 
 export const userMessageHandler: EventHandler = {
   async execute(input: NormalizedHookInput): Promise<HookResult> {
     const port = getWorkerPort();
-    const project = basename(input.cwd ?? process.cwd());
+    const context = getProjectContext(input.cwd ?? process.cwd());
     const colorsParam = input.platform === 'claude-code' ? '&colors=true' : '';
+    const apiPath = buildContextInjectPath(context.allProjects);
 
     const result = await executeWithWorkerFallback<string>(
-      `/api/context/inject?project=${encodeURIComponent(project)}${colorsParam}`,
+      `${apiPath}${colorsParam}`,
       'GET',
     );
 

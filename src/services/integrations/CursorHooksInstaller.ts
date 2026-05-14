@@ -5,7 +5,9 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from '
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { logger } from '../../utils/logger.js';
+import { getProjectContext } from '../../utils/project-name.js';
 import { getWorkerPort, workerHttpRequest } from '../../shared/worker-utils.js';
+import { buildContextInjectPath } from '../../shared/query-utils.js';
 import { DATA_DIR, MARKETPLACE_ROOT, CLAUDE_CONFIG_DIR } from '../../shared/paths.js';
 import {
   readCursorRegistry as readCursorRegistryFromFile,
@@ -54,23 +56,37 @@ export function unregisterCursorProject(projectName: string): void {
   }
 }
 
-export async function updateCursorContextForProject(projectName: string, _port: number): Promise<void> {
+export async function updateCursorContextForProject(projectName: string): Promise<void> {
   const registry = readCursorRegistry();
-  const entry = registry[projectName];
+  let entry = registry[projectName];
+  let projectContext: ReturnType<typeof getProjectContext> | undefined;
 
-  if (!entry) return; 
+  if (!entry) {
+    for (const candidate of Object.values(registry)) {
+      const ctx = getProjectContext(candidate.workspacePath);
+      if (ctx.allProjects.includes(projectName)) {
+        entry = candidate;
+        projectContext = ctx;
+        break;
+      }
+    }
+  }
+
+  if (!entry) return;
+
+  if (!projectContext) {
+    projectContext = getProjectContext(entry.workspacePath);
+  }
 
   try {
-    const response = await workerHttpRequest(
-      `/api/context/inject?project=${encodeURIComponent(projectName)}`
-    );
+    const response = await workerHttpRequest(buildContextInjectPath(projectContext.allProjects));
 
     if (!response.ok) return;
 
-    const context = await response.text();
-    if (!context || !context.trim()) return;
+    const contextText = await response.text();
+    if (!contextText || !contextText.trim()) return;
 
-    writeContextFile(entry.workspacePath, context);
+    writeContextFile(entry.workspacePath, contextText);
     logger.debug('CURSOR', 'Updated context file', { projectName, workspacePath: entry.workspacePath });
   } catch (error) {
     if (error instanceof Error) {
@@ -306,13 +322,14 @@ async function setupProjectContext(targetDir: string, workspaceRoot: string): Pr
   const rulesDir = path.join(targetDir, 'rules');
   mkdirSync(rulesDir, { recursive: true });
 
-  const projectName = path.basename(workspaceRoot);
+  const projectContext = getProjectContext(workspaceRoot);
+  const projectName = projectContext.primary;
   let contextGenerated = false;
 
   console.log(`  Generating initial context...`);
 
   try {
-    contextGenerated = await fetchInitialContextFromWorker(projectName, workspaceRoot);
+    contextGenerated = await fetchInitialContextFromWorker(projectContext.allProjects, workspaceRoot);
   } catch (error) {
     if (error instanceof Error) {
       logger.debug('WORKER', 'Worker not running during install', {}, error);
@@ -343,15 +360,13 @@ Use claude-mem's MCP search tools for manual memory queries.
 }
 
 async function fetchInitialContextFromWorker(
-  projectName: string,
+  projects: string[],
   workspaceRoot: string,
 ): Promise<boolean> {
   const healthResponse = await workerHttpRequest('/api/readiness');
   if (!healthResponse.ok) return false;
 
-  const contextResponse = await workerHttpRequest(
-    `/api/context/inject?project=${encodeURIComponent(projectName)}`,
-  );
+  const contextResponse = await workerHttpRequest(buildContextInjectPath(projects));
   if (!contextResponse.ok) return false;
 
   const context = await contextResponse.text();
@@ -419,7 +434,7 @@ function removeCursorHooksFiles(
       console.log(`  Removed context file`);
     }
 
-    const projectName = path.basename(process.cwd());
+    const projectName = getProjectContext(process.cwd()).primary;
     unregisterCursorProject(projectName);
     console.log(`  Unregistered from auto-context updates`);
   }

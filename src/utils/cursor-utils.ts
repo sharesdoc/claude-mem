@@ -162,24 +162,6 @@ export function jsonGet(json: Record<string, unknown>, field: string, fallback: 
   return String(value);
 }
 
-export function getProjectName(workspacePath: string): string {
-  if (!workspacePath) return 'unknown-project';
-
-  const driveMatch = workspacePath.match(/^([A-Za-z]):[\\\/]?$/);
-  if (driveMatch) {
-    return `drive-${driveMatch[1].toUpperCase()}`;
-  }
-
-  const normalized = workspacePath.replace(/\\/g, '/');
-  const name = basename(normalized);
-
-  if (!name) {
-    return 'unknown-project';
-  }
-
-  return name;
-}
-
 export function isEmpty(str: string | null | undefined): boolean {
   if (str === null || str === undefined) return true;
   if (str === '') return true;

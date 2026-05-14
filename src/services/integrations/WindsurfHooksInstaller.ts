@@ -3,7 +3,9 @@ import path from 'path';
 import { homedir } from 'os';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, renameSync } from 'fs';
 import { logger } from '../../utils/logger.js';
-import { getWorkerPort } from '../../shared/worker-utils.js';
+import { getProjectContext } from '../../utils/project-name.js';
+import { buildWorkerUrl } from '../../shared/worker-utils.js';
+import { buildContextInjectPath } from '../../shared/query-utils.js';
 import { DATA_DIR } from '../../shared/paths.js';
 import { findBunPath, findWorkerServicePath } from './CursorHooksInstaller.js';
 
@@ -78,16 +80,15 @@ export function unregisterWindsurfProject(workspacePath: string): void {
   }
 }
 
-export async function updateWindsurfContextForProject(projectName: string, workspacePath: string, port: number): Promise<void> {
+export async function updateWindsurfContextForProject(projectName: string, workspacePath: string): Promise<void> {
   const registry = readWindsurfRegistry();
   const entry = registry[workspacePath];
 
   if (!entry) return; 
 
   try {
-    const response = await fetch(
-      `http://127.0.0.1:${port}/api/context/inject?project=${encodeURIComponent(projectName)}`
-    );
+    const projectContext = getProjectContext(workspacePath);
+    const response = await fetch(buildWorkerUrl(buildContextInjectPath(projectContext.allProjects)));
 
     if (!response.ok) return;
 
@@ -254,14 +255,14 @@ Next steps:
 }
 
 async function setupWindsurfProjectContext(workspaceRoot: string): Promise<void> {
-  const port = getWorkerPort();
-  const projectName = path.basename(workspaceRoot);
+  const projectContext = getProjectContext(workspaceRoot);
+  const projectName = projectContext.primary;
   let contextGenerated = false;
 
   console.log(`  Generating initial context...`);
 
   try {
-    contextGenerated = await fetchWindsurfContextFromWorker(port, projectName, workspaceRoot);
+    contextGenerated = await fetchWindsurfContextFromWorker(projectContext.allProjects, workspaceRoot);
   } catch (error) {
     if (error instanceof Error) {
       logger.debug('WORKER', 'Worker not running during install', {}, error);
@@ -289,16 +290,13 @@ Use claude-mem's MCP search tools for manual memory queries.
 }
 
 async function fetchWindsurfContextFromWorker(
-  port: number,
-  projectName: string,
+  projects: string[],
   workspaceRoot: string,
 ): Promise<boolean> {
-  const healthResponse = await fetch(`http://127.0.0.1:${port}/api/readiness`);
+  const healthResponse = await fetch(buildWorkerUrl('/api/readiness'));
   if (!healthResponse.ok) return false;
 
-  const contextResponse = await fetch(
-    `http://127.0.0.1:${port}/api/context/inject?project=${encodeURIComponent(projectName)}`,
-  );
+  const contextResponse = await fetch(buildWorkerUrl(buildContextInjectPath(projects)));
   if (!contextResponse.ok) return false;
 
   const context = await contextResponse.text();

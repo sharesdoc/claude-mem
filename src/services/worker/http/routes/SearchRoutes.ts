@@ -10,6 +10,7 @@ import { logger } from '../../../../utils/logger.js';
 import { groupByDate } from '../../../../shared/timeline-formatting.js';
 import { countObservationsByProjects } from '../../../context/ObservationCompiler.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
+import { parseProjectQuery } from '../../../../shared/query-utils.js';
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import type { ObservationSearchResult, SessionSummarySearchResult } from '../../../sqlite/types.js';
 
@@ -40,6 +41,12 @@ const cachedOnboardingExplainer: string | null = (() => {
 const SETTINGS_CACHE_TTL_MS = 5000;
 let cachedSettings: ReturnType<typeof SettingsDefaultsManager.loadFromFile> | null = null;
 let cachedSettingsAt = 0;
+
+export function resetSettingsCache(): void {
+  cachedSettings = null;
+  cachedSettingsAt = 0;
+  projectsKnownNonEmpty.clear();
+}
 
 function getCachedSettings(): ReturnType<typeof SettingsDefaultsManager.loadFromFile> {
   const now = Date.now();
@@ -335,19 +342,12 @@ export class SearchRoutes extends BaseRouteHandler {
   });
 
   private handleContextInject = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    const projectsParam = (req.query.projects as string) || (req.query.project as string);
     const forHuman = req.query.colors === 'true';
     const full = req.query.full === 'true';
-
-    if (!projectsParam) {
-      this.badRequest(res, 'Project(s) parameter is required');
-      return;
-    }
-
-    const projects = projectsParam.split(',').map(p => p.trim()).filter(Boolean);
+    const projects = parseProjectQuery(req.query.projects, req.query.project);
 
     if (projects.length === 0) {
-      this.badRequest(res, 'At least one project is required');
+      this.badRequest(res, 'Project(s) parameter is required');
       return;
     }
 

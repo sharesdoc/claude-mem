@@ -1,9 +1,8 @@
 
-import { basename } from 'path';
-import { logger } from '../../../../utils/logger.js';
+import { getProjectContext } from '../../../../utils/project-name.js';
 
 export function getCurrentProject(): string {
-  return basename(process.cwd());
+  return getProjectContext(process.cwd()).primary;
 }
 
 export function normalizeProject(project?: string): string | undefined {

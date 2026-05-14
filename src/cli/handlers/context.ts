@@ -6,6 +6,7 @@ import {
   getWorkerPort,
 } from '../../shared/worker-utils.js';
 import { getProjectContext } from '../../utils/project-name.js';
+import { buildContextInjectPath } from '../../shared/query-utils.js';
 import { HOOK_EXIT_CODES } from '../../shared/hook-constants.js';
 import { logger } from '../../utils/logger.js';
 import { loadFromFileOnce } from '../../shared/hook-settings.js';
@@ -20,8 +21,7 @@ export const contextHandler: EventHandler = {
     const settings = loadFromFileOnce();
     const showTerminalOutput = settings.CLAUDE_MEM_CONTEXT_SHOW_TERMINAL_OUTPUT === 'true';
 
-    const projectsParam = context.allProjects.join(',');
-    const apiPath = `/api/context/inject?projects=${encodeURIComponent(projectsParam)}`;
+    const apiPath = buildContextInjectPath(context.allProjects);
     const colorApiPath = input.platform === 'claude-code' ? `${apiPath}&colors=true` : apiPath;
 
     const emptyResult: HookResult = {

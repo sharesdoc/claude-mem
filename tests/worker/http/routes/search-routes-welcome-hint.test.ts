@@ -8,7 +8,15 @@ mock.module('../../../../src/services/context-generator.js', () => ({
   generateContext: generateContextStub,
 }));
 
-import { SearchRoutes } from '../../../../src/services/worker/http/routes/SearchRoutes.js';
+// Controlled settings mock — tests can toggle welcomeHintEnabled per-test.
+let welcomeHintEnabled = 'true';
+mock.module('../../../../src/shared/SettingsDefaultsManager.js', () => ({
+  SettingsDefaultsManager: {
+    loadFromFile: () => ({ CLAUDE_MEM_WELCOME_HINT_ENABLED: welcomeHintEnabled, CLAUDE_MEM_WORKER_PORT: '37777' }),
+  },
+}));
+
+import { SearchRoutes, resetSettingsCache } from '../../../../src/services/worker/http/routes/SearchRoutes.js';
 
 let loggerSpies: ReturnType<typeof spyOn>[] = [];
 
@@ -71,12 +79,12 @@ describe('SearchRoutes Welcome Hint', () => {
     };
 
     generateContextStub.mockClear();
-    delete process.env.CLAUDE_MEM_WELCOME_HINT_ENABLED;
+    welcomeHintEnabled = 'true';
+    resetSettingsCache();
   });
 
   afterEach(() => {
     loggerSpies.forEach(spy => spy.mockRestore());
-    delete process.env.CLAUDE_MEM_WELCOME_HINT_ENABLED;
   });
 
   it('returns the welcome hint when project has zero observations', async () => {
@@ -120,7 +128,8 @@ describe('SearchRoutes Welcome Hint', () => {
   });
 
   it('skips the welcome hint when CLAUDE_MEM_WELCOME_HINT_ENABLED=false', async () => {
-    process.env.CLAUDE_MEM_WELCOME_HINT_ENABLED = 'false';
+    welcomeHintEnabled = 'false';
+    resetSettingsCache();
 
     const routes = new SearchRoutes(mockSearchManager);
     const handler = captureContextInjectHandler(routes);
@@ -140,17 +149,53 @@ describe('SearchRoutes Welcome Hint', () => {
     const handler = captureContextInjectHandler(routes);
 
     const res = createMockRes();
-    const req = { query: { projects: '/path/parent, /path/worktree' } } as unknown as Request;
+    const req = { query: { projects: 'parent-id,worktree-id' } } as unknown as Request;
 
     handler(req, res as unknown as Response);
     await new Promise(resolve => setImmediate(resolve));
 
     expect(res.send).toHaveBeenCalledTimes(1);
     expect(countQueryStub).toHaveBeenCalledWith(
-      '/path/parent',
-      '/path/worktree',
-      '/path/parent',
-      '/path/worktree',
+      'parent-id',
+      'worktree-id',
+      'parent-id',
+      'worktree-id',
+    );
+  });
+
+  it('preserves commas inside a single project parameter that looks like a path', async () => {
+    const routes = new SearchRoutes(mockSearchManager);
+    const handler = captureContextInjectHandler(routes);
+
+    const res = createMockRes();
+    const req = { query: { projects: '/tmp/a,b/main' } } as unknown as Request;
+
+    handler(req, res as unknown as Response);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(res.send).toHaveBeenCalledTimes(1);
+    expect(countQueryStub).toHaveBeenCalledWith(
+      '/tmp/a,b/main',
+      '/tmp/a,b/main',
+    );
+  });
+
+  it('preserves commas inside repeated project parameters', async () => {
+    const routes = new SearchRoutes(mockSearchManager);
+    const handler = captureContextInjectHandler(routes);
+
+    const res = createMockRes();
+    const req = { query: { projects: ['/tmp/a,b/main', '/tmp/a,b/worktree'] } } as unknown as Request;
+
+    handler(req, res as unknown as Response);
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(res.send).toHaveBeenCalledTimes(1);
+    expect(countQueryStub).toHaveBeenCalledWith(
+      '/tmp/a,b/main',
+      '/tmp/a,b/worktree',
+      '/tmp/a,b/main',
+      '/tmp/a,b/worktree',
     );
   });
 });

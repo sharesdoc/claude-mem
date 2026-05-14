@@ -205,7 +205,9 @@ async function buildFileContextTimeline(input: NormalizedHookInput, filePath: st
   const relativePath = path.relative(cwd, absolutePath).split(path.sep).join("/");
   const queryParams = new URLSearchParams({ path: relativePath });
   if (context.allProjects.length > 0) {
-    queryParams.set('projects', context.allProjects.join(','));
+    for (const project of context.allProjects) {
+      queryParams.append('projects', project);
+    }
   }
   queryParams.set('limit', String(FETCH_LOOKAHEAD_LIMIT));
 

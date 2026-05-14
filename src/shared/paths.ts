@@ -1,7 +1,6 @@
 import { join, dirname, basename, sep } from 'path';
 import { homedir } from 'os';
 import { existsSync, mkdirSync, readFileSync } from 'fs';
-import { execSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { SettingsDefaultsManager } from './SettingsDefaultsManager.js';
 import { logger } from '../utils/logger.js';
@@ -87,24 +86,6 @@ export function ensureModesDir(): void {
 export function ensureAllClaudeDirs(): void {
   ensureDir(CLAUDE_CONFIG_DIR);
   ensureDir(CLAUDE_COMMANDS_DIR);
-}
-
-export function getCurrentProjectName(): string {
-  try {
-    const gitRoot = execSync('git rev-parse --show-toplevel', {
-      cwd: process.cwd(),
-      encoding: 'utf8',
-      stdio: ['pipe', 'pipe', 'ignore'],
-      windowsHide: true
-    }).trim();
-    return basename(dirname(gitRoot)) + '/' + basename(gitRoot);
-  } catch (error: unknown) {
-    logger.debug('SYSTEM', 'Git root detection failed, using cwd basename', {
-      cwd: process.cwd()
-    }, error instanceof Error ? error : new Error(String(error)));
-    const cwd = process.cwd();
-    return basename(dirname(cwd)) + '/' + basename(cwd);
-  }
 }
 
 export function getPackageRoot(): string {

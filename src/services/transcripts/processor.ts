@@ -10,6 +10,7 @@ import { resolveFieldSpec, resolveFields, matchesRule } from './field-utils.js';
 import { expandHomePath } from './config.js';
 import type { TranscriptSchema, WatchTarget, SchemaEvent } from './types.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
+import { buildContextInjectPath } from '../../shared/query-utils.js';
 import { ingestObservation } from '../worker/http/shared.js';
 
 interface SessionState {
@@ -351,9 +352,7 @@ export class TranscriptEventProcessor {
     if (!cwd) return;
 
     const context = getProjectContext(cwd);
-    const projectsParam = context.allProjects.join(',');
-
-    const contextUrl = `/api/context/inject?projects=${encodeURIComponent(projectsParam)}`;
+    const contextUrl = buildContextInjectPath(context.allProjects);
     const agentsPath = expandHomePath(watch.context.path ?? `${cwd}/AGENTS.md`);
 
     const resolvedAgentsPath = path.resolve(agentsPath);
