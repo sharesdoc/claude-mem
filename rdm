@@ -4,6 +4,13 @@ from 37d24944af5f4afaa0de2b0bd0034bb432f2b714 of https://github.com/thedotmack/c
 # install claude-mem for claude:
 ./auto-build-all
 ./install-claude-mem -i claude
+  首次使用还需要在 Claude Code 内启用一次
+
+  如果之前没启用过插件，在 Claude Code 会话里执行一次：
+
+  /plugin install claude-mem
+
+  之后每次改完代码，只跑 npm run build-and-sync 就能让 Claude Code 用上新版本（重启 Claude Code 会话以重新加载 hooks）。
 
 
 # build
