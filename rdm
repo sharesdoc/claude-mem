@@ -1,11 +1,13 @@
 from 37d24944af5f4afaa0de2b0bd0034bb432f2b714 of https://github.com/thedotmack/claude-mem.git
 修复只按项目文件夹名存储信息的问题（避免同名文件夹冲突）
 
-use install-claude-mem to install this plugin
+# install claude-mem for claude:
+./auto-build-all
+./install-claude-mem -i claude
 
 
-npm install --ignore-scripts
-
+# build
+npm install --ignore-scripts esbuild
 npm run build
 
 # 如果是开发迭代，用一条命令搞定构建+同步+重启 worker：
