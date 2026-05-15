@@ -5,8 +5,11 @@ npm install --ignore-scripts
 
 npm run build
 
-如果是开发迭代，用一条命令搞定构建+同步+重启 worker：
+# 如果是开发迭代，用一条命令搞定构建+同步+重启 worker：
 npm run build-and-sync
+
+# or if bun not in PATH:
+export PATH="$HOME/.bun/bin:$PATH" && npm run build-and-sync
 
 
 
