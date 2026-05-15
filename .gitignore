@@ -49,3 +49,5 @@ logs/run_evaluation/
 .docker-blowout-data/
 .scratch/
 docker/install-test/
+.aitask.md
+.pid

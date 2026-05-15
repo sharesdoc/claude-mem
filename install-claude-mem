@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-mem installer — run from repository root
+# Usage: ./install-claude-mem [claude|codex|-h|--help]
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/thedotmack"
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
+DATA_DIR="${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}"
+PID_FILE="$DATA_DIR/worker.pid"
+WORKER_SCRIPT="$MARKETPLACE_DIR/plugin/scripts/worker-service.cjs"
+BUILT_MARKER="$SCRIPT_DIR/plugin/scripts/worker-service.cjs"
+
+# ── Colors ──────────────────────────────────────────────────────────
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
+BLUE='\033[0;34m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
+
+ok()   { echo -e "  ${GREEN}✓${RESET} $1"; }
+fail() { echo -e "  ${RED}✗${RESET} $1"; }
+warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
+info() { echo -e "  ${BLUE}→${RESET} $1"; }
+step() { echo -e "\n${BOLD}$1${RESET}"; }
+
+# ── Help ────────────────────────────────────────────────────────────
+show_help() {
+  cat <<EOF
+${BOLD}claude-mem installer${RESET} — run from the repository root.
+
+${BOLD}Usage:${RESET}
+  ./install-claude-mem <target>     Install or update claude-mem
+
+${BOLD}Targets:${RESET}
+  claude                 Install for Claude Code (build + sync + register + start worker)
+  codex                  Install for Codex CLI (build + sync + register plugin)
+
+${BOLD}Options:${RESET}
+  -h, --help             Show this help message
+
+${BOLD}Examples:${RESET}
+  ./install-claude-mem claude       # Full setup for Claude Code
+  ./install-claude-mem codex        # Full setup for Codex CLI
+
+${BOLD}What it does:${RESET}
+  1. Auto-detects current state (built, synced, worker running, hooks registered)
+  2. Runs only the steps that are needed
+  3. Verifies everything is working at the end
+
+EOF
+}
+
+# ── Detection ───────────────────────────────────────────────────────
+check_built() {
+  [[ -f "$BUILT_MARKER" ]]
+}
+
+check_synced() {
+  [[ -f "$WORKER_SCRIPT" ]]
+}
+
+check_marketplace_registered() {
+  [[ -f "$KNOWN_MARKETPLACES" ]] && grep -q '"thedotmack"' "$KNOWN_MARKETPLACES" 2>/dev/null
+}
+
+check_plugin_enabled() {
+  [[ -f "$CLAUDE_SETTINGS" ]] && grep -q 'claude-mem@thedotmack' "$CLAUDE_SETTINGS" 2>/dev/null
+}
+
+get_worker_port() {
+  if [[ -f "$PID_FILE" ]]; then
+    local port
+    port=$(grep -o '"port":[[:space:]]*[0-9]*' "$PID_FILE" 2>/dev/null | grep -o '[0-9]*$' || true)
+    if [[ -n "$port" ]]; then
+      echo "$port"
+      return
+    fi
+  fi
+  # Fallback: check settings.json
+  if [[ -f "$DATA_DIR/settings.json" ]]; then
+    local sport
+    sport=$(grep -o '"CLAUDE_MEM_WORKER_PORT":[[:space:]]*"[0-9]*"' "$DATA_DIR/settings.json" 2>/dev/null | grep -o '[0-9]*$' || true)
+    if [[ -n "$sport" ]]; then
+      echo "$sport"
+      return
+    fi
+  fi
+  # Default: 37700 + uid % 100
+  echo "$(( 37700 + $(id -u) % 100 ))"
+}
+
+check_worker_running() {
+  local port
+  port=$(get_worker_port)
+  curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 2 2>/dev/null
+}
+
+check_codex_cli() {
+  command -v codex &>/dev/null
+}
+
+check_codex_plugin() {
+  check_codex_cli && codex plugin list 2>/dev/null | grep -q 'claude-mem'
+}
+
+# ── Actions ─────────────────────────────────────────────────────────
+do_build() {
+  step "Building claude-mem..."
+  if check_built; then
+    ok "Already built"
+    return
+  fi
+  info "Running npm run build..."
+  (cd "$SCRIPT_DIR" && npm run build)
+  if check_built; then
+    ok "Build complete"
+  else
+    fail "Build failed — check errors above"
+    exit 1
+  fi
+}
+
+do_sync() {
+  step "Syncing to marketplace..."
+  if check_synced; then
+    ok "Already synced to $MARKETPLACE_DIR"
+    return
+  fi
+  info "Running npm run sync-marketplace..."
+  (cd "$SCRIPT_DIR" && npm run sync-marketplace)
+  if check_synced; then
+    ok "Synced to marketplace"
+  else
+    fail "Sync failed"
+    exit 1
+  fi
+}
+
+do_register_claude() {
+  step "Registering plugin with Claude Code..."
+  if check_marketplace_registered && check_plugin_enabled; then
+    ok "Already registered and enabled"
+    return
+  fi
+  info "Running npx claude-mem install..."
+  # Non-interactive: pipe /dev/null so stdin is not a TTY
+  # This auto-selects claude-code IDE and worker runtime
+  npx claude-mem install --ide claude-code </dev/null || true
+  if check_marketplace_registered; then
+    ok "Registered"
+  else
+    warn "Registration may need interactive setup"
+    info "Run manually: npx claude-mem install"
+  fi
+}
+
+do_start_worker() {
+  step "Starting worker..."
+  local port
+  port=$(get_worker_port)
+
+  if check_worker_running; then
+    ok "Worker already running on port ${port}"
+    return
+  fi
+
+  info "Starting worker..."
+  npx claude-mem start 2>/dev/null || true
+
+  local retries=0
+  while [[ $retries -lt 10 ]]; do
+    if curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 1 2>/dev/null; then
+      ok "Worker started on port ${port}"
+      return
+    fi
+    retries=$((retries + 1))
+    sleep 1
+  done
+
+  warn "Worker health check timed out — it may still be starting"
+  info "Check status: npx claude-mem status"
+}
+
+print_summary() {
+  local label="$1"
+  echo ""
+  echo -e "${BOLD}─────────────────────────────────────────${RESET}"
+  echo -e "${BOLD} ${label}${RESET}"
+  echo -e "${BOLD}─────────────────────────────────────────${RESET}"
+
+  check_built                  && ok "Built"           || fail "Not built"
+  check_synced                 && ok "Synced"          || fail "Not synced"
+  check_worker_running         && ok "Worker running"  || warn "Worker not running"
+}
+
+# ── Install flows ───────────────────────────────────────────────────
+do_install_claude() {
+  echo -e "\n${BOLD}${BLUE}claude-mem — Claude Code Installation${RESET}\n"
+
+  do_build
+  do_sync
+  do_register_claude
+  do_start_worker
+
+  print_summary "Claude Code — Installation Summary"
+
+  check_marketplace_registered && ok "Registered"  || fail "Not registered"
+  check_plugin_enabled         && ok "Enabled"      || warn "Not enabled in settings"
+
+  local port
+  port=$(get_worker_port)
+  echo ""
+  echo -e "  ${DIM}Viewer:${RESET}  http://localhost:${port}"
+  echo -e "  ${DIM}Health:${RESET}  http://localhost:${port}/api/health"
+  echo -e "  ${DIM}Restart Claude Code to load the plugin.${RESET}"
+  echo ""
+}
+
+do_install_codex() {
+  echo -e "\n${BOLD}${BLUE}claude-mem — Codex CLI Installation${RESET}\n"
+
+  step "Checking Codex CLI..."
+  if check_codex_cli; then
+    ok "Codex CLI found: $(command -v codex)"
+  else
+    fail "Codex CLI not found"
+    echo ""
+    info "Install Codex CLI first:"
+    echo "    npm install -g @openai/codex"
+    echo ""
+    exit 1
+  fi
+
+  do_build
+  do_sync
+
+  step "Registering with Codex..."
+  if check_codex_plugin; then
+    ok "Plugin already registered with Codex"
+  else
+    info "Running codex plugin marketplace add..."
+    (cd "$SCRIPT_DIR" && codex plugin marketplace add "$SCRIPT_DIR" 2>/dev/null) || true
+    (cd "$SCRIPT_DIR" && codex plugin marketplace upgrade claude-mem-local 2>/dev/null) || true
+    (cd "$SCRIPT_DIR" && codex features enable plugin_hooks 2>/dev/null) || true
+    if check_codex_plugin; then
+      ok "Registered with Codex"
+    else
+      warn "Manual registration may be needed"
+      info "Run: codex plugin marketplace add $SCRIPT_DIR"
+    fi
+  fi
+
+  do_start_worker
+
+  print_summary "Codex CLI — Installation Summary"
+
+  check_codex_plugin && ok "Registered with Codex" || warn "Not registered"
+
+  echo ""
+  echo -e "  ${DIM}Restart Codex CLI to load the plugin.${RESET}"
+  echo ""
+}
+
+# ── Main ────────────────────────────────────────────────────────────
+main() {
+  local target="${1:-}"
+
+  case "$target" in
+    -h|--help|"")
+      show_help
+      ;;
+    claude)
+      do_install_claude
+      ;;
+    codex)
+      do_install_codex
+      ;;
+    *)
+      echo -e "${RED}Unknown target: $target${RESET}"
+      echo ""
+      show_help
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
