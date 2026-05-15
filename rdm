@@ -1,5 +1,13 @@
 use install-claude-mem to install this plugin
 
 
+npm install --ignore-scripts
+
+npm run build
+
+如果是开发迭代，用一条命令搞定构建+同步+重启 worker：
+npm run build-and-sync
+
+
 
 
