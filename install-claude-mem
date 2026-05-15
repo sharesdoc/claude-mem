@@ -2,12 +2,13 @@
 set -euo pipefail
 
 # claude-mem installer — run from repository root
-# Usage: ./install-claude-mem [claude|codex|-h|--help]
+# Usage: ./install-claude-mem -i|-u|-r <claude|codex>
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/thedotmack"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
+INSTALLED_PLUGINS="$HOME/.claude/plugins/installed_plugins.json"
 DATA_DIR="${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}"
 PID_FILE="$DATA_DIR/worker.pid"
 WORKER_SCRIPT="$MARKETPLACE_DIR/plugin/scripts/worker-service.cjs"
@@ -17,37 +18,31 @@ BUILT_MARKER="$SCRIPT_DIR/plugin/scripts/worker-service.cjs"
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
 BLUE='\033[0;34m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
 
-ok()   { echo -e "  ${GREEN}✓${RESET} $1"; }
-fail() { echo -e "  ${RED}✗${RESET} $1"; }
-warn() { echo -e "  ${YELLOW}!${RESET} $1"; }
-info() { echo -e "  ${BLUE}→${RESET} $1"; }
-step() { echo -e "\n${BOLD}$1${RESET}"; }
+ok()   { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
+fail() { printf "  ${RED}✗${RESET} %s\n" "$1"; }
+warn() { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
+info() { printf "  ${BLUE}→${RESET} %s\n" "$1"; }
+step() { printf "\n${BOLD}%s${RESET}\n" "$1"; }
 
 # ── Help ────────────────────────────────────────────────────────────
 show_help() {
-  cat <<EOF
-${BOLD}claude-mem installer${RESET} — run from the repository root.
-
-${BOLD}Usage:${RESET}
-  ./install-claude-mem <target>     Install or update claude-mem
-
-${BOLD}Targets:${RESET}
-  claude                 Install for Claude Code (build + sync + register + start worker)
-  codex                  Install for Codex CLI (build + sync + register plugin)
-
-${BOLD}Options:${RESET}
-  -h, --help             Show this help message
-
-${BOLD}Examples:${RESET}
-  ./install-claude-mem claude       # Full setup for Claude Code
-  ./install-claude-mem codex        # Full setup for Codex CLI
-
-${BOLD}What it does:${RESET}
-  1. Auto-detects current state (built, synced, worker running, hooks registered)
-  2. Runs only the steps that are needed
-  3. Verifies everything is working at the end
-
-EOF
+  printf "${BOLD}claude-mem installer${RESET} — run from the repository root.\n\n"
+  printf "${BOLD}Usage:${RESET}\n"
+  printf "  ./install-claude-mem -i <target>   Install\n"
+  printf "  ./install-claude-mem -u <target>   Uninstall\n"
+  printf "  ./install-claude-mem -r <target>   Reinstall (uninstall + install)\n\n"
+  printf "${BOLD}Targets:${RESET}\n"
+  printf "  claude                 Claude Code\n"
+  printf "  codex                  Codex CLI\n\n"
+  printf "${BOLD}Options:${RESET}\n"
+  printf "  -h, --help             Show this help message\n\n"
+  printf "${BOLD}Examples:${RESET}\n"
+  printf "  ./install-claude-mem -i claude     # Install for Claude Code\n"
+  printf "  ./install-claude-mem -u claude     # Uninstall from Claude Code\n"
+  printf "  ./install-claude-mem -r claude     # Reinstall for Claude Code\n"
+  printf "  ./install-claude-mem -i codex      # Install for Codex CLI\n\n"
+  printf "${BOLD}Install flow:${RESET}\n"
+  printf "  Auto-detects state → builds → syncs → registers → starts worker\n\n"
 }
 
 # ── Detection ───────────────────────────────────────────────────────
@@ -76,7 +71,6 @@ get_worker_port() {
       return
     fi
   fi
-  # Fallback: check settings.json
   if [[ -f "$DATA_DIR/settings.json" ]]; then
     local sport
     sport=$(grep -o '"CLAUDE_MEM_WORKER_PORT":[[:space:]]*"[0-9]*"' "$DATA_DIR/settings.json" 2>/dev/null | grep -o '[0-9]*$' || true)
@@ -85,7 +79,6 @@ get_worker_port() {
       return
     fi
   fi
-  # Default: 37700 + uid % 100
   echo "$(( 37700 + $(id -u) % 100 ))"
 }
 
@@ -103,14 +96,21 @@ check_codex_plugin() {
   check_codex_cli && codex plugin list 2>/dev/null | grep -q 'claude-mem'
 }
 
-# ── Actions ─────────────────────────────────────────────────────────
+# ── Shared actions ──────────────────────────────────────────────────
 do_build() {
-  step "Building claude-mem..."
   if check_built; then
     ok "Already built"
     return
   fi
-  info "Running npm run build..."
+
+  warn "Not built yet — $BUILT_MARKER not found"
+  printf "  Run ${BOLD}npm run build${RESET} now? [Y/n] "
+  read -r answer
+  case "$answer" in
+    n*|N*) fail "Build skipped — cannot continue"; exit 1 ;;
+  esac
+
+  step "Building claude-mem..."
   (cd "$SCRIPT_DIR" && npm run build)
   if check_built; then
     ok "Build complete"
@@ -133,24 +133,6 @@ do_sync() {
   else
     fail "Sync failed"
     exit 1
-  fi
-}
-
-do_register_claude() {
-  step "Registering plugin with Claude Code..."
-  if check_marketplace_registered && check_plugin_enabled; then
-    ok "Already registered and enabled"
-    return
-  fi
-  info "Running npx claude-mem install..."
-  # Non-interactive: pipe /dev/null so stdin is not a TTY
-  # This auto-selects claude-code IDE and worker runtime
-  npx claude-mem install --ide claude-code </dev/null || true
-  if check_marketplace_registered; then
-    ok "Registered"
-  else
-    warn "Registration may need interactive setup"
-    info "Run manually: npx claude-mem install"
   fi
 }
 
@@ -181,54 +163,118 @@ do_start_worker() {
   info "Check status: npx claude-mem status"
 }
 
-print_summary() {
-  local label="$1"
-  echo ""
-  echo -e "${BOLD}─────────────────────────────────────────${RESET}"
-  echo -e "${BOLD} ${label}${RESET}"
-  echo -e "${BOLD}─────────────────────────────────────────${RESET}"
-
-  check_built                  && ok "Built"           || fail "Not built"
-  check_synced                 && ok "Synced"          || fail "Not synced"
-  check_worker_running         && ok "Worker running"  || warn "Worker not running"
+do_stop_worker() {
+  step "Stopping worker..."
+  if ! check_worker_running; then
+    ok "Worker not running"
+    return
+  fi
+  info "Stopping worker..."
+  npx claude-mem stop 2>/dev/null || true
+  if check_worker_running; then
+    warn "Worker may still be running"
+  else
+    ok "Worker stopped"
+  fi
 }
 
-# ── Install flows ───────────────────────────────────────────────────
+print_summary() {
+  local label="$1"
+  printf "\n"
+  printf "${BOLD}─────────────────────────────────────────${RESET}\n"
+  printf "${BOLD} %s${RESET}\n" "$label"
+  printf "${BOLD}─────────────────────────────────────────${RESET}\n"
+
+  check_built          && ok "Built"          || fail "Not built"
+  check_synced         && ok "Synced"         || fail "Not synced"
+  check_worker_running && ok "Worker running" || warn "Worker not running"
+}
+
+# ── Claude Code ─────────────────────────────────────────────────────
 do_install_claude() {
-  echo -e "\n${BOLD}${BLUE}claude-mem — Claude Code Installation${RESET}\n"
+  printf "\n${BOLD}${BLUE}claude-mem — Claude Code Install${RESET}\n\n"
+
+  # Already fully installed? Short-circuit.
+  if check_built && check_synced && check_marketplace_registered && check_plugin_enabled && check_worker_running; then
+    local port; port=$(get_worker_port)
+    ok "Claude Code integration already installed and running"
+    printf "\n"
+    printf "  ${DIM}Viewer:${RESET}  http://localhost:%s\n" "$port"
+    printf "  ${DIM}Health:${RESET}  http://localhost:%s/api/health\n" "$port"
+    printf "  ${DIM}Use -r claude to reinstall.${RESET}\n\n"
+    return
+  fi
 
   do_build
   do_sync
-  do_register_claude
+
+  step "Registering plugin with Claude Code..."
+  if check_marketplace_registered && check_plugin_enabled; then
+    ok "Already registered and enabled"
+  else
+    info "Running npx claude-mem install..."
+    npx claude-mem install --ide claude-code </dev/null || true
+    if check_marketplace_registered; then
+      ok "Registered"
+    else
+      warn "Registration may need interactive setup"
+      info "Run manually: npx claude-mem install"
+    fi
+  fi
+
   do_start_worker
 
-  print_summary "Claude Code — Installation Summary"
-
+  print_summary "Claude Code — Install Summary"
   check_marketplace_registered && ok "Registered"  || fail "Not registered"
-  check_plugin_enabled         && ok "Enabled"      || warn "Not enabled in settings"
+  check_plugin_enabled         && ok "Enabled"      || warn "Not enabled"
 
-  local port
-  port=$(get_worker_port)
-  echo ""
-  echo -e "  ${DIM}Viewer:${RESET}  http://localhost:${port}"
-  echo -e "  ${DIM}Health:${RESET}  http://localhost:${port}/api/health"
-  echo -e "  ${DIM}Restart Claude Code to load the plugin.${RESET}"
-  echo ""
+  local port; port=$(get_worker_port)
+  printf "\n"
+  printf "  ${DIM}Viewer:${RESET}  http://localhost:%s\n" "$port"
+  printf "  ${DIM}Health:${RESET}  http://localhost:%s/api/health\n" "$port"
+  printf "  ${DIM}Restart Claude Code to load the plugin.${RESET}\n\n"
 }
 
+do_uninstall_claude() {
+  printf "\n${BOLD}${BLUE}claude-mem — Claude Code Uninstall${RESET}\n\n"
+
+  do_stop_worker
+
+  step "Unregistering plugin..."
+  info "Running npx claude-mem uninstall..."
+  npx claude-mem uninstall </dev/null || true
+
+  printf "\n"
+  if check_marketplace_registered || check_plugin_enabled; then
+    warn "Plugin may not be fully removed — check manually"
+  else
+    ok "Plugin unregistered"
+  fi
+  printf "\n"
+}
+
+# ── Codex CLI ───────────────────────────────────────────────────────
 do_install_codex() {
-  echo -e "\n${BOLD}${BLUE}claude-mem — Codex CLI Installation${RESET}\n"
+  printf "\n${BOLD}${BLUE}claude-mem — Codex CLI Install${RESET}\n\n"
 
   step "Checking Codex CLI..."
   if check_codex_cli; then
     ok "Codex CLI found: $(command -v codex)"
   else
     fail "Codex CLI not found"
-    echo ""
+    printf "\n"
     info "Install Codex CLI first:"
-    echo "    npm install -g @openai/codex"
-    echo ""
+    printf "    npm install -g @openai/codex\n\n"
     exit 1
+  fi
+
+  # Already fully installed?
+  if check_built && check_synced && check_codex_plugin && check_worker_running; then
+    local port; port=$(get_worker_port)
+    ok "Codex CLI integration already installed and running"
+    printf "\n"
+    printf "  ${DIM}Use -r codex to reinstall.${RESET}\n\n"
+    return
   fi
 
   do_build
@@ -252,32 +298,87 @@ do_install_codex() {
 
   do_start_worker
 
-  print_summary "Codex CLI — Installation Summary"
-
+  print_summary "Codex CLI — Install Summary"
   check_codex_plugin && ok "Registered with Codex" || warn "Not registered"
 
-  echo ""
-  echo -e "  ${DIM}Restart Codex CLI to load the plugin.${RESET}"
-  echo ""
+  printf "\n"
+  printf "  ${DIM}Restart Codex CLI to load the plugin.${RESET}\n\n"
+}
+
+do_uninstall_codex() {
+  printf "\n${BOLD}${BLUE}claude-mem — Codex CLI Uninstall${RESET}\n\n"
+
+  if ! check_codex_cli; then
+    fail "Codex CLI not found — nothing to uninstall"
+    exit 1
+  fi
+
+  step "Unregistering from Codex..."
+  if check_codex_plugin; then
+    info "Removing claude-mem from Codex..."
+    codex plugin marketplace remove claude-mem-local 2>/dev/null || true
+    if check_codex_plugin; then
+      warn "May need manual removal"
+    else
+      ok "Unregistered from Codex"
+    fi
+  else
+    ok "Not registered — nothing to do"
+  fi
+
+  printf "\n"
 }
 
 # ── Main ────────────────────────────────────────────────────────────
 main() {
-  local target="${1:-}"
+  local action="${1:-}"
+  local target="${2:-}"
 
-  case "$target" in
-    -h|--help|"")
+  # No args → help
+  if [[ -z "$action" ]]; then
+    show_help
+    return
+  fi
+
+  case "$action" in
+    -h|--help)
       show_help
       ;;
-    claude)
-      do_install_claude
+    -i)
+      if [[ -z "$target" ]]; then
+        fail "Missing target. Use: -i claude or -i codex"
+        exit 1
+      fi
+      case "$target" in
+        claude) do_install_claude ;;
+        codex)  do_install_codex ;;
+        *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
+      esac
       ;;
-    codex)
-      do_install_codex
+    -u)
+      if [[ -z "$target" ]]; then
+        fail "Missing target. Use: -u claude or -u codex"
+        exit 1
+      fi
+      case "$target" in
+        claude) do_uninstall_claude ;;
+        codex)  do_uninstall_codex ;;
+        *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
+      esac
+      ;;
+    -r)
+      if [[ -z "$target" ]]; then
+        fail "Missing target. Use: -r claude or -r codex"
+        exit 1
+      fi
+      case "$target" in
+        claude) do_uninstall_claude; do_install_claude ;;
+        codex)  do_uninstall_codex;  do_install_codex ;;
+        *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
+      esac
       ;;
     *)
-      echo -e "${RED}Unknown target: $target${RESET}"
-      echo ""
+      printf "${RED}Unknown option: %s${RESET}\n\n" "$action"
       show_help
       exit 1
       ;;
