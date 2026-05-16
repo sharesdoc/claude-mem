@@ -38,29 +38,6 @@ export class MigrationRunner {
     this.dropWorkerPidColumn();
     this.createServerOwnedTables();
     this.rebuildPendingMessagesForFinalQueueSchema();
-    this.addSessionUserNameColumn();
-  }
-
-  /**
-   * v35 — Record the OS user that owns each session so the viewer can show
-   * who created an observation/summary/prompt. Stored on sdk_sessions so a
-   * single column covers all three downstream tables via JOIN; the value is
-   * captured at session-create time from os.userInfo().username and is
-   * frozen for the life of the session.
-   */
-  private addSessionUserNameColumn(): void {
-    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(35) as SchemaVersion | undefined;
-    if (applied) return;
-
-    const tableInfo = this.db.query('PRAGMA table_info(sdk_sessions)').all() as TableColumnInfo[];
-    const hasColumn = tableInfo.some(col => col.name === 'user_name');
-
-    if (!hasColumn) {
-      this.db.run('ALTER TABLE sdk_sessions ADD COLUMN user_name TEXT');
-      logger.debug('DB', 'Added user_name column to sdk_sessions table');
-    }
-
-    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(35, new Date().toISOString());
   }
 
   private initializeSchema(): void {

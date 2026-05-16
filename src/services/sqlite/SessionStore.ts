@@ -71,6 +71,39 @@ export class SessionStore {
     this.dropDeadPendingMessagesColumns();
     this.ensurePendingMessagesToolUseIdColumn();
     this.dropWorkerPidColumn();
+    this.addSessionUserNameColumn();
+    this.addSessionUserLabelColumn();
+  }
+
+  private addSessionUserNameColumn(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(35) as SchemaVersion | undefined;
+    if (applied) return;
+
+    const tableInfo = this.db.query('PRAGMA table_info(sdk_sessions)').all() as TableColumnInfo[];
+    const hasColumn = tableInfo.some(col => col.name === 'user_name');
+
+    if (!hasColumn) {
+      this.db.run('ALTER TABLE sdk_sessions ADD COLUMN user_name TEXT');
+      logger.debug('DB', 'Added user_name column to sdk_sessions table');
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(35, new Date().toISOString());
+  }
+
+  private addSessionUserLabelColumn(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(36) as SchemaVersion | undefined;
+    if (applied) return;
+
+    const tableInfo = this.db.query('PRAGMA table_info(sdk_sessions)').all() as TableColumnInfo[];
+    const hasColumn = tableInfo.some(col => col.name === 'user_label');
+
+    if (!hasColumn) {
+      this.db.run('ALTER TABLE sdk_sessions ADD COLUMN user_label TEXT');
+      this.db.run('CREATE INDEX IF NOT EXISTS idx_sdk_sessions_user ON sdk_sessions(user_label)');
+      logger.debug('DB', 'Added user_label column + idx_sdk_sessions_user to sdk_sessions');
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(36, new Date().toISOString());
   }
 
   private dropWorkerPidColumn(): void {

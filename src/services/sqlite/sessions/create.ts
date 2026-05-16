@@ -3,6 +3,7 @@ import type { Database } from 'bun:sqlite';
 import { logger } from '../../../utils/logger.js';
 import { DEFAULT_PLATFORM_SOURCE, normalizePlatformSource } from '../../../shared/platform-source.js';
 import { getOsUserName } from '../../../shared/os-user.js';
+import { resolveUserLabel } from '../../../shared/user-label.js';
 
 function resolveCreateSessionArgs(
   customTitle?: string,
@@ -62,14 +63,34 @@ export function createSDKSession(
         );
       }
     }
+
+    // Backfill user_label for sessions created before migration v36 landed
+    // (or before this code path was added). Only fills when NULL/empty so
+    // we never overwrite an operator-set value.
+    db.prepare(`
+      UPDATE sdk_sessions SET user_label = ?
+      WHERE content_session_id = ?
+        AND COALESCE(user_label, '') = ''
+    `).run(resolveUserLabel(), contentSessionId);
+
     return existing.id;
   }
 
   db.prepare(`
     INSERT INTO sdk_sessions
-    (content_session_id, memory_session_id, project, platform_source, user_prompt, custom_title, started_at, started_at_epoch, status, user_name)
-    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'active', ?)
-  `).run(contentSessionId, project, normalizedPlatformSource, userPrompt, resolved.customTitle || null, now.toISOString(), nowEpoch, getOsUserName());
+    (content_session_id, memory_session_id, project, platform_source, user_prompt, custom_title, started_at, started_at_epoch, status, user_name, user_label)
+    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+  `).run(
+    contentSessionId,
+    project,
+    normalizedPlatformSource,
+    userPrompt,
+    resolved.customTitle || null,
+    now.toISOString(),
+    nowEpoch,
+    getOsUserName(),
+    resolveUserLabel(),
+  );
 
   const row = db.prepare('SELECT id FROM sdk_sessions WHERE content_session_id = ?')
     .get(contentSessionId) as { id: number };

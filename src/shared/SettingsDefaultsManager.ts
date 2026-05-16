@@ -75,6 +75,30 @@ export interface SettingsDefaults {
   CLAUDE_MEM_SERVER_BETA_URL: string;
   CLAUDE_MEM_SERVER_BETA_API_KEY: string;
   CLAUDE_MEM_SERVER_BETA_PROJECT_ID: string;
+
+  // ── Client / Server dual-mode (S-doc + TODO T-01) ────────────────────
+  // Role selector: 'client' (default) syncs to upstream; 'server' accepts ingest.
+  CLAUDE_MEM_NODE_ROLE: string;
+  // Synchronization identity (Mac/Windows OS username fallback if empty at runtime).
+  CLAUDE_MEM_USER_LABEL: string;
+
+  // ── Client sync settings ────────────────────────────────────────────
+  CLAUDE_MEM_SYNC_ENABLED: string;
+  CLAUDE_MEM_SYNC_UPSTREAM_URL: string;
+  CLAUDE_MEM_SYNC_AUTH_MODE: string;          // 'none' | 'apikey' | 'jwt' | 'mtls'
+  CLAUDE_MEM_SYNC_API_KEY: string;
+  CLAUDE_MEM_SYNC_INTERVAL_MS: string;
+  CLAUDE_MEM_SYNC_BATCH_SIZE: string;
+  CLAUDE_MEM_SYNC_RETRY_MAX: string;
+  CLAUDE_MEM_SYNC_REDACT_PATTERNS: string;    // csv globs e.g. '**/*.env,**/secrets/**'
+
+  // ── Server sync settings ────────────────────────────────────────────
+  CLAUDE_MEM_SERVER_BIND_HOST: string;        // '0.0.0.0' for server, default '' = inherit WORKER_HOST
+  CLAUDE_MEM_SERVER_AUTH_MODE: string;        // 'none' | 'apikey' | 'jwt' | 'mtls'
+  CLAUDE_MEM_SERVER_TRUSTED_PROXIES: string;  // csv CIDR; only these source IPs may POST /api/sync/*
+  CLAUDE_MEM_SERVER_ALLOWED_USERS: string;    // csv user_labels; empty = allow all
+  CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: string;
+  CLAUDE_MEM_SERVER_REQUIRE_TLS: string;
 }
 
 export class SettingsDefaultsManager {
@@ -150,6 +174,26 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_SERVER_BETA_URL: `http://127.0.0.1:${process.env.CLAUDE_MEM_SERVER_PORT ?? String(37877 + ((process.getuid?.() ?? 77) % 100))}`,  // Default server-beta runtime URL — UID-derived for multi-account isolation
     CLAUDE_MEM_SERVER_BETA_API_KEY: '',                     // Local hook API key, populated by installer when runtime=server-beta
     CLAUDE_MEM_SERVER_BETA_PROJECT_ID: '',                  // Default Postgres project_id used by hooks when runtime=server-beta
+
+    // ── Client / Server dual-mode (S-doc §4 + TODO T-01) ─────────────
+    CLAUDE_MEM_NODE_ROLE: 'client',                          // 'client' | 'server'
+    CLAUDE_MEM_USER_LABEL: '',                               // empty = resolve to OS username at runtime (T-02)
+
+    CLAUDE_MEM_SYNC_ENABLED: 'true',
+    CLAUDE_MEM_SYNC_UPSTREAM_URL: '',                        // e.g. 'http://mem.acme.com'
+    CLAUDE_MEM_SYNC_AUTH_MODE: 'none',                       // 'none' for v1 frpc tunnel; 'apikey' for cloud
+    CLAUDE_MEM_SYNC_API_KEY: '',                             // only used when auth_mode=apikey
+    CLAUDE_MEM_SYNC_INTERVAL_MS: '30000',
+    CLAUDE_MEM_SYNC_BATCH_SIZE: '200',
+    CLAUDE_MEM_SYNC_RETRY_MAX: '8',
+    CLAUDE_MEM_SYNC_REDACT_PATTERNS: '',                     // csv globs
+
+    CLAUDE_MEM_SERVER_BIND_HOST: '',                         // empty = inherit WORKER_HOST (127.0.0.1); set '0.0.0.0' for server
+    CLAUDE_MEM_SERVER_AUTH_MODE: 'none',
+    CLAUDE_MEM_SERVER_TRUSTED_PROXIES: '127.0.0.1/32,::1/128',  // accept only loopback by default; frpc/nginx terminate locally
+    CLAUDE_MEM_SERVER_ALLOWED_USERS: '',                     // empty = allow any user_label
+    CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: '1000',
+    CLAUDE_MEM_SERVER_REQUIRE_TLS: 'false',
   };
 
   static getAllDefaults(): SettingsDefaults {
