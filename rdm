@@ -25,4 +25,10 @@ export PATH="$HOME/.bun/bin:$PATH" && npm run build-and-sync
 
 
 
+如何 重启 worker
 
+npm run build-and-sync
+
+  一条命令：build → 同步到 marketplace → 重启 worker。完成后访问 http://localhost:37701/ 直接看新效果。
+
+  ▎ 仅重启不重新构建：bun plugin/scripts/worker-service.cjs restart
