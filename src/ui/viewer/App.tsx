@@ -14,6 +14,7 @@ import { useTheme } from './hooks/useTheme';
 import { useLocale } from './hooks/useLocale';
 import { useRole } from './hooks/useRole';
 import { useUsers } from './hooks/useUsers';
+import { useSyncStatus } from './hooks/useSyncStatus';
 import { Observation, Summary, UserPrompt } from './types';
 import { mergeAndDeduplicateByProject } from './utils/data';
 
@@ -65,6 +66,7 @@ export function App() {
   const { t } = useLocale();
   const role = useRole();
   const { users } = useUsers(role.role === 'server' && role.ready);
+  const { status: syncStatus, ready: syncStatusReady } = useSyncStatus();
 
   // Convert YYYY-MM-DD (local) → half-open [start, end) ms epoch. Local
   // timezone matters: a user picking "May 16" in Asia/Shanghai should not
@@ -261,6 +263,8 @@ export function App() {
             users={users}
             userLabelFilter={userLabelFilter}
             onUserLabelFilterChange={setUserLabelFilter}
+            syncStatus={syncStatus}
+            syncStatusReady={syncStatusReady}
             onShowHelp={() => {
               setStoredWelcomeDismissed(false);
               setWelcomeDismissed(false);

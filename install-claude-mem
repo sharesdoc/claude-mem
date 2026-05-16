@@ -43,7 +43,11 @@ show_help() {
   printf "  claude                 Claude Code\n"
   printf "  codex                  Codex CLI\n\n"
   printf "${BOLD}Options:${RESET}\n"
-  printf "  -h, --help             Show this help message\n\n"
+  printf "  -h, --help             Show this help message\n"
+  printf "  --role <client|server> Configure dual-mode sync identity (T-26)\n"
+  printf "  --upstream <URL>       (client) URL of the sync server, e.g. https://mem.acme.com\n"
+  printf "  --label <NAME>         Sync identity (defaults to whoami in client mode)\n"
+  printf "  --api-key <KEY>        Cloud-mode API key; flips auth_mode=apikey\n\n"
   printf "${BOLD}Data preservation:${RESET}\n"
   printf "  ${DIM}-i / -u / -r never touch %s — DB, archives, chroma, logs all survive.${RESET}\n" "$DATA_DIR"
   printf "  ${DIM}-d explicitly deletes %s after a typed YES confirmation.${RESET}\n\n" "$DATA_DIR"
@@ -52,7 +56,9 @@ show_help() {
   printf "  ./install-claude-mem -u claude     # Uninstall plugin (keep data)\n"
   printf "  ./install-claude-mem -r claude     # Reinstall (keep data)\n"
   printf "  ./install-claude-mem -d claude     # Full purge incl. ~/.claude-mem\n"
-  printf "  ./install-claude-mem -i codex      # Install for Codex CLI\n\n"
+  printf "  ./install-claude-mem -i codex      # Install for Codex CLI\n"
+  printf "  ./install-claude-mem -i claude --role client --upstream https://mem.acme.com --label ZhangSan\n"
+  printf "  ./install-claude-mem -i claude --role server\n\n"
   printf "${BOLD}Install flow:${RESET}\n"
   printf "  Auto-detects state → builds → syncs → registers → starts worker\n\n"
 }
@@ -651,10 +657,114 @@ do_uninstall_codex() {
   printf "\n"
 }
 
+# ── Sync settings writer (T-26) ─────────────────────────────────────
+# Writes/merges role + upstream + user_label + api_key into
+# $DATA_DIR/settings.json. Idempotent: re-running with the same flags
+# is a no-op; running with different values updates them in place.
+#
+# Why a separate helper instead of inlining in do_install_*:
+#   - both claude and codex installers share the same target file
+#   - we want it to happen AFTER the worker has rendered its first
+#     settings.json (defaults), so we only overlay sync keys.
+apply_sync_settings() {
+  local role="${1:-}"          # client | server | ''
+  local upstream="${2:-}"
+  local label="${3:-}"
+  local api_key="${4:-}"
+
+  if [[ -z "$role" && -z "$upstream" && -z "$label" && -z "$api_key" ]]; then
+    return 0
+  fi
+
+  local file="$DATA_DIR/settings.json"
+  mkdir -p "$DATA_DIR"
+  if [[ ! -f "$file" ]]; then
+    printf '{"env":{}}\n' > "$file"
+  fi
+
+  step "Applying sync settings"
+  node - <<EOF
+const fs = require('fs');
+const path = '$file';
+let raw = {};
+try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
+const env = raw.env && typeof raw.env === 'object' ? raw.env : (raw.env = {});
+
+const role = ${role:+\"$role\"}${role:-null};
+const upstream = ${upstream:+\"$upstream\"}${upstream:-null};
+const label = ${label:+\"$label\"}${label:-null};
+const apiKey = ${api_key:+\"$api_key\"}${api_key:-null};
+
+if (role) {
+  env.CLAUDE_MEM_NODE_ROLE = role;
+  if (role === 'server') {
+    if (!env.CLAUDE_MEM_SERVER_BIND_HOST) env.CLAUDE_MEM_SERVER_BIND_HOST = '0.0.0.0';
+    if (!env.CLAUDE_MEM_SERVER_TRUSTED_PROXIES) env.CLAUDE_MEM_SERVER_TRUSTED_PROXIES = '127.0.0.1/32,::1/128';
+  }
+}
+if (upstream) {
+  env.CLAUDE_MEM_SYNC_UPSTREAM_URL = upstream;
+  if (!env.CLAUDE_MEM_SYNC_ENABLED) env.CLAUDE_MEM_SYNC_ENABLED = 'true';
+}
+if (label) env.CLAUDE_MEM_USER_LABEL = label;
+if (apiKey) {
+  env.CLAUDE_MEM_SYNC_API_KEY = apiKey;
+  env.CLAUDE_MEM_SYNC_AUTH_MODE = 'apikey';
+}
+
+raw.env = env;
+fs.writeFileSync(path, JSON.stringify(raw, null, 2) + '\n');
+console.log(' ✓ settings.json updated');
+EOF
+
+  if [[ "$role" == "server" ]]; then
+    info "Server mode: bind=0.0.0.0; remember to wire frpc + nginx (docs/deploy-frpc-nginx.md)"
+  fi
+  if [[ "$role" == "client" && -z "$upstream" ]]; then
+    warn "client mode without --upstream: SyncAgent will not start until you set CLAUDE_MEM_SYNC_UPSTREAM_URL"
+  fi
+}
+
 # ── Main ────────────────────────────────────────────────────────────
 main() {
-  local action="${1:-}"
-  local target="${2:-}"
+  local action=""
+  local target=""
+  local sync_role=""
+  local sync_upstream=""
+  local sync_label=""
+  local sync_api_key=""
+
+  # T-26: pull sync flags out of the argv first so the existing
+  # action/target positional logic stays unchanged.
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --role) sync_role="${2:-}"; shift 2 ;;
+      --role=*) sync_role="${1#--role=}"; shift ;;
+      --upstream) sync_upstream="${2:-}"; shift 2 ;;
+      --upstream=*) sync_upstream="${1#--upstream=}"; shift ;;
+      --label) sync_label="${2:-}"; shift 2 ;;
+      --label=*) sync_label="${1#--label=}"; shift ;;
+      --api-key) sync_api_key="${2:-}"; shift 2 ;;
+      --api-key=*) sync_api_key="${1#--api-key=}"; shift ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+
+  set -- "${args[@]}"
+  action="${1:-}"
+  target="${2:-}"
+
+  # If sync flags were passed without an action, default to -i so a single
+  # `--role client --upstream … --label …` invocation is enough.
+  if [[ -z "$action" && (-n "$sync_role" || -n "$sync_upstream" || -n "$sync_label" || -n "$sync_api_key") ]]; then
+    action="-i"
+  fi
+
+  # Default the client `--label` to the OS username when omitted.
+  if [[ "$sync_role" == "client" && -z "$sync_label" ]]; then
+    sync_label="$(whoami)"
+  fi
 
   # No args → help
   if [[ -z "$action" ]]; then
@@ -672,8 +782,8 @@ main() {
         exit 1
       fi
       case "$target" in
-        claude) do_install_claude ;;
-        codex)  do_install_codex ;;
+        claude) do_install_claude; apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" ;;
+        codex)  do_install_codex;  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac
       ;;

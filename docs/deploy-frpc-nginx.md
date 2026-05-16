@@ -171,7 +171,80 @@ sqlite3 ~/.claude-mem/claude-mem.db "SELECT user_label, COUNT(*) FROM sdk_sessio
 
 ---
 
-## 7. 切到云端 + ApiKey（未来 Phase 4）
+## 7. HTTPS / Let's Encrypt (TODO T-31)
+
+公网入口 nginx 必须用 HTTPS。下面是用 certbot 自动获取并续期免费证书的最小流程，
+适用于 Ubuntu / Debian。
+
+### 7.1 安装 certbot
+
+```bash
+sudo apt-get update
+sudo apt-get install -y certbot python3-certbot-nginx
+```
+
+### 7.2 申请证书（已配好 §3 nginx 后）
+
+```bash
+sudo certbot --nginx \
+  -d mem.acme.com \
+  --non-interactive --agree-tos -m ops@acme.com \
+  --redirect          # 同时插入 HTTP -> HTTPS 跳转
+```
+
+certbot 会自动改写 §3 的 `server { … }` 块，挂上正确的 ssl_certificate /
+ssl_certificate_key 行，并新增一个 :80 listener 做 301 跳转。
+
+### 7.3 HSTS（推荐生产开启）
+
+certbot 默认不加 `Strict-Transport-Security`。在 nginx 的 443 server 块里手动加：
+
+```nginx
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
+```
+
+`always` 关键字保证 4xx/5xx 响应也带这个头，让浏览器记住"只走 HTTPS"。
+
+### 7.4 自动续期
+
+certbot 装好之后已自动注册了 systemd timer：
+
+```bash
+sudo systemctl list-timers | grep certbot
+sudo certbot renew --dry-run        # 验证续期路径
+```
+
+证书在到期前 30 天会被自动续期 + reload nginx，无需人工干预。
+
+### 7.5 server 端 settings 配合 HTTPS
+
+当 nginx 终结 TLS、内部 frpc 走 HTTP 时，server 端 settings 这样配：
+
+```json
+{
+  "env": {
+    "CLAUDE_MEM_SERVER_REQUIRE_TLS": "true"
+  }
+}
+```
+
+nginx 必须把 `X-Forwarded-Proto: https` 透传给后端（在 §3 模板的 location 块里已有）。
+SyncRoutes 的 requireTls 中间件优先看这个 header，所以即便 worker 自己用 HTTP，
+也能正确判定客户端是从 HTTPS 进来。
+
+### 7.6 验收
+
+```bash
+curl -I https://mem.acme.com/api/admin/role
+# HTTP/2 200
+# strict-transport-security: max-age=31536000; includeSubDomains; preload
+```
+
+浏览器打开 `https://mem.acme.com/` 应该看到锁图标 + Let's Encrypt 颁发的证书有效。
+
+---
+
+## 8. 切到云端 + ApiKey（未来 Phase 4）
 
 首版 `auth_mode=none` 是 frpc 内网 + nginx IP 白名单的组合保护。要切到公网开放 + ApiKey
 鉴权时，只需双端改 `auth_mode=apikey` + 配 key，业务代码零改动。runbook 见 S-doc §13bis 末尾。

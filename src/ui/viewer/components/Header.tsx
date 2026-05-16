@@ -4,6 +4,8 @@ import { LocaleToggle } from './LocaleToggle';
 import { ViewModeToggle, ViewMode } from './ViewModeToggle';
 import { DateFilterButton } from './DateFilterButton';
 import { UserSelector } from './UserSelector';
+import { SyncStatusBadge } from './SyncStatusBadge';
+import type { SyncStatus } from '../hooks/useSyncStatus';
 import { ThemePreference } from '../hooks/useTheme';
 import { GitHubStarsButton } from './GitHubStarsButton';
 import { useSpinningFavicon } from '../hooks/useSpinningFavicon';
@@ -30,6 +32,8 @@ interface HeaderProps {
   users: UserRow[];
   userLabelFilter: string | null;
   onUserLabelFilterChange: (next: string | null) => void;
+  syncStatus: SyncStatus | null;
+  syncStatusReady: boolean;
   onShowHelp?: () => void;
 }
 
@@ -51,6 +55,8 @@ export function Header({
   users,
   userLabelFilter,
   onUserLabelFilterChange,
+  syncStatus,
+  syncStatusReady,
   onShowHelp
 }: HeaderProps) {
   useSpinningFavicon(isProcessing);
@@ -72,6 +78,7 @@ export function Header({
         </h1>
       </div>
       <div className="status">
+        <SyncStatusBadge status={syncStatus} ready={syncStatusReady} />
         {showUserSelector && (
           <UserSelector
             users={users}

@@ -93,6 +93,7 @@ import { LogsRoutes } from './worker/http/routes/LogsRoutes.js';
 import { MemoryRoutes } from './worker/http/routes/MemoryRoutes.js';
 import { UsersRoutes } from './worker/http/routes/UsersRoutes.js';
 import { SyncRoutes } from './worker/http/routes/SyncRoutes.js';
+import { SyncStatusRoutes } from './worker/http/routes/SyncStatusRoutes.js';
 import { SyncAgent } from './sync/SyncAgent.js';
 import { resolveUserLabel } from '../shared/user-label.js';
 import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
@@ -267,6 +268,10 @@ export class WorkerService implements WorkerRef {
 
     this.server.registerRoutes(new ChromaRoutes());
     this.server.registerRoutes(new AdminRoutes());
+    // T-25: /api/sync/status — always-on so the viewer Header badge
+    // can render in both client and server modes. Returns role +
+    // syncEnabled so the viewer can hide the badge when irrelevant.
+    this.server.registerRoutes(new SyncStatusRoutes(this.dbManager));
 
     this.server.app.get('/api/context/inject', async (req, res, next) => {
       if (!this.initializationCompleteFlag || !this.searchRoutes) {
