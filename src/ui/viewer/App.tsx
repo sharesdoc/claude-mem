@@ -71,11 +71,13 @@ export function App() {
   }, [observations, paginatedObservations, matchesSelection, viewMode]);
 
   const allSummaries = useMemo(() => {
-    if (viewMode === 'prompts') return [];
+    // viewMode === 'prompts' still keeps session summaries visible — only
+    // observations are filtered out, since prompts + summaries are the
+    // user-facing high-level signal worth keeping together.
     const live = summaries.filter(matchesSelection);
     const paginated = paginatedSummaries.filter(matchesSelection);
     return mergeAndDeduplicateByProject(live, paginated);
-  }, [summaries, paginatedSummaries, matchesSelection, viewMode]);
+  }, [summaries, paginatedSummaries, matchesSelection]);
 
   const allPrompts = useMemo(() => {
     const live = prompts.filter(matchesSelection);
