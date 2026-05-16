@@ -9,6 +9,7 @@ import { getWorkerPort } from '../../../shared/worker-utils.js';
 import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
 import type { ActiveSession } from '../../worker-types.js';
+import { getOsUserName } from '../../../shared/os-user.js';
 import type { DatabaseManager } from '../DatabaseManager.js';
 import type { SessionManager } from '../SessionManager.js';
 import type { WorkerRef, StorageResult } from './types.js';
@@ -233,6 +234,7 @@ async function syncAndBroadcastObservations(
       files_modified: JSON.stringify(obs.files_modified || []),
       project: session.project,
       prompt_number: session.lastPromptNumber,
+      user_name: getOsUserName(),
       created_at_epoch: result.createdAtEpoch
     });
   }
@@ -311,6 +313,7 @@ async function syncAndBroadcastSummary(
     notes: summaryForStore!.notes,
     project: session.project,
     prompt_number: session.lastPromptNumber,
+    user_name: getOsUserName(),
     created_at_epoch: result.createdAtEpoch
   });
 

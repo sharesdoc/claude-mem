@@ -19,12 +19,13 @@ export interface ObservationSSEPayload {
   subtitle: string | null;
   text: string | null;
   narrative: string | null;
-  facts: string;  
-  concepts: string;  
-  files_read: string;  
-  files_modified: string;  
+  facts: string;
+  concepts: string;
+  files_read: string;
+  files_modified: string;
   project: string;
   prompt_number: number;
+  user_name?: string | null;
   created_at_epoch: number;
 }
 
@@ -40,6 +41,7 @@ export interface SummarySSEPayload {
   notes: string | null;
   project: string;
   prompt_number: number;
+  user_name?: string | null;
   created_at_epoch: number;
 }
 

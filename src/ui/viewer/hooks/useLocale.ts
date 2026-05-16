@@ -6,7 +6,7 @@ const LOCALE_EVENT = 'claude-mem.locale-changed';
 export interface UseLocaleResult {
   locale: Locale;
   setLocale: (locale: Locale) => void;
-  t: (key: string) => string;
+  t: (key: string, vars?: Record<string, string | number>) => string;
 }
 
 export function useLocale(): UseLocaleResult {
@@ -37,7 +37,10 @@ export function useLocale(): UseLocaleResult {
     }
   }, []);
 
-  const t = useCallback((key: string) => translate(locale, key), [locale]);
+  const t = useCallback(
+    (key: string, vars?: Record<string, string | number>) => translate(locale, key, vars),
+    [locale]
+  );
 
   return { locale, setLocale, t };
 }

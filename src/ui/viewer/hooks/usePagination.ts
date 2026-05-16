@@ -12,22 +12,42 @@ interface PaginationState {
 type DataType = 'observations' | 'summaries' | 'prompts';
 type DataItem = Observation | Summary | UserPrompt;
 
-function usePaginationFor<TItem extends DataItem>(endpoint: string, dataType: DataType, currentFilter: string) {
+export interface DateBounds {
+  /** Inclusive start, ms epoch. */
+  start: number;
+  /** Exclusive end, ms epoch. */
+  end: number;
+}
+
+// A "selection signature" key — when this string changes between renders the
+// pagination cursor resets to 0 and `hasMore` is restored to true. Used so a
+// switch in `currentFilter` *or* `dateBounds` re-starts the scroll from page 1.
+function selectionKey(currentFilter: string, dateBounds: DateBounds | null): string {
+  return `${currentFilter}|${dateBounds ? `${dateBounds.start}-${dateBounds.end}` : 'all'}`;
+}
+
+function usePaginationFor<TItem extends DataItem>(
+  endpoint: string,
+  dataType: DataType,
+  currentFilter: string,
+  dateBounds: DateBounds | null,
+) {
   const [state, setState] = useState<PaginationState>({
     isLoading: false,
     hasMore: true
   });
 
   const offsetRef = useRef(0);
-  const lastSelectionRef = useRef(currentFilter);
+  const lastSelectionRef = useRef(selectionKey(currentFilter, dateBounds));
   const stateRef = useRef(state);
 
   const loadMore = useCallback(async (): Promise<TItem[]> => {
-    const filterChanged = lastSelectionRef.current !== currentFilter;
+    const key = selectionKey(currentFilter, dateBounds);
+    const filterChanged = lastSelectionRef.current !== key;
 
     if (filterChanged) {
       offsetRef.current = 0;
-      lastSelectionRef.current = currentFilter;
+      lastSelectionRef.current = key;
 
       const newState = { isLoading: false, hasMore: true };
       setState(newState);
@@ -48,6 +68,10 @@ function usePaginationFor<TItem extends DataItem>(endpoint: string, dataType: Da
 
     if (currentFilter) {
       params.append('project', currentFilter);
+    }
+    if (dateBounds) {
+      params.append('dateStart', String(dateBounds.start));
+      params.append('dateEnd', String(dateBounds.end));
     }
 
     const response = await authFetch(`${endpoint}?${params}`);
@@ -74,7 +98,7 @@ function usePaginationFor<TItem extends DataItem>(endpoint: string, dataType: Da
     offsetRef.current += UI.PAGINATION_PAGE_SIZE;
 
     return data.items;
-  }, [currentFilter, endpoint, dataType]);
+  }, [currentFilter, dateBounds?.start, dateBounds?.end, endpoint, dataType]);
 
   return {
     ...state,
@@ -82,10 +106,10 @@ function usePaginationFor<TItem extends DataItem>(endpoint: string, dataType: Da
   };
 }
 
-export function usePagination(currentFilter: string) {
-  const observations = usePaginationFor<Observation>(API_ENDPOINTS.OBSERVATIONS, 'observations', currentFilter);
-  const summaries = usePaginationFor<Summary>(API_ENDPOINTS.SUMMARIES, 'summaries', currentFilter);
-  const prompts = usePaginationFor<UserPrompt>(API_ENDPOINTS.PROMPTS, 'prompts', currentFilter);
+export function usePagination(currentFilter: string, dateBounds: DateBounds | null = null) {
+  const observations = usePaginationFor<Observation>(API_ENDPOINTS.OBSERVATIONS, 'observations', currentFilter, dateBounds);
+  const summaries = usePaginationFor<Summary>(API_ENDPOINTS.SUMMARIES, 'summaries', currentFilter, dateBounds);
+  const prompts = usePaginationFor<UserPrompt>(API_ENDPOINTS.PROMPTS, 'prompts', currentFilter, dateBounds);
 
   return {
     observations,

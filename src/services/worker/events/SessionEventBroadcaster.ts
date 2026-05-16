@@ -1,6 +1,7 @@
 
 import { SSEBroadcaster } from '../SSEBroadcaster.js';
 import type { WorkerService } from '../../worker-service.js';
+import { getOsUserName } from '../../../shared/os-user.js';
 
 export class SessionEventBroadcaster {
   constructor(
@@ -17,9 +18,11 @@ export class SessionEventBroadcaster {
     prompt_text: string;
     created_at_epoch: number;
   }): void {
+    // user_name is the OS user this worker is running as — same user the
+    // prompt originated from, since claude-mem is a single-machine tool.
     this.sseBroadcaster.broadcast({
       type: 'new_prompt',
-      prompt
+      prompt: { ...prompt, user_name: getOsUserName() }
     });
   }
 

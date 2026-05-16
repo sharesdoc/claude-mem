@@ -2,7 +2,12 @@
 set -euo pipefail
 
 # claude-mem installer — run from repository root
-# Usage: ./install-claude-mem -i|-u|-r <claude|codex>
+# Usage: ./install-claude-mem -i|-u|-r|-d <claude|codex>
+#
+# Data-preservation contract:
+#   -i / -u / -r  NEVER touch $DATA_DIR (default ~/.claude-mem). Database,
+#                 archives, logs, chroma collections all survive reinstalls.
+#   -d            DOES delete $DATA_DIR (after typed YES confirmation).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/thedotmack"
@@ -31,17 +36,22 @@ show_help() {
   printf "${BOLD}claude-mem installer${RESET} — run from the repository root.\n\n"
   printf "${BOLD}Usage:${RESET}\n"
   printf "  ./install-claude-mem -i <target>   Install\n"
-  printf "  ./install-claude-mem -u <target>   Uninstall\n"
-  printf "  ./install-claude-mem -r <target>   Reinstall (uninstall + install)\n\n"
+  printf "  ./install-claude-mem -u <target>   Uninstall (plugin only — DATA preserved)\n"
+  printf "  ./install-claude-mem -r <target>   Reinstall  (uninstall + install — DATA preserved)\n"
+  printf "  ./install-claude-mem -d <target>   ${RED}Destroy${RESET} (uninstall + DELETE all data)\n\n"
   printf "${BOLD}Targets:${RESET}\n"
   printf "  claude                 Claude Code\n"
   printf "  codex                  Codex CLI\n\n"
   printf "${BOLD}Options:${RESET}\n"
   printf "  -h, --help             Show this help message\n\n"
+  printf "${BOLD}Data preservation:${RESET}\n"
+  printf "  ${DIM}-i / -u / -r never touch %s — DB, archives, chroma, logs all survive.${RESET}\n" "$DATA_DIR"
+  printf "  ${DIM}-d explicitly deletes %s after a typed YES confirmation.${RESET}\n\n" "$DATA_DIR"
   printf "${BOLD}Examples:${RESET}\n"
   printf "  ./install-claude-mem -i claude     # Install for Claude Code\n"
-  printf "  ./install-claude-mem -u claude     # Uninstall from Claude Code\n"
-  printf "  ./install-claude-mem -r claude     # Reinstall for Claude Code\n"
+  printf "  ./install-claude-mem -u claude     # Uninstall plugin (keep data)\n"
+  printf "  ./install-claude-mem -r claude     # Reinstall (keep data)\n"
+  printf "  ./install-claude-mem -d claude     # Full purge incl. ~/.claude-mem\n"
   printf "  ./install-claude-mem -i codex      # Install for Codex CLI\n\n"
   printf "${BOLD}Install flow:${RESET}\n"
   printf "  Auto-detects state → builds → syncs → registers → starts worker\n\n"
@@ -485,6 +495,11 @@ do_uninstall_claude() {
   else
     ok "Plugin fully unregistered"
   fi
+  # Explicit reminder: we never touch the data dir during uninstall/reinstall.
+  # The user's database, archives, chroma collections etc. survive untouched.
+  if [[ -d "$DATA_DIR" ]]; then
+    ok "Data preserved at ${DIM}$DATA_DIR${RESET} (use ${BOLD}-d${RESET} to fully purge)"
+  fi
   printf "\n"
 }
 
@@ -540,6 +555,75 @@ do_install_codex() {
   printf "  ${DIM}Restart Codex CLI to load the plugin.${RESET}\n\n"
 }
 
+# ── Full data purge ─────────────────────────────────────────────────
+# Only -d triggers this. Lists every top-level entry inside $DATA_DIR and
+# requires the user to type YES verbatim before we touch anything. Refuses
+# to run if it can't even list the dir (e.g. permissions) so we don't claim
+# success on a partial wipe.
+do_purge_data() {
+  step "Purging persistent data..."
+
+  if [[ ! -d "$DATA_DIR" ]]; then
+    ok "No data directory at ${DIM}$DATA_DIR${RESET} — nothing to purge"
+    return 0
+  fi
+
+  printf "  ${YELLOW}This will permanently delete the entire directory:${RESET}\n"
+  printf "    ${BOLD}%s${RESET}\n\n" "$DATA_DIR"
+
+  printf "  ${DIM}Top-level contents:${RESET}\n"
+  if ! ls -la "$DATA_DIR" 2>/dev/null | tail -n +2 | awk 'NR>1 {
+    size = $5;
+    name = $NF;
+    if (name == "." || name == "..") next;
+    printf "    %-40s %s\n", name, size
+  }'; then
+    fail "Cannot enumerate $DATA_DIR — refusing to delete"
+    return 1
+  fi
+
+  printf "\n  ${BOLD}${RED}This cannot be undone.${RESET}\n"
+  printf "  Type ${BOLD}YES${RESET} (uppercase) to confirm full purge: "
+  local answer
+  read -r answer
+
+  if [[ "$answer" != "YES" ]]; then
+    warn "Purge cancelled (expected literal 'YES')"
+    return 1
+  fi
+
+  # Refuse to rm -rf a path that's obviously not our data dir. Cheap guard
+  # against a typo'd CLAUDE_MEM_DATA_DIR=/ or similar.
+  case "$DATA_DIR" in
+    /|/home|/root|/Users|/Users/*|"$HOME")
+      fail "Refusing to delete suspicious path: $DATA_DIR"
+      return 1
+      ;;
+  esac
+  if [[ ! "$DATA_DIR" =~ \.claude-mem ]] && [[ -z "${CLAUDE_MEM_PURGE_FORCE:-}" ]]; then
+    fail "DATA_DIR ($DATA_DIR) does not contain '.claude-mem'; set CLAUDE_MEM_PURGE_FORCE=1 to override"
+    return 1
+  fi
+
+  rm -rf "$DATA_DIR" && ok "Removed $DATA_DIR"
+}
+
+do_destroy_claude() {
+  printf "\n${BOLD}${RED}claude-mem — Claude Code FULL DESTROY${RESET}\n"
+  printf "${DIM}This removes the plugin AND every byte of memory in %s.${RESET}\n" "$DATA_DIR"
+
+  do_uninstall_claude
+  do_purge_data
+}
+
+do_destroy_codex() {
+  printf "\n${BOLD}${RED}claude-mem — Codex CLI FULL DESTROY${RESET}\n"
+  printf "${DIM}This removes the plugin AND every byte of memory in %s.${RESET}\n" "$DATA_DIR"
+
+  do_uninstall_codex
+  do_purge_data
+}
+
 do_uninstall_codex() {
   printf "\n${BOLD}${BLUE}claude-mem — Codex CLI Uninstall${RESET}\n\n"
 
@@ -561,6 +645,9 @@ do_uninstall_codex() {
     ok "Not registered — nothing to do"
   fi
 
+  if [[ -d "$DATA_DIR" ]]; then
+    ok "Data preserved at ${DIM}$DATA_DIR${RESET} (use ${BOLD}-d${RESET} to fully purge)"
+  fi
   printf "\n"
 }
 
@@ -609,6 +696,17 @@ main() {
       case "$target" in
         claude) do_uninstall_claude; do_install_claude ;;
         codex)  do_uninstall_codex;  do_install_codex ;;
+        *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
+      esac
+      ;;
+    -d)
+      if [[ -z "$target" ]]; then
+        fail "Missing target. Use: -d claude or -d codex"
+        exit 1
+      fi
+      case "$target" in
+        claude) do_destroy_claude ;;
+        codex)  do_destroy_codex ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac
       ;;

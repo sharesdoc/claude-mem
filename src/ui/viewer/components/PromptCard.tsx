@@ -60,7 +60,12 @@ export function PromptCard({ prompt }: PromptCardProps) {
         {prompt.prompt_text}
       </div>
       <div className="card-meta prompt-meta">
-        <span className="meta-date">#{prompt.id} • {date}</span>
+        <span className="meta-date">
+          #{prompt.id} • {date}
+          {prompt.user_name && (
+            <span className="meta-user" title="OS user">  {prompt.user_name}</span>
+          )}
+        </span>
         {copied && (
           <span className="prompt-meta-copied" role="status" aria-live="polite">
             {t('prompt.copiedMsg')}

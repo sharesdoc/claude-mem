@@ -68,10 +68,50 @@ export class ChromaSync {
 
   constructor(project: string) {
     this.project = project;
+    this.collectionName = ChromaSync.collectionNameFor(project);
+  }
+
+  /**
+   * Deterministic mapping from project ID to chroma collection name.
+   * Mirrors the constructor logic so callers can resolve the name without
+   * instantiating ChromaSync (used by the project-delete admin path).
+   */
+  static collectionNameFor(project: string): string {
     const sanitized = project
       .replace(/[^a-zA-Z0-9._-]/g, '_')
-      .replace(/[^a-zA-Z0-9]+$/, '');  
-    this.collectionName = `cm__${sanitized || 'unknown'}`;
+      .replace(/[^a-zA-Z0-9]+$/, '');
+    return `cm__${sanitized || 'unknown'}`;
+  }
+
+  /**
+   * Drop the chroma collection that belongs to `project`. Best-effort:
+   *   - returns true on confirmed delete
+   *   - returns false if the collection didn't exist (already absent, no-op)
+   *   - throws only on unexpected transport errors so the caller can decide
+   *     whether to log + continue (we use this from `deleteProjectsCompletely`
+   *     where SQLite is already committed, so chroma residue ≠ corruption).
+   */
+  static async deleteCollectionForProject(project: string): Promise<boolean> {
+    const collectionName = ChromaSync.collectionNameFor(project);
+    const chromaMcp = ChromaMcpManager.getInstance();
+    try {
+      await chromaMcp.callTool('chroma_delete_collection', {
+        collection_name: collectionName
+      });
+      logger.info('CHROMA_SYNC', 'Collection dropped', { project, collectionName });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      // Not-found is the happy "nothing to delete" path; surface anything else.
+      if (/not.{0,3}found|does not exist|no such collection/i.test(message)) {
+        logger.debug('CHROMA_SYNC', 'Collection absent at delete time (treating as success)', {
+          project,
+          collectionName
+        });
+        return false;
+      }
+      throw error;
+    }
   }
 
   private async ensureCollectionExists(): Promise<void> {

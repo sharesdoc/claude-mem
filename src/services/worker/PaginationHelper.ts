@@ -51,7 +51,14 @@ export class PaginationHelper {
     };
   }
 
-  getObservations(offset: number, limit: number, project?: string, platformSource?: string): PaginatedResult<Observation> {
+  getObservations(
+    offset: number,
+    limit: number,
+    project?: string,
+    platformSource?: string,
+    dateStartEpoch?: number,
+    dateEndEpoch?: number,
+  ): PaginatedResult<Observation> {
     const db = this.dbManager.getSessionStore().db;
     let query = `
       SELECT
@@ -70,6 +77,7 @@ export class PaginationHelper {
         o.files_read,
         o.files_modified,
         o.prompt_number,
+        s.user_name as user_name,
         o.created_at,
         o.created_at_epoch
       FROM observations o
@@ -88,6 +96,16 @@ export class PaginationHelper {
     if (platformSource) {
       conditions.push(`COALESCE(s.platform_source, 'claude') = ?`);
       params.push(platformSource);
+    }
+    // Date filter is half-open [start, end). The caller computes day-bounds
+    // in its own timezone so we don't have to pick one here.
+    if (dateStartEpoch !== undefined) {
+      conditions.push('o.created_at_epoch >= ?');
+      params.push(dateStartEpoch);
+    }
+    if (dateEndEpoch !== undefined) {
+      conditions.push('o.created_at_epoch < ?');
+      params.push(dateEndEpoch);
     }
     if (conditions.length > 0) {
       query += ` WHERE ${conditions.join(' AND ')}`;
@@ -110,7 +128,14 @@ export class PaginationHelper {
     };
   }
 
-  getSummaries(offset: number, limit: number, project?: string, platformSource?: string): PaginatedResult<Summary> {
+  getSummaries(
+    offset: number,
+    limit: number,
+    project?: string,
+    platformSource?: string,
+    dateStartEpoch?: number,
+    dateEndEpoch?: number,
+  ): PaginatedResult<Summary> {
     const db = this.dbManager.getSessionStore().db;
 
     let query = `
@@ -124,6 +149,7 @@ export class PaginationHelper {
         ss.completed,
         ss.next_steps,
         ss.project,
+        s.user_name as user_name,
         ss.created_at,
         ss.created_at_epoch
       FROM session_summaries ss
@@ -146,6 +172,15 @@ export class PaginationHelper {
       params.push(platformSource);
     }
 
+    if (dateStartEpoch !== undefined) {
+      conditions.push('ss.created_at_epoch >= ?');
+      params.push(dateStartEpoch);
+    }
+    if (dateEndEpoch !== undefined) {
+      conditions.push('ss.created_at_epoch < ?');
+      params.push(dateEndEpoch);
+    }
+
     if (conditions.length > 0) {
       query += ` WHERE ${conditions.join(' AND ')}`;
     }
@@ -164,7 +199,14 @@ export class PaginationHelper {
     };
   }
 
-  getPrompts(offset: number, limit: number, project?: string, platformSource?: string): PaginatedResult<UserPrompt> {
+  getPrompts(
+    offset: number,
+    limit: number,
+    project?: string,
+    platformSource?: string,
+    dateStartEpoch?: number,
+    dateEndEpoch?: number,
+  ): PaginatedResult<UserPrompt> {
     const db = this.dbManager.getSessionStore().db;
 
     let query = `
@@ -175,6 +217,7 @@ export class PaginationHelper {
         COALESCE(s.platform_source, 'claude') as platform_source,
         up.prompt_number,
         up.prompt_text,
+        s.user_name as user_name,
         up.created_at,
         up.created_at_epoch
       FROM user_prompts up
@@ -195,6 +238,15 @@ export class PaginationHelper {
     if (platformSource) {
       conditions.push(`COALESCE(s.platform_source, 'claude') = ?`);
       params.push(platformSource);
+    }
+
+    if (dateStartEpoch !== undefined) {
+      conditions.push('up.created_at_epoch >= ?');
+      params.push(dateStartEpoch);
+    }
+    if (dateEndEpoch !== undefined) {
+      conditions.push('up.created_at_epoch < ?');
+      params.push(dateEndEpoch);
     }
 
     if (conditions.length > 0) {

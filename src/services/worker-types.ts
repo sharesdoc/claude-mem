@@ -97,7 +97,7 @@ export interface ViewerSettings {
 
 export interface Observation {
   id: number;
-  memory_session_id: string;  
+  memory_session_id: string;
   project: string;
   merged_into_project: string | null;
   platform_source: string;
@@ -111,13 +111,15 @@ export interface Observation {
   files_read: string | null;
   files_modified: string | null;
   prompt_number: number;
+  /** OS username captured when this row's session was created. */
+  user_name?: string | null;
   created_at: string;
   created_at_epoch: number;
 }
 
 export interface Summary {
   id: number;
-  session_id: string; 
+  session_id: string;
   project: string;
   platform_source: string;
   request: string | null;
@@ -126,17 +128,19 @@ export interface Summary {
   completed: string | null;
   next_steps: string | null;
   notes: string | null;
+  user_name?: string | null;
   created_at: string;
   created_at_epoch: number;
 }
 
 export interface UserPrompt {
   id: number;
-  content_session_id: string;  
-  project: string; 
+  content_session_id: string;
+  project: string;
   platform_source: string;
   prompt_number: number;
   prompt_text: string;
+  user_name?: string | null;
   created_at: string;
   created_at_epoch: number;
 }

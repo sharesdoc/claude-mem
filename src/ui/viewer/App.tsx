@@ -6,7 +6,7 @@ import { LogsDrawer } from './components/LogsModal';
 import { ProjectSidebar } from './components/ProjectSidebar';
 import { ViewMode } from './components/ViewModeToggle';
 import { WelcomeCard, getStoredWelcomeDismissed, setStoredWelcomeDismissed } from './components/WelcomeCard';
-import { useSSE } from './hooks/useSSE';
+import { useSSE, ProjectStat } from './hooks/useSSE';
 import { useSettings } from './hooks/useSettings';
 import { useStats } from './hooks/useStats';
 import { usePagination } from './hooks/usePagination';
@@ -36,6 +36,11 @@ export function App() {
   const [paginatedObservations, setPaginatedObservations] = useState<Observation[]>([]);
   const [paginatedSummaries, setPaginatedSummaries] = useState<Summary[]>([]);
   const [paginatedPrompts, setPaginatedPrompts] = useState<UserPrompt[]>([]);
+  // Day filter — local-timezone YYYY-MM-DD when active, null = "all history".
+  // The home view stays unfiltered by default; only an explicit user pick
+  // narrows the feed and the sidebar stats to a single day.
+  const [dateFilter, setDateFilter] = useState<string | null>(null);
+  const [dayStats, setDayStats] = useState<Record<string, ProjectStat> | null>(null);
 
   const setViewMode = useCallback((next: ViewMode) => {
     setViewModeState(next);
@@ -46,22 +51,79 @@ export function App() {
     }
   }, []);
 
-  const { observations, summaries, prompts, projects, isProcessing, queueDepth, isConnected } = useSSE();
+  const { observations, summaries, prompts, projects, projectStats, isProcessing, queueDepth, isConnected, pruneByProjects } = useSSE();
   const { settings, saveSettings, isSaving, saveStatus } = useSettings();
   const { refreshStats } = useStats();
   const { preference, setThemePreference } = useTheme();
   const { t } = useLocale();
-  const pagination = usePagination(currentFilter);
 
-  const matchesSelection = useCallback((item: { project: string }) => {
-    return !currentFilter || item.project === currentFilter;
-  }, [currentFilter]);
+  // Convert YYYY-MM-DD (local) → half-open [start, end) ms epoch. Local
+  // timezone matters: a user picking "May 16" in Asia/Shanghai should not
+  // see rows that were timestamped late on May 15 UTC.
+  const dayBounds = useMemo(() => {
+    if (!dateFilter) return null;
+    const parts = dateFilter.split('-').map(Number);
+    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) return null;
+    const [y, m, d] = parts;
+    const start = new Date(y, m - 1, d).getTime();
+    const end = new Date(y, m - 1, d + 1).getTime();
+    return { start, end };
+  }, [dateFilter]);
+
+  const pagination = usePagination(currentFilter, dayBounds);
+
+  const matchesSelection = useCallback(
+    (item: { project: string; created_at_epoch: number }) => {
+      if (currentFilter && item.project !== currentFilter) return false;
+      if (dayBounds && (item.created_at_epoch < dayBounds.start || item.created_at_epoch >= dayBounds.end)) return false;
+      return true;
+    },
+    [currentFilter, dayBounds]
+  );
+
+  // Fetch day-scoped project stats when a day filter is active. Cleared
+  // back to null when the user clears the date so the sidebar falls back to
+  // the all-time stats from useSSE.
+  useEffect(() => {
+    if (!dayBounds) {
+      setDayStats(null);
+      return;
+    }
+    const controller = new AbortController();
+    const url = `/api/projects/stats?dateStart=${dayBounds.start}&dateEnd=${dayBounds.end}`;
+    fetch(url, { signal: controller.signal })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((body: { projects?: Record<string, ProjectStat> }) => {
+        setDayStats(body.projects ?? {});
+      })
+      .catch((err) => {
+        if ((err as Error).name === 'AbortError') return;
+        console.warn('[App] day stats fetch failed:', err);
+        // Fall back to an empty object so the sidebar shows real "0 for this
+        // day" rather than the all-time stats, which would be misleading.
+        setDayStats({});
+      });
+    return () => controller.abort();
+  }, [dayBounds?.start, dayBounds?.end]);
+
+  // Effective values fed into the sidebar:
+  //   - day-filter active → use day-scoped stats and restrict the project
+  //     list to projects that actually have rows in that day
+  //   - no day filter    → fall back to the all-time stats from useSSE
+  const effectiveProjectStats = dayBounds ? (dayStats ?? {}) : projectStats;
+  const effectiveProjects = useMemo(() => {
+    if (!dayBounds) return projects;
+    return projects.filter((p) => (effectiveProjectStats[p]?.total ?? 0) > 0);
+  }, [projects, dayBounds, effectiveProjectStats]);
 
   useEffect(() => {
-    if (currentFilter && !projects.includes(currentFilter)) {
+    if (currentFilter && !effectiveProjects.includes(currentFilter)) {
+      // Either the project was deleted or it has no rows in the picked day.
+      // Reset to "All projects" instead of leaving an empty feed under a
+      // ghost filter.
       setCurrentFilter('');
     }
-  }, [projects, currentFilter]);
+  }, [effectiveProjects, currentFilter]);
 
   const allObservations = useMemo(() => {
     if (viewMode === 'prompts') return [];
@@ -121,7 +183,28 @@ export function App() {
     setPaginatedPrompts([]);
     handleLoadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentFilter]);
+  }, [currentFilter, dayBounds?.start, dayBounds?.end]);
+
+  /**
+   * Sidebar's project-delete flow: drop matching rows from BOTH the SSE-
+   * managed live state and the locally paginated buffer. Without the second
+   * pass, already-paginated rows of a deleted project would linger until the
+   * user changes the project filter.
+   *
+   * Also clear the active filter if it points at a now-deleted project, so
+   * the feed snaps back to "All Projects" instead of showing "no items".
+   */
+  const handleProjectsDeleted = useCallback((deleted: string[]) => {
+    if (deleted.length === 0) return;
+    const removed = new Set(deleted);
+    pruneByProjects(deleted);
+    setPaginatedObservations((prev) => prev.filter((o) => !removed.has(o.project)));
+    setPaginatedSummaries((prev) => prev.filter((s) => !removed.has(s.project)));
+    setPaginatedPrompts((prev) => prev.filter((p) => !removed.has(p.project)));
+    if (currentFilter && removed.has(currentFilter)) {
+      setCurrentFilter('');
+    }
+  }, [pruneByProjects, currentFilter]);
 
   useEffect(() => {
     refreshStats();
@@ -132,17 +215,19 @@ export function App() {
     <>
       <div className="app-shell">
         <ProjectSidebar
-          projects={projects}
+          projects={effectiveProjects}
           currentFilter={currentFilter}
           onFilterChange={setCurrentFilter}
           observations={observations}
           summaries={summaries}
           prompts={prompts}
+          projectStats={effectiveProjectStats}
+          onProjectsDeleted={handleProjectsDeleted}
         />
         <div className="app-main">
           <Header
             isConnected={isConnected}
-            projects={projects}
+            projects={effectiveProjects}
             currentFilter={currentFilter}
             onFilterChange={setCurrentFilter}
             isProcessing={isProcessing}
@@ -152,6 +237,8 @@ export function App() {
             onContextPreviewToggle={toggleContextPreview}
             viewMode={viewMode}
             onViewModeChange={setViewMode}
+            dateFilter={dateFilter}
+            onDateFilterChange={setDateFilter}
             onShowHelp={() => {
               setStoredWelcomeDismissed(false);
               setWelcomeDismissed(false);

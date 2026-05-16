@@ -474,10 +474,347 @@
       color: #fff;
     }
 
+    /* ── Sidebar manage / multi-select / tooltip / toast ─────────── */
+    .project-sidebar-header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .project-sidebar-manage-btn {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      background: transparent;
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+      color: var(--color-text-secondary);
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: background-color .12s ease, color .12s ease, border-color .12s ease;
+    }
+    .project-sidebar-manage-btn:hover:not(:disabled) {
+      background: var(--color-bg-card-hover);
+      color: var(--color-text-primary);
+      border-color: var(--color-border-focus);
+    }
+    .project-sidebar-manage-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .project-sidebar-header-select {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+    }
+    .project-sidebar-checkbox-wrap {
+      display: inline-flex;
+      align-items: center;
+      cursor: pointer;
+      padding: 4px;
+    }
+    .project-sidebar-checkbox-wrap input[type="checkbox"],
+    .project-sidebar-checkbox {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+      accent-color: var(--color-border-focus, #2563eb);
+      margin: 0;
+    }
+    .project-sidebar-select-count {
+      font-size: 11px;
+      color: var(--color-text-muted);
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      white-space: nowrap;
+    }
+
+    .project-sidebar-delete-btn {
+      margin-left: auto;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      background: #d33;
+      border: 1px solid #b22;
+      border-radius: 6px;
+      color: #fff;
+      padding: 4px 10px;
+      cursor: pointer;
+      transition: opacity .12s ease, background-color .12s ease;
+    }
+    .project-sidebar-delete-btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .project-sidebar-delete-btn:hover:not(:disabled) {
+      background: #b22;
+    }
+
+    .project-sidebar-cancel-btn {
+      background: transparent;
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+      color: var(--color-text-secondary);
+      padding: 4px 8px;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+    }
+    .project-sidebar-cancel-btn:hover {
+      background: var(--color-bg-card-hover);
+      color: var(--color-text-primary);
+    }
+
+    .project-sidebar-item-wrap {
+      display: block;
+      margin-bottom: 2px;
+    }
+    .project-sidebar-item-wrap.is-select-mode {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 4px;
+    }
+    .project-sidebar-item-wrap.is-select-mode .project-sidebar-item {
+      flex: 1;
+      margin-bottom: 0;
+    }
+    .project-sidebar-item-wrap.is-selected .project-sidebar-item {
+      background: var(--color-bg-card);
+      border-color: var(--color-border-focus);
+      color: var(--color-text-primary);
+    }
+
+    /* Small "in use" chip rendered when the most recent delete attempt was
+       refused because an AI session is still active for this project.
+       Lives between the name and the count so it's visible regardless of
+       select-mode state. */
+    .project-sidebar-in-use-chip {
+      flex-shrink: 0;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #fff;
+      background: rgba(190, 30, 30, 0.85);
+      border-radius: 9px;
+      padding: 1px 7px;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      margin-right: 4px;
+      cursor: help;
+    }
+    .project-sidebar-item-wrap.is-in-use .project-sidebar-item {
+      /* Subtle red border so the row reads as "blocked" even without the
+         chip catching the user's eye. */
+      border-color: rgba(190, 30, 30, 0.5);
+    }
+
+    /* Custom hover tooltip — ~2× browser-native title, fixed position so it
+       escapes the sidebar's `overflow: hidden`. pointer-events: none keeps
+       hover state on the source row stable when the cursor enters the tooltip. */
+    .project-sidebar-tooltip {
+      position: fixed;
+      z-index: 9999;
+      pointer-events: none;
+      background: var(--color-bg-card, #1e1f23);
+      border: 1px solid var(--color-border-focus, #444);
+      border-radius: 8px;
+      padding: 12px 14px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--color-text-primary);
+      animation: project-tooltip-fade .12s ease;
+    }
+    @keyframes project-tooltip-fade {
+      from { opacity: 0; transform: translateY(-2px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .project-tooltip-row {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+    .project-tooltip-row:last-child {
+      margin-bottom: 0;
+    }
+    .project-tooltip-label {
+      flex-shrink: 0;
+      min-width: 110px;
+      font-size: 11px;
+      color: var(--color-text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .project-tooltip-value {
+      flex: 1;
+      min-width: 0;
+      word-break: break-word;
+    }
+    .project-tooltip-value.is-mono {
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 12px;
+    }
+    .project-tooltip-value.is-full-id {
+      /* Prefer one-line layout; fall back to ellipsis if the path is huge.
+         The tooltip is ~560px so most safe-prefix project IDs fit cleanly. */
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .project-sidebar-toast {
+      position: absolute;
+      bottom: 12px;
+      left: 12px;
+      right: 12px;
+      z-index: 200;
+      padding: 10px 12px;
+      border-radius: 6px;
+      font-size: 12px;
+      line-height: 1.5;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      animation: project-tooltip-fade .15s ease;
+      white-space: pre-wrap;
+    }
+    .project-sidebar-toast.is-success {
+      background: rgba(34, 139, 34, 0.92);
+      color: #fff;
+    }
+    .project-sidebar-toast.is-warn {
+      background: rgba(217, 119, 6, 0.92);
+      color: #fff;
+    }
+    .project-sidebar-toast.is-error {
+      background: rgba(190, 30, 30, 0.92);
+      color: #fff;
+    }
+
     @media (max-width: 768px) {
       .project-sidebar {
         display: none;
       }
+    }
+
+    /* ── Date filter (header pill + popover) ─────────────────────── */
+    .date-filter {
+      position: relative;
+      display: inline-block;
+    }
+    .date-filter-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 32px;
+      padding: 0 10px;
+      background: transparent;
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+      color: var(--color-text-secondary);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color .12s ease, color .12s ease, border-color .12s ease;
+    }
+    .date-filter-btn:hover {
+      background: var(--color-bg-card-hover);
+      color: var(--color-text-primary);
+    }
+    .date-filter-btn.is-active {
+      background: var(--color-bg-card);
+      border-color: var(--color-border-focus);
+      color: var(--color-text-primary);
+    }
+    .date-filter-icon { display: inline-block; }
+    .date-filter-label { white-space: nowrap; }
+    .date-filter-clear {
+      margin-left: 2px;
+      padding: 0 4px;
+      font-size: 11px;
+      line-height: 1;
+      color: var(--color-text-muted);
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .date-filter-clear:hover {
+      background: rgba(190, 30, 30, 0.18);
+      color: #d33;
+    }
+    .date-filter-popover {
+      position: absolute;
+      top: calc(100% + 6px);
+      right: 0;
+      z-index: 9000;
+      min-width: 260px;
+      padding: 12px;
+      background: var(--color-bg-card, #1e1f23);
+      border: 1px solid var(--color-border-focus, #444);
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+      animation: project-tooltip-fade .12s ease;
+    }
+    .date-filter-input {
+      width: 100%;
+      padding: 6px 8px;
+      font-size: 13px;
+      font-family: inherit;
+      color: var(--color-text-primary);
+      background: var(--color-bg-secondary);
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+      outline: none;
+    }
+    .date-filter-input:focus {
+      border-color: var(--color-border-focus);
+    }
+    .date-filter-popover-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 10px;
+    }
+    /* Three quick-pick buttons share the popover width as an equal-column
+       grid; long labels ("Day before") get the same room as short ones,
+       so the previous flex-row crammed layout is gone. */
+    .date-filter-quick-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 6px;
+    }
+    .date-filter-quick-btn {
+      min-width: 0;
+      padding: 6px 8px;
+      font-size: 12px;
+      text-align: center;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      background: transparent;
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+      color: var(--color-text-secondary);
+      cursor: pointer;
+      transition: background-color .12s ease, color .12s ease;
+    }
+    .date-filter-quick-btn.is-fullwidth {
+      /* Clear lives on its own row beneath the grid — stretches edge-to-edge
+         so it reads as a destructive action, not just one of four picks. */
+      width: 100%;
+    }
+    .date-filter-quick-btn:hover {
+      background: var(--color-bg-card-hover);
+      color: var(--color-text-primary);
+    }
+    .date-filter-quick-btn.is-clear {
+      color: #d33;
+      border-color: rgba(190, 30, 30, 0.5);
+    }
+    .date-filter-quick-btn.is-clear:hover {
+      background: rgba(190, 30, 30, 0.12);
     }
 
     /* ── View-mode toggle in header (All / Prompts) ────────────── */
@@ -1361,6 +1698,21 @@
 
     .meta-date {
       color: var(--color-text-tertiary);
+    }
+
+    /* OS user pill rendered after the date in card / summary footers. Kept
+       muted so it reads as supplementary metadata, never competing with the
+       title or facts. */
+    .meta-user {
+      margin-left: 4px;
+      padding: 1px 6px;
+      border-radius: 9px;
+      background: var(--color-bg-stat);
+      color: var(--color-text-muted);
+      font-size: 11px;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      letter-spacing: 0.02em;
+      cursor: help;
     }
 
     .meta-concepts {

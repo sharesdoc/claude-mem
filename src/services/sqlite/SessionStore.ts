@@ -2456,6 +2456,147 @@ export class SessionStore {
     this.db.close();
   }
 
+  /**
+   * Return the subset of `projects` that still have pending/processing rows in
+   * `pending_messages` (joined via sdk_sessions). Used by the project-delete
+   * admin path to refuse destruction when the worker queue is mid-flight.
+   *
+   * Empty input → empty result (no roundtrip).
+   */
+  projectsWithPendingWork(projects: string[]): Set<string> {
+    const result = new Set<string>();
+    if (projects.length === 0) return result;
+
+    const placeholders = projects.map(() => '?').join(',');
+    const rows = this.db.prepare(`
+      SELECT DISTINCT s.project AS project
+      FROM pending_messages pm
+      JOIN sdk_sessions s ON pm.session_db_id = s.id
+      WHERE s.project IN (${placeholders})
+        AND pm.status IN ('pending', 'processing')
+    `).all(...projects) as Array<{ project: string }>;
+
+    for (const row of rows) {
+      if (row.project) result.add(row.project);
+    }
+    return result;
+  }
+
+  /**
+   * Permanently delete every row that belongs to `projects`. Runs in a single
+   * transaction so partial failure leaves the DB untouched. Returns per-project
+   * deletion counts so the admin endpoint can report what actually went away.
+   *
+   * What gets removed:
+   *   - observations WHERE project IN (...) OR merged_into_project IN (...)
+   *   - session_summaries (same predicate)
+   *   - observation_feedback (cascades via observations.id FK — implicit)
+   *   - user_prompts (cascades via sdk_sessions.content_session_id FK)
+   *   - pending_messages (cascades via sdk_sessions.id FK)
+   *   - sdk_sessions WHERE project IN (...)
+   *
+   * Worktree-merge note: rows where merged_into_project equals a deleted
+   * project are also removed. The "child worktree branch was adopted into
+   * this parent" relationship is meaningless once the parent is gone.
+   *
+   * Chroma is NOT touched here — callers drop chroma collections separately
+   * (best-effort, outside the SQL tx).
+   */
+  deleteProjectsCompletely(projects: string[]): Record<string, {
+    observations: number;
+    summaries: number;
+    sessions: number;
+    prompts: number;
+    pending: number;
+  }> {
+    const counts: Record<string, {
+      observations: number; summaries: number;
+      sessions: number; prompts: number; pending: number;
+    }> = {};
+    if (projects.length === 0) return counts;
+
+    const tx = this.db.transaction((target: string[]) => {
+      const placeholders = target.map(() => '?').join(',');
+
+      for (const project of target) {
+        // Probe counts first so we can report per-project. The DELETEs that
+        // follow operate on the full set in one statement each, which is
+        // cheaper than per-project DELETEs but loses per-project granularity
+        // — we recover it from these COUNT probes.
+        const obs = this.db.prepare(
+          `SELECT COUNT(*) AS n FROM observations
+             WHERE project = ? OR merged_into_project = ?`
+        ).get(project, project) as { n: number };
+
+        const sum = this.db.prepare(
+          `SELECT COUNT(*) AS n FROM session_summaries
+             WHERE project = ? OR merged_into_project = ?`
+        ).get(project, project) as { n: number };
+
+        const sess = this.db.prepare(
+          `SELECT COUNT(*) AS n FROM sdk_sessions WHERE project = ?`
+        ).get(project) as { n: number };
+
+        const prom = this.db.prepare(
+          `SELECT COUNT(*) AS n FROM user_prompts up
+             JOIN sdk_sessions s ON up.content_session_id = s.content_session_id
+             WHERE s.project = ?`
+        ).get(project) as { n: number };
+
+        const pend = this.db.prepare(
+          `SELECT COUNT(*) AS n FROM pending_messages pm
+             JOIN sdk_sessions s ON pm.session_db_id = s.id
+             WHERE s.project = ?`
+        ).get(project) as { n: number };
+
+        counts[project] = {
+          observations: obs.n, summaries: sum.n,
+          sessions: sess.n, prompts: prom.n, pending: pend.n
+        };
+      }
+
+      // observations and session_summaries can also live under
+      // merged_into_project (worktree adoption), so target both predicates.
+      this.db.prepare(
+        `DELETE FROM observations
+           WHERE project IN (${placeholders})
+              OR merged_into_project IN (${placeholders})`
+      ).run(...target, ...target);
+
+      this.db.prepare(
+        `DELETE FROM session_summaries
+           WHERE project IN (${placeholders})
+              OR merged_into_project IN (${placeholders})`
+      ).run(...target, ...target);
+
+      // Belt-and-suspenders: schema cascades user_prompts/pending_messages
+      // when sdk_sessions rows go, but explicit deletes keep the tx valid
+      // even if a future schema migration weakens the FK.
+      this.db.prepare(
+        `DELETE FROM pending_messages
+           WHERE session_db_id IN (
+             SELECT id FROM sdk_sessions WHERE project IN (${placeholders})
+           )`
+      ).run(...target);
+
+      this.db.prepare(
+        `DELETE FROM user_prompts
+           WHERE content_session_id IN (
+             SELECT content_session_id FROM sdk_sessions WHERE project IN (${placeholders})
+           )`
+      ).run(...target);
+
+      this.db.prepare(
+        `DELETE FROM sdk_sessions WHERE project IN (${placeholders})`
+      ).run(...target);
+    });
+
+    tx(projects);
+
+    logger.info('SESSION', 'Projects deleted completely', { projects, counts });
+    return counts;
+  }
+
   importSdkSession(session: {
     content_session_id: string;
     memory_session_id: string;

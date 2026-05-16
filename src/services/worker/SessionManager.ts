@@ -412,6 +412,23 @@ export class SessionManager {
     return this.sessions.size;
   }
 
+  /**
+   * Return the set of project IDs that currently have at least one live
+   * in-memory session. Used by the project-delete admin path to refuse
+   * destruction of projects with active AI activity.
+   *
+   * Note: only covers worker in-memory sessions. Pending DB rows are
+   * checked separately via PendingMessageStore + sdk_sessions JOIN so we
+   * also catch the "worker just restarted, queue not yet drained" case.
+   */
+  getProjectsInUse(): Set<string> {
+    const projects = new Set<string>();
+    for (const session of this.sessions.values()) {
+      if (session.project) projects.add(session.project);
+    }
+    return projects;
+  }
+
   async getTotalQueueDepth(): Promise<number> {
     return await this.getQueueEngine().getTotalQueueDepth();
   }

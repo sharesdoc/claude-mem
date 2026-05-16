@@ -61,6 +61,9 @@ export function SummaryCard({ summary }: SummaryCardProps) {
         <time className="summary-meta-date" dateTime={new Date(summary.created_at_epoch).toISOString()}>
           {date}
         </time>
+        {summary.user_name && (
+          <span className="meta-user" title="OS user">  {summary.user_name}</span>
+        )}
       </footer>
     </article>
   );

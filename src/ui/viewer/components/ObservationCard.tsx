@@ -117,7 +117,12 @@ export function ObservationCard({ observation }: ObservationCardProps) {
 
       {/* Metadata footer - id, date, and conditionally concepts/files when facts toggle is on */}
       <div className="card-meta">
-        <span className="meta-date">#{observation.id} • {date}</span>
+        <span className="meta-date">
+          #{observation.id} • {date}
+          {observation.user_name && (
+            <span className="meta-user" title="OS user">  {observation.user_name}</span>
+          )}
+        </span>
         {showFacts && (concepts.length > 0 || filesRead.length > 0 || filesModified.length > 0) && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
             {concepts.map((concept: string, i: number) => (

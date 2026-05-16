@@ -14,6 +14,8 @@ export interface Observation {
   files_read: string | null;
   files_modified: string | null;
   prompt_number: number | null;
+  /** OS user (Mac/Windows username) that produced this row, null if unknown. */
+  user_name?: string | null;
   created_at: string;
   created_at_epoch: number;
 }
@@ -28,6 +30,7 @@ export interface Summary {
   learned?: string;
   completed?: string;
   next_steps?: string;
+  user_name?: string | null;
   created_at_epoch: number;
 }
 
@@ -38,6 +41,7 @@ export interface UserPrompt {
   platform_source: string;
   prompt_number: number;
   prompt_text: string;
+  user_name?: string | null;
   created_at_epoch: number;
 }
 
@@ -47,7 +51,13 @@ export type FeedItem =
   | (UserPrompt & { itemType: 'prompt' });
 
 export interface StreamEvent {
-  type: 'initial_load' | 'new_observation' | 'new_summary' | 'new_prompt' | 'processing_status';
+  type:
+    | 'initial_load'
+    | 'new_observation'
+    | 'new_summary'
+    | 'new_prompt'
+    | 'processing_status'
+    | 'projects_deleted';
   observations?: Observation[];
   summaries?: Summary[];
   prompts?: UserPrompt[];

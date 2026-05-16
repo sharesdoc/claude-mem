@@ -17,6 +17,13 @@ export const translations: Record<Locale, Dict> = {
     'header.languageLabel': 'Language',
     'header.viewAll': 'Show All',
     'header.viewPrompts': 'Prompts',
+    'header.dateFilter': 'Date',
+    'header.dateFilterTip': 'Filter to a specific day',
+    'header.dateFilterClear': 'Clear',
+    'header.dateFilterClearTip': 'Clear date filter',
+    'header.dateFilterToday': 'Today',
+    'header.dateFilterYesterday': 'Yesterday',
+    'header.dateFilterDayBefore': 'Day before',
 
     'theme.light': 'Theme: Light (click for Dark)',
     'theme.dark': 'Theme: Dark (click for System)',
@@ -29,6 +36,25 @@ export const translations: Record<Locale, Dict> = {
     'sidebar.summaries': 'summaries',
     'sidebar.prompts': 'prompts',
     'sidebar.resize': 'Resize project sidebar',
+    'sidebar.alias': 'Alias',
+    'sidebar.fullId': 'Full ID',
+    'sidebar.lastActive': 'Last active',
+    'sidebar.lastActiveNever': 'No activity yet',
+    'sidebar.manage': 'Manage',
+    'sidebar.manageTip': 'Select projects to delete',
+    'sidebar.exitSelect': 'Exit selection',
+    'sidebar.selectAll': 'Select all',
+    'sidebar.deselectAll': 'Deselect all',
+    'sidebar.deleteSelected': 'Delete selected',
+    'sidebar.deleteSelectedTip': 'Permanently delete the selected projects and ALL their observations, summaries, prompts and sessions',
+    'sidebar.deleting': 'Deleting…',
+    'sidebar.deleteConfirm': 'Permanently delete {count} project(s) and ALL their data?\n\nThis cannot be undone.',
+    'sidebar.deleteSuccess': 'Deleted {count} project(s)',
+    'sidebar.deleteSkipped': 'Skipped {count}: project is in use by an AI session',
+    'sidebar.deleteError': 'Delete failed: {error}',
+    'sidebar.inUseChip': 'in use',
+    'sidebar.inUseTip': 'Currently in use by an AI session — cannot be deleted right now.',
+    'sidebar.selectCheckbox': 'Select this project',
 
     'feed.empty': 'No items to display',
     'feed.loading': 'Loading more...',
@@ -111,6 +137,13 @@ export const translations: Record<Locale, Dict> = {
     'header.languageLabel': '语言',
     'header.viewAll': '显示所有',
     'header.viewPrompts': '提示词',
+    'header.dateFilter': '日期',
+    'header.dateFilterTip': '筛选某一天的数据',
+    'header.dateFilterClear': '清除',
+    'header.dateFilterClearTip': '清除日期筛选',
+    'header.dateFilterToday': '今天',
+    'header.dateFilterYesterday': '昨天',
+    'header.dateFilterDayBefore': '前天',
 
     'theme.light': '主题：浅色（点击切换深色）',
     'theme.dark': '主题：深色（点击切换跟随系统）',
@@ -123,6 +156,25 @@ export const translations: Record<Locale, Dict> = {
     'sidebar.summaries': '总结',
     'sidebar.prompts': '提示词',
     'sidebar.resize': '调整项目侧栏宽度',
+    'sidebar.alias': '别名',
+    'sidebar.fullId': '完整 ID',
+    'sidebar.lastActive': '最近活动',
+    'sidebar.lastActiveNever': '暂无活动',
+    'sidebar.manage': '管理',
+    'sidebar.manageTip': '选择要删除的项目',
+    'sidebar.exitSelect': '退出选择',
+    'sidebar.selectAll': '全选',
+    'sidebar.deselectAll': '取消全选',
+    'sidebar.deleteSelected': '删除所选',
+    'sidebar.deleteSelectedTip': '永久删除所选项目及其全部观察、总结、提示词与会话记录',
+    'sidebar.deleting': '删除中……',
+    'sidebar.deleteConfirm': '永久删除 {count} 个项目及其全部数据？\n\n此操作不可撤销。',
+    'sidebar.deleteSuccess': '已删除 {count} 个项目',
+    'sidebar.deleteSkipped': '跳过 {count} 个：项目正被 AI 会话使用',
+    'sidebar.deleteError': '删除失败：{error}',
+    'sidebar.inUseChip': '使用中',
+    'sidebar.inUseTip': '该项目正被 AI 会话使用，暂时无法删除。',
+    'sidebar.selectCheckbox': '选择该项目',
 
     'feed.empty': '暂无内容',
     'feed.loading': '正在加载更多……',
@@ -216,6 +268,21 @@ export function setStoredLocale(locale: Locale): void {
   }
 }
 
-export function translate(locale: Locale, key: string): string {
-  return translations[locale]?.[key] ?? translations.en[key] ?? key;
+/**
+ * Look up a translation, optionally substituting `{name}` placeholders.
+ *
+ * Placeholder syntax is intentionally tiny: `{var}` is replaced by
+ * `String(vars.var)`. Missing keys fall back to English, then to the raw key
+ * so untranslated UI is at worst readable.
+ */
+export function translate(
+  locale: Locale,
+  key: string,
+  vars?: Record<string, string | number>
+): string {
+  const template = translations[locale]?.[key] ?? translations.en[key] ?? key;
+  if (!vars) return template;
+  return template.replace(/\{(\w+)\}/g, (_, name: string) =>
+    Object.prototype.hasOwnProperty.call(vars, name) ? String(vars[name]) : `{${name}}`
+  );
 }

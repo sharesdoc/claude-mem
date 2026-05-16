@@ -2,6 +2,7 @@ import React from 'react';
 import { ThemeToggle } from './ThemeToggle';
 import { LocaleToggle } from './LocaleToggle';
 import { ViewModeToggle, ViewMode } from './ViewModeToggle';
+import { DateFilterButton } from './DateFilterButton';
 import { ThemePreference } from '../hooks/useTheme';
 import { GitHubStarsButton } from './GitHubStarsButton';
 import { useSpinningFavicon } from '../hooks/useSpinningFavicon';
@@ -19,6 +20,9 @@ interface HeaderProps {
   onContextPreviewToggle: () => void;
   viewMode: ViewMode;
   onViewModeChange: (mode: ViewMode) => void;
+  /** Local-timezone YYYY-MM-DD, or null when no day-filter is active. */
+  dateFilter: string | null;
+  onDateFilterChange: (next: string | null) => void;
   onShowHelp?: () => void;
 }
 
@@ -34,6 +38,8 @@ export function Header({
   onContextPreviewToggle,
   viewMode,
   onViewModeChange,
+  dateFilter,
+  onDateFilterChange,
   onShowHelp
 }: HeaderProps) {
   useSpinningFavicon(isProcessing);
@@ -55,6 +61,7 @@ export function Header({
         </h1>
       </div>
       <div className="status">
+        <DateFilterButton value={dateFilter} onChange={onDateFilterChange} />
         <ViewModeToggle
           mode={viewMode}
           onChange={onViewModeChange}
