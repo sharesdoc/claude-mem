@@ -119,6 +119,7 @@ export const paths = {
   combinedCerts: () => join(DATA_DIR, 'combined_certs.pem'),
   transcriptsConfig: () => join(DATA_DIR, 'transcript-watch.json'),
   transcriptsState: () => join(DATA_DIR, 'transcript-watch-state.json'),
+  syncState: () => join(DATA_DIR, 'sync-state.json'),
   corpora: () => join(DATA_DIR, 'corpora'),
   supervisorRegistry: () => join(DATA_DIR, 'supervisor.json'),
   envFile: () => join(DATA_DIR, '.env'),

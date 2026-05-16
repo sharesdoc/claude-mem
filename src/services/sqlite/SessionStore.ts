@@ -1,5 +1,6 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { DATA_DIR, DB_PATH, ensureDir, OBSERVER_SESSIONS_PROJECT } from '../../shared/paths.js';
+import { existsSync, readFileSync } from 'fs';
+import { DATA_DIR, DB_PATH, USER_SETTINGS_PATH, ensureDir, OBSERVER_SESSIONS_PROJECT } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
 import {
   TableColumnInfo,
@@ -26,6 +27,31 @@ function resolveCreateSessionArgs(
     customTitle,
     platformSource: platformSource ? normalizePlatformSource(platformSource) : undefined
   };
+}
+
+/**
+ * Read CLAUDE_MEM_NODE_ROLE without booting SettingsDefaultsManager (which
+ * would create a circular import during migration). Env wins over the
+ * on-disk settings.json so operators can flip role for one boot via
+ * `CLAUDE_MEM_NODE_ROLE=server bun start`.
+ */
+function isServerRole(): boolean {
+  const fromEnv = process.env.CLAUDE_MEM_NODE_ROLE;
+  if (fromEnv && fromEnv.trim()) {
+    return fromEnv.trim().toLowerCase() === 'server';
+  }
+
+  try {
+    if (existsSync(USER_SETTINGS_PATH)) {
+      const raw = JSON.parse(readFileSync(USER_SETTINGS_PATH, 'utf-8'));
+      const settings = raw?.env ?? raw ?? {};
+      const role = typeof settings.CLAUDE_MEM_NODE_ROLE === 'string' ? settings.CLAUDE_MEM_NODE_ROLE.trim().toLowerCase() : '';
+      return role === 'server';
+    }
+  } catch {
+    // unreadable settings.json — treat as client (safer default)
+  }
+  return false;
 }
 
 export class SessionStore {
@@ -73,6 +99,42 @@ export class SessionStore {
     this.dropWorkerPidColumn();
     this.addSessionUserNameColumn();
     this.addSessionUserLabelColumn();
+    this.createSyncInboxTable();
+  }
+
+  /**
+   * v37 — server-side ingest dedup ledger (S-doc §5.4 + TODO T-05).
+   *
+   * Only created when the node is in `server` mode (env or settings.json).
+   * Client installs would just bloat their schema and never write rows.
+   * Idempotent: re-running on a server keeps the table; re-running on a
+   * client whose role flipped will create it on the next boot for free.
+   */
+  private createSyncInboxTable(): void {
+    if (!isServerRole()) return;
+
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(37) as SchemaVersion | undefined;
+    if (applied) {
+      const exists = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_inbox'").get() as TableNameRow | undefined;
+      if (exists) return;
+    }
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS sync_inbox (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_label        TEXT    NOT NULL,
+        source_table      TEXT    NOT NULL
+                          CHECK(source_table IN ('sdk_sessions','observations','session_summaries','user_prompts')),
+        source_uid        TEXT    NOT NULL,
+        applied_at_epoch  INTEGER NOT NULL,
+        applied_row_id    INTEGER,
+        UNIQUE(user_label, source_table, source_uid)
+      )
+    `);
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_sync_inbox_user_time ON sync_inbox(user_label, applied_at_epoch DESC)');
+    logger.debug('DB', 'Created sync_inbox table + idx_sync_inbox_user_time (server mode)');
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(37, new Date().toISOString());
   }
 
   private addSessionUserNameColumn(): void {

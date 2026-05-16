@@ -1,4 +1,5 @@
 import { Database } from 'bun:sqlite';
+import { existsSync, readFileSync } from 'fs';
 import { logger } from '../../../utils/logger.js';
 import {
   TableColumnInfo,
@@ -7,7 +8,32 @@ import {
   SchemaVersion
 } from '../../../types/database.js';
 import { DEFAULT_PLATFORM_SOURCE } from '../../../shared/platform-source.js';
+import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
 import { ensureServerStorageSchema, SERVER_STORAGE_SCHEMA_VERSION } from '../../../storage/sqlite/schema.js';
+
+/**
+ * Read CLAUDE_MEM_NODE_ROLE without booting SettingsDefaultsManager (which
+ * would create a circular import during migration). Env wins over the
+ * on-disk settings.json so operators can flip role per-boot via
+ * `CLAUDE_MEM_NODE_ROLE=server bun start`.
+ */
+function isServerRole(): boolean {
+  const fromEnv = process.env.CLAUDE_MEM_NODE_ROLE;
+  if (fromEnv && fromEnv.trim()) {
+    return fromEnv.trim().toLowerCase() === 'server';
+  }
+  try {
+    if (existsSync(USER_SETTINGS_PATH)) {
+      const raw = JSON.parse(readFileSync(USER_SETTINGS_PATH, 'utf-8'));
+      const settings = raw?.env ?? raw ?? {};
+      const role = typeof settings.CLAUDE_MEM_NODE_ROLE === 'string' ? settings.CLAUDE_MEM_NODE_ROLE.trim().toLowerCase() : '';
+      return role === 'server';
+    }
+  } catch {
+    // unreadable settings.json — treat as client (safer default)
+  }
+  return false;
+}
 
 export class MigrationRunner {
   constructor(private db: Database) {}
@@ -38,6 +64,82 @@ export class MigrationRunner {
     this.dropWorkerPidColumn();
     this.createServerOwnedTables();
     this.rebuildPendingMessagesForFinalQueueSchema();
+    this.addSessionUserNameColumn();
+    this.addSessionUserLabelColumn();
+    this.createSyncInboxTable();
+  }
+
+  /**
+   * v35 — Record the OS user that owns each session so the viewer can show
+   * who created an observation/summary/prompt. Mirrored in SessionStore.ts
+   * (the actual production boot path); kept here so tests and any future
+   * caller that exercises MigrationRunner directly stay in sync.
+   */
+  private addSessionUserNameColumn(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(35) as SchemaVersion | undefined;
+    if (applied) return;
+
+    const tableInfo = this.db.query('PRAGMA table_info(sdk_sessions)').all() as TableColumnInfo[];
+    const hasColumn = tableInfo.some(col => col.name === 'user_name');
+
+    if (!hasColumn) {
+      this.db.run('ALTER TABLE sdk_sessions ADD COLUMN user_name TEXT');
+      logger.debug('DB', 'Added user_name column to sdk_sessions table');
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(35, new Date().toISOString());
+  }
+
+  /**
+   * v36 — Sync identity column (S-doc §5.2). Mirrored in SessionStore.ts
+   * (see comment on addSessionUserNameColumn above).
+   */
+  private addSessionUserLabelColumn(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(36) as SchemaVersion | undefined;
+    if (applied) return;
+
+    const tableInfo = this.db.query('PRAGMA table_info(sdk_sessions)').all() as TableColumnInfo[];
+    const hasColumn = tableInfo.some(col => col.name === 'user_label');
+
+    if (!hasColumn) {
+      this.db.run('ALTER TABLE sdk_sessions ADD COLUMN user_label TEXT');
+      this.db.run('CREATE INDEX IF NOT EXISTS idx_sdk_sessions_user ON sdk_sessions(user_label)');
+      logger.debug('DB', 'Added user_label column + idx_sdk_sessions_user to sdk_sessions');
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(36, new Date().toISOString());
+  }
+
+  /**
+   * v37 — server-side ingest dedup ledger (S-doc §5.4 + TODO T-05).
+   * Only created when role=server (env or settings.json). Mirrored in
+   * SessionStore.ts. Idempotent.
+   */
+  private createSyncInboxTable(): void {
+    if (!isServerRole()) return;
+
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(37) as SchemaVersion | undefined;
+    if (applied) {
+      const exists = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='sync_inbox'").get() as TableNameRow | undefined;
+      if (exists) return;
+    }
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS sync_inbox (
+        id                INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_label        TEXT    NOT NULL,
+        source_table      TEXT    NOT NULL
+                          CHECK(source_table IN ('sdk_sessions','observations','session_summaries','user_prompts')),
+        source_uid        TEXT    NOT NULL,
+        applied_at_epoch  INTEGER NOT NULL,
+        applied_row_id    INTEGER,
+        UNIQUE(user_label, source_table, source_uid)
+      )
+    `);
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_sync_inbox_user_time ON sync_inbox(user_label, applied_at_epoch DESC)');
+    logger.debug('DB', 'Created sync_inbox + idx_sync_inbox_user_time (server mode)');
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(37, new Date().toISOString());
   }
 
   private initializeSchema(): void {
