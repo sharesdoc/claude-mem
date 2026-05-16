@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import type { Settings } from '../types';
 import { TerminalPreview } from './TerminalPreview';
 import { useContextPreview } from '../hooks/useContextPreview';
+import { useLocale } from '../hooks/useLocale';
 
 interface ContextSettingsModalProps {
   isOpen: boolean;
@@ -125,6 +126,7 @@ export function ContextSettingsModal({
   isSaving,
   saveStatus
 }: ContextSettingsModalProps) {
+  const { t } = useLocale();
   const [formState, setFormState] = useState<Settings>(settings);
 
   useEffect(() => {
@@ -175,10 +177,10 @@ export function ContextSettingsModal({
       <div className="context-settings-modal" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className="modal-header">
-          <h2>Settings</h2>
+          <h2>{t('settings.title')}</h2>
           <div className="header-controls">
             <label className="preview-selector">
-              Source:
+              {t('settings.source')}
               <select
                 value={selectedSource || ''}
                 onChange={(e) => setSelectedSource(e.target.value)}
@@ -190,7 +192,7 @@ export function ContextSettingsModal({
               </select>
             </label>
             <label className="preview-selector">
-              Project:
+              {t('settings.project')}
               <select
                 value={selectedProject || ''}
                 onChange={(e) => setSelectedProject(e.target.value)}
@@ -204,7 +206,7 @@ export function ContextSettingsModal({
             <button
               onClick={onClose}
               className="modal-close-btn"
-              title="Close (Esc)"
+              title={t('settings.close')}
             >
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <line x1="18" y1="6" x2="6" y2="18" />
@@ -221,7 +223,7 @@ export function ContextSettingsModal({
             <div className="preview-content">
               {error ? (
                 <div style={{ color: '#ff6b6b' }}>
-                  Error loading preview: {error}
+                  {t('settings.errorPreview')} {error}
                 </div>
               ) : (
                 <TerminalPreview content={preview} isLoading={isLoading} />
@@ -233,8 +235,8 @@ export function ContextSettingsModal({
           <div className="settings-column">
             {/* Section 1: Loading */}
             <CollapsibleSection
-              title="Loading"
-              description="How many observations to inject"
+              title={t('settings.sectionLoading')}
+              description={t('settings.sectionLoadingDesc')}
             >
               <FormField
                 label="Observations"
@@ -264,8 +266,8 @@ export function ContextSettingsModal({
 
             {/* Section 2: Display */}
             <CollapsibleSection
-              title="Display"
-              description="What to show in context tables"
+              title={t('settings.sectionDisplay')}
+              description={t('settings.sectionDisplayDesc')}
             >
               <div className="display-subsection">
                 <span className="subsection-label">Full Observations</span>
@@ -325,7 +327,7 @@ export function ContextSettingsModal({
 
             {/* Section 4: Advanced */}
             <CollapsibleSection
-              title="Advanced"
+              title={t('settings.sectionAdvanced')}
               description="AI provider and model selection"
               defaultOpen={false}
             >
@@ -489,7 +491,7 @@ export function ContextSettingsModal({
             onClick={handleSave}
             disabled={isSaving}
           >
-            {isSaving ? 'Saving...' : 'Save'}
+            {isSaving ? t('settings.saving') : t('settings.save')}
           </button>
         </div>
       </div>

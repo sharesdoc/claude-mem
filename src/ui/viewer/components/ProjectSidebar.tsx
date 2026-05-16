@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Observation, Summary, UserPrompt } from '../types';
+import { useLocale } from '../hooks/useLocale';
 
 interface ProjectSidebarProps {
   projects: string[];
@@ -54,6 +55,7 @@ export function ProjectSidebar({
   summaries,
   prompts,
 }: ProjectSidebarProps) {
+  const { t } = useLocale();
   const [width, setWidth] = useState<number>(readInitialWidth);
   const [isResizing, setIsResizing] = useState(false);
   const widthRef = useRef(width);
@@ -141,7 +143,7 @@ export function ProjectSidebar({
       style={{ width: `${width}px` }}
     >
       <div className="project-sidebar-header">
-        <span className="project-sidebar-title">Projects</span>
+        <span className="project-sidebar-title">{t('sidebar.title')}</span>
         <span className="project-sidebar-count">{projects.length}</span>
       </div>
       <div className="project-sidebar-list">
@@ -149,13 +151,13 @@ export function ProjectSidebar({
           type="button"
           className={`project-sidebar-item${currentFilter === '' ? ' is-active' : ''}`}
           onClick={() => onFilterChange('')}
-          title="Show items from all projects"
+          title={t('sidebar.allProjectsTip')}
         >
-          <span className="project-sidebar-item-name">All Projects</span>
+          <span className="project-sidebar-item-name">{t('header.allProjects')}</span>
           <span className="project-sidebar-item-count">{totalCount}</span>
         </button>
         {sortedProjects.length === 0 && (
-          <div className="project-sidebar-empty">No projects yet</div>
+          <div className="project-sidebar-empty">{t('sidebar.empty')}</div>
         )}
         {sortedProjects.map((project) => {
           const s =
@@ -167,7 +169,7 @@ export function ProjectSidebar({
               type="button"
               className={`project-sidebar-item${isActive ? ' is-active' : ''}`}
               onClick={() => onFilterChange(project)}
-              title={`${project}\nobservations: ${s.observations}\nsummaries: ${s.summaries}\nprompts: ${s.prompts}`}
+              title={`${project}\n${t('sidebar.observations')}: ${s.observations}\n${t('sidebar.summaries')}: ${s.summaries}\n${t('sidebar.prompts')}: ${s.prompts}`}
             >
               <span className="project-sidebar-item-name">{project}</span>
               <span className="project-sidebar-item-count">{s.total}</span>
@@ -183,7 +185,7 @@ export function ProjectSidebar({
         }}
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize project sidebar"
+        aria-label={t('sidebar.resize')}
       />
     </aside>
   );

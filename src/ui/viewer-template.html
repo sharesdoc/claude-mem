@@ -7,13 +7,8 @@
   <title>claude-mem viewer</title>
   <link rel="icon" type="image/webp" href="claude-mem-logomark.webp">
   <style>
-    @font-face {
-      font-family: 'Monaspace Radon';
-      src: url('assets/fonts/monaspace-radon-var.woff2') format('woff2-variations'),
-        url('assets/fonts/monaspace-radon-var.woff') format('woff-variations');
-      font-weight: 200 900;
-      font-display: swap;
-    }
+    /* No custom display font. Stylized/hand-written face removed in favor of
+       neutral system stacks; the monospace stack covers code-like contexts. */
 
     /* Theme Variables - Light Mode */
     :root,
@@ -302,7 +297,9 @@
     }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Helvetica', 'Arial',
+        'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Source Han Sans SC', 'Noto Sans CJK SC',
+        sans-serif;
       background: var(--color-bg-primary);
       color: var(--color-text-primary);
       font-size: 14px;
@@ -322,8 +319,15 @@
     }
 
     /* ── Project sidebar (left) ────────────────────────────────── */
-    /* Shared top-bar height so the sidebar header aligns with the main Header */
-    :root { --topbar-height: 65px; }
+    /* Shared top-bar height so the sidebar header aligns with the main Header.
+       Derivation: the main .header sizes naturally to (tallest child + padding-y + border).
+         child max  = 36px (.settings-btn / .theme-toggle-btn / .icon-link / .status select)
+         padding-y  = 16px + 16px = 32px
+         border-bot = 1px
+         ────────────
+         total      = 69px
+       Keep this in sync if any of those three values change. */
+    :root { --topbar-height: 69px; }
 
     .app-shell {
       display: flex;
@@ -474,6 +478,143 @@
       .project-sidebar {
         display: none;
       }
+    }
+
+    /* ── View-mode toggle in header (All / Prompts) ────────────── */
+    .viewmode-toggle {
+      display: inline-flex;
+      align-items: stretch;
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--color-bg-card);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      height: 36px;
+    }
+    .viewmode-toggle-btn {
+      background: transparent;
+      border: 0;
+      padding: 0 12px;
+      height: 100%;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--color-text-secondary);
+      cursor: pointer;
+      white-space: nowrap;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+    .viewmode-toggle-btn:hover {
+      background: var(--color-bg-card-hover);
+      color: var(--color-text-primary);
+    }
+    .viewmode-toggle-btn.is-active {
+      background: var(--color-bg-button);
+      color: #fff;
+    }
+    .viewmode-toggle-btn + .viewmode-toggle-btn {
+      border-left: 1px solid var(--color-border-primary);
+    }
+
+    /* ── Prompt copy button (right end of the meta row) ──────── */
+    /* The .prompt-meta row is a flex container (inherited from .card-meta).
+       We push the copy button to the far right with margin-left:auto while
+       leaving room for the optional "Prompt is copied!" message before it. */
+    .prompt-meta {
+      align-items: center;
+    }
+    .prompt-meta-copied {
+      color: #16a34a;
+      font-weight: 600;
+      animation: prompt-copied-msg-in 0.18s ease-out;
+    }
+    @keyframes prompt-copied-msg-in {
+      from { opacity: 0; transform: translateY(-2px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .prompt-copy-btn {
+      margin-left: auto;
+      /* Small breathing room before the card's right edge. */
+      margin-right: 4px;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+      background: var(--color-bg-card);
+      color: var(--color-text-secondary);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      opacity: 0.7;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      transition: opacity 0.15s ease,
+                  background-color 0.15s ease,
+                  color 0.15s ease,
+                  border-color 0.15s ease,
+                  transform 0.08s ease;
+    }
+    .prompt-card:hover .prompt-copy-btn {
+      opacity: 1;
+    }
+    .prompt-copy-btn:hover {
+      background: var(--color-bg-card-hover);
+      border-color: var(--color-border-focus);
+      color: var(--color-text-primary);
+      opacity: 1;
+    }
+    /* Pressed-state feedback fires on mouse-down even if subsequently disabled. */
+    .prompt-copy-btn:active {
+      transform: scale(0.88);
+    }
+    .prompt-copy-btn:disabled {
+      cursor: default;
+    }
+    .prompt-copy-btn.is-copied {
+      background: #16a34a;
+      border-color: #16a34a;
+      color: #ffffff;
+      opacity: 1;
+      animation: prompt-copy-pop 0.18s ease-out;
+    }
+    @keyframes prompt-copy-pop {
+      0%   { transform: scale(0.85); }
+      60%  { transform: scale(1.08); }
+      100% { transform: scale(1); }
+    }
+
+    /* ── Language (locale) toggle in header ────────────────────── */
+    .locale-toggle {
+      display: inline-flex;
+      align-items: stretch;
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+      overflow: hidden;
+      background: var(--color-bg-card);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    }
+    .locale-toggle-btn {
+      background: transparent;
+      border: 0;
+      padding: 0 10px;
+      height: 30px;
+      min-width: 32px;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--color-text-secondary);
+      cursor: pointer;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+    .locale-toggle-btn:hover {
+      background: var(--color-bg-card-hover);
+      color: var(--color-text-primary);
+    }
+    .locale-toggle-btn.is-active {
+      background: var(--color-bg-button);
+      color: #fff;
+    }
+    .locale-toggle-btn + .locale-toggle-btn {
+      border-left: 1px solid var(--color-border-primary);
     }
 
     .sidebar {
@@ -671,7 +812,7 @@
       color: var(--color-text-button);
       font-size: 10px;
       font-weight: 600;
-      font-family: 'Monaspace Radon', monospace;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
       height: 18px;
       border-radius: 9px;
       display: flex;
@@ -693,7 +834,7 @@
     }
 
     .logo-text {
-      font-family: 'Monaspace Radon', monospace;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
       font-weight: 100;
       font-size: 21px;
       letter-spacing: -0.03em;
@@ -967,13 +1108,16 @@
       flex: 1;
       overflow-y: scroll;
       min-height: 0;
-      padding: 24px 18px;
+      /* Horizontal 10% on each side → cards occupy 80% of the column width
+         and adapt fluidly to viewport / sidebar resize. */
+      padding: 24px 10%;
       display: flex;
       justify-content: center;
     }
 
     .feed-content {
-      max-width: 650px;
+      width: 100%;
+      /* No max-width cap — width follows the parent's padding box. */
     }
 
     .card {
@@ -1220,7 +1364,6 @@
     }
 
     .meta-concepts {
-      font-style: italic;
       color: var(--color-text-muted);
     }
 
@@ -1294,7 +1437,7 @@
     }
 
     .summary-badge {
-      font-family: 'Monaspace Radon', 'Monaco', 'Menlo', monospace;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
       font-weight: 600;
       font-size: 10px;
       text-transform: uppercase;
@@ -1303,7 +1446,7 @@
     }
 
     .summary-project-badge {
-      font-family: 'Monaspace Radon', 'Monaco', 'Menlo', monospace;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
       font-size: 11px;
       color: var(--color-text-muted);
       font-weight: 400;
@@ -1324,7 +1467,7 @@
       color: var(--color-text-summary);
       letter-spacing: -0.02em;
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     }
 
     .summary-sections {
@@ -1389,7 +1532,7 @@
       color: var(--color-accent-summary);
       text-transform: uppercase;
       margin: 0;
-      font-family: 'Monaspace Radon', 'Monaco', 'Menlo', monospace;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
     }
 
     .summary-section-content {
@@ -1399,7 +1542,7 @@
       line-height: 1.6;
       white-space: pre-wrap;
       word-wrap: break-word;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
     }
 
     .summary-card-footer {
@@ -1408,7 +1551,7 @@
       gap: 8px;
       padding-top: 16px;
       border-top: 1px solid var(--color-border-primary);
-      font-family: 'Monaspace Radon', 'Monaco', 'Menlo', monospace;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
       font-size: 11px;
       color: var(--color-text-tertiary);
     }

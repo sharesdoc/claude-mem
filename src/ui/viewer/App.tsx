@@ -4,28 +4,53 @@ import { Feed } from './components/Feed';
 import { ContextSettingsModal } from './components/ContextSettingsModal';
 import { LogsDrawer } from './components/LogsModal';
 import { ProjectSidebar } from './components/ProjectSidebar';
+import { ViewMode } from './components/ViewModeToggle';
 import { WelcomeCard, getStoredWelcomeDismissed, setStoredWelcomeDismissed } from './components/WelcomeCard';
 import { useSSE } from './hooks/useSSE';
 import { useSettings } from './hooks/useSettings';
 import { useStats } from './hooks/useStats';
 import { usePagination } from './hooks/usePagination';
 import { useTheme } from './hooks/useTheme';
+import { useLocale } from './hooks/useLocale';
 import { Observation, Summary, UserPrompt } from './types';
 import { mergeAndDeduplicateByProject } from './utils/data';
+
+const VIEW_MODE_KEY = 'claude-mem.viewMode';
+
+function readInitialViewMode(): ViewMode {
+  try {
+    const stored = window.localStorage.getItem(VIEW_MODE_KEY);
+    if (stored === 'prompts') return 'prompts';
+  } catch {
+    /* localStorage unavailable */
+  }
+  return 'all';
+}
 
 export function App() {
   const [currentFilter, setCurrentFilter] = useState('');
   const [contextPreviewOpen, setContextPreviewOpen] = useState(false);
   const [logsModalOpen, setLogsModalOpen] = useState(false);
   const [welcomeDismissed, setWelcomeDismissed] = useState<boolean>(getStoredWelcomeDismissed);
+  const [viewMode, setViewModeState] = useState<ViewMode>(readInitialViewMode);
   const [paginatedObservations, setPaginatedObservations] = useState<Observation[]>([]);
   const [paginatedSummaries, setPaginatedSummaries] = useState<Summary[]>([]);
   const [paginatedPrompts, setPaginatedPrompts] = useState<UserPrompt[]>([]);
+
+  const setViewMode = useCallback((next: ViewMode) => {
+    setViewModeState(next);
+    try {
+      window.localStorage.setItem(VIEW_MODE_KEY, next);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const { observations, summaries, prompts, projects, isProcessing, queueDepth, isConnected } = useSSE();
   const { settings, saveSettings, isSaving, saveStatus } = useSettings();
   const { refreshStats } = useStats();
   const { preference, setThemePreference } = useTheme();
+  const { t } = useLocale();
   const pagination = usePagination(currentFilter);
 
   const matchesSelection = useCallback((item: { project: string }) => {
@@ -39,16 +64,18 @@ export function App() {
   }, [projects, currentFilter]);
 
   const allObservations = useMemo(() => {
+    if (viewMode === 'prompts') return [];
     const live = observations.filter(matchesSelection);
     const paginated = paginatedObservations.filter(matchesSelection);
     return mergeAndDeduplicateByProject(live, paginated);
-  }, [observations, paginatedObservations, matchesSelection]);
+  }, [observations, paginatedObservations, matchesSelection, viewMode]);
 
   const allSummaries = useMemo(() => {
+    if (viewMode === 'prompts') return [];
     const live = summaries.filter(matchesSelection);
     const paginated = paginatedSummaries.filter(matchesSelection);
     return mergeAndDeduplicateByProject(live, paginated);
-  }, [summaries, paginatedSummaries, matchesSelection]);
+  }, [summaries, paginatedSummaries, matchesSelection, viewMode]);
 
   const allPrompts = useMemo(() => {
     const live = prompts.filter(matchesSelection);
@@ -121,6 +148,8 @@ export function App() {
             themePreference={preference}
             onThemeChange={setThemePreference}
             onContextPreviewToggle={toggleContextPreview}
+            viewMode={viewMode}
+            onViewModeChange={setViewMode}
             onShowHelp={() => {
               setStoredWelcomeDismissed(false);
               setWelcomeDismissed(false);
@@ -153,7 +182,7 @@ export function App() {
       <button
         className="console-toggle-btn"
         onClick={toggleLogsModal}
-        title="Toggle Console"
+        title={t('console.toggle')}
       >
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <polyline points="4 17 10 11 4 5"></polyline>

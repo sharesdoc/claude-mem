@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { authFetch } from '../utils/api';
+import { useLocale } from '../hooks/useLocale';
 
 type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 type LogComponent = 'HOOK' | 'WORKER' | 'SDK' | 'PARSER' | 'DB' | 'SYSTEM' | 'HTTP' | 'SESSION' | 'CHROMA';
@@ -68,6 +69,7 @@ interface LogsDrawerProps {
 }
 
 export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
+  const { t } = useLocale();
   const [logs, setLogs] = useState<string>('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -127,7 +129,7 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
       const data = await response.json();
       setLogs(data.logs || '');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      setError(err instanceof Error ? err.message : t('logs.unknownError'));
     } finally {
       setIsLoading(false);
     }
@@ -138,7 +140,7 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
   }, [logs, scrollToBottom]);
 
   const handleClearLogs = useCallback(async () => {
-    if (!confirm('Are you sure you want to clear all logs?')) {
+    if (!confirm(t('logs.confirmClear'))) {
       return;
     }
     setIsLoading(true);
@@ -150,7 +152,7 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
       }
       setLogs('');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unknown error');
+      setError(err instanceof Error ? err.message : t('logs.unknownError'));
     } finally {
       setIsLoading(false);
     }
@@ -318,7 +320,7 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
 
       <div className="console-header">
         <div className="console-tabs">
-          <div className="console-tab active">Console</div>
+          <div className="console-tab active">{t('logs.consoleTab')}</div>
         </div>
         <div className="console-controls">
           <label className="console-auto-refresh">
@@ -327,13 +329,13 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
               checked={autoRefresh}
               onChange={(e) => setAutoRefresh(e.target.checked)}
             />
-            Auto-refresh
+            {t('logs.autoRefresh')}
           </label>
           <button
             className="console-control-btn"
             onClick={fetchLogs}
             disabled={isLoading}
-            title="Refresh logs"
+            title={t('logs.refresh')}
           >
             ↻
           </button>
@@ -343,7 +345,7 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
               wasAtBottomRef.current = true;
               scrollToBottom();
             }}
-            title="Scroll to bottom"
+            title={t('logs.scrollBottom')}
           >
             ⬇
           </button>
@@ -351,14 +353,14 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
             className="console-control-btn console-clear-btn"
             onClick={handleClearLogs}
             disabled={isLoading}
-            title="Clear logs"
+            title={t('logs.clear')}
           >
             🗑
           </button>
           <button
             className="console-control-btn"
             onClick={onClose}
-            title="Close console"
+            title={t('logs.close')}
           >
             ✕
           </button>
@@ -368,7 +370,7 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
       {/* Filter Bar */}
       <div className="console-filters">
         <div className="console-filter-section">
-          <span className="console-filter-label">Quick:</span>
+          <span className="console-filter-label">{t('logs.quickLabel')}</span>
           <div className="console-filter-chips">
             <button
               className={`console-filter-chip ${alignmentOnly ? 'active' : ''}`}
@@ -376,14 +378,14 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
               style={{
                 '--chip-color': '#f0883e',
               } as React.CSSProperties}
-              title="Show only session alignment logs"
+              title={t('logs.sessionFilter')}
             >
-              🔗 Alignment
+              {t('logs.alignmentChip')}
             </button>
           </div>
         </div>
         <div className="console-filter-section">
-          <span className="console-filter-label">Levels:</span>
+          <span className="console-filter-label">{t('logs.levelsLabel')}</span>
           <div className="console-filter-chips">
             {LOG_LEVELS.map(level => (
               <button
@@ -401,14 +403,14 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
             <button
               className="console-filter-action"
               onClick={() => setAllLevels(activeLevels.size === 0)}
-              title={activeLevels.size === LOG_LEVELS.length ? 'Select none' : 'Select all'}
+              title={activeLevels.size === LOG_LEVELS.length ? t('logs.selectNone') : t('logs.selectAll')}
             >
               {activeLevels.size === LOG_LEVELS.length ? '○' : '●'}
             </button>
           </div>
         </div>
         <div className="console-filter-section">
-          <span className="console-filter-label">Components:</span>
+          <span className="console-filter-label">{t('logs.componentsLabel')}</span>
           <div className="console-filter-chips">
             {LOG_COMPONENTS.map(comp => (
               <button
@@ -426,7 +428,7 @@ export function LogsDrawer({ isOpen, onClose }: LogsDrawerProps) {
             <button
               className="console-filter-action"
               onClick={() => setAllComponents(activeComponents.size === 0)}
-              title={activeComponents.size === LOG_COMPONENTS.length ? 'Select none' : 'Select all'}
+              title={activeComponents.size === LOG_COMPONENTS.length ? t('logs.selectNone') : t('logs.selectAll')}
             >
               {activeComponents.size === LOG_COMPONENTS.length ? '○' : '●'}
             </button>

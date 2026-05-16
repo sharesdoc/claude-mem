@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { useLocale } from '../hooks/useLocale';
 
 interface ScrollToTopProps {
   targetRef: React.RefObject<HTMLDivElement>;
 }
 
 export function ScrollToTop({ targetRef }: ScrollToTopProps) {
+  const { t } = useLocale();
   const [isVisible, setIsVisible] = useState(false);
 
   useEffect(() => {
@@ -38,7 +40,7 @@ export function ScrollToTop({ targetRef }: ScrollToTopProps) {
     <button
       onClick={scrollToTop}
       className="scroll-to-top"
-      aria-label="Scroll to top"
+      aria-label={t('common.scrollTop')}
     >
       <svg
         width="20"

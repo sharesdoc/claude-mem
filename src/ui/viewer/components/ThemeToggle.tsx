@@ -1,5 +1,6 @@
 import React from 'react';
 import { ThemePreference } from '../hooks/useTheme';
+import { useLocale } from '../hooks/useLocale';
 
 interface ThemeToggleProps {
   preference: ThemePreference;
@@ -7,6 +8,7 @@ interface ThemeToggleProps {
 }
 
 export function ThemeToggle({ preference, onThemeChange }: ThemeToggleProps) {
+  const { t } = useLocale();
   const cycleTheme = () => {
     const cycle: ThemePreference[] = ['system', 'light', 'dark'];
     const currentIndex = cycle.indexOf(preference);
@@ -51,12 +53,12 @@ export function ThemeToggle({ preference, onThemeChange }: ThemeToggleProps) {
   const getTitle = () => {
     switch (preference) {
       case 'light':
-        return 'Theme: Light (click for Dark)';
+        return t('theme.light');
       case 'dark':
-        return 'Theme: Dark (click for System)';
+        return t('theme.dark');
       case 'system':
       default:
-        return 'Theme: System (click for Light)';
+        return t('theme.system');
     }
   };
 
