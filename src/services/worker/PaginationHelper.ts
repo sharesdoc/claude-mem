@@ -58,6 +58,7 @@ export class PaginationHelper {
     platformSource?: string,
     dateStartEpoch?: number,
     dateEndEpoch?: number,
+    userLabel?: string,
   ): PaginatedResult<Observation> {
     const db = this.dbManager.getSessionStore().db;
     let query = `
@@ -107,6 +108,11 @@ export class PaginationHelper {
       conditions.push('o.created_at_epoch < ?');
       params.push(dateEndEpoch);
     }
+    if (userLabel) {
+      // T-20: filter by sync identity. JOIN already in place via s.* alias.
+      conditions.push('s.user_label = ?');
+      params.push(userLabel);
+    }
     if (conditions.length > 0) {
       query += ` WHERE ${conditions.join(' AND ')}`;
     }
@@ -135,6 +141,7 @@ export class PaginationHelper {
     platformSource?: string,
     dateStartEpoch?: number,
     dateEndEpoch?: number,
+    userLabel?: string,
   ): PaginatedResult<Summary> {
     const db = this.dbManager.getSessionStore().db;
 
@@ -180,6 +187,10 @@ export class PaginationHelper {
       conditions.push('ss.created_at_epoch < ?');
       params.push(dateEndEpoch);
     }
+    if (userLabel) {
+      conditions.push('s.user_label = ?');
+      params.push(userLabel);
+    }
 
     if (conditions.length > 0) {
       query += ` WHERE ${conditions.join(' AND ')}`;
@@ -206,6 +217,7 @@ export class PaginationHelper {
     platformSource?: string,
     dateStartEpoch?: number,
     dateEndEpoch?: number,
+    userLabel?: string,
   ): PaginatedResult<UserPrompt> {
     const db = this.dbManager.getSessionStore().db;
 
@@ -247,6 +259,10 @@ export class PaginationHelper {
     if (dateEndEpoch !== undefined) {
       conditions.push('up.created_at_epoch < ?');
       params.push(dateEndEpoch);
+    }
+    if (userLabel) {
+      conditions.push('s.user_label = ?');
+      params.push(userLabel);
     }
 
     if (conditions.length > 0) {

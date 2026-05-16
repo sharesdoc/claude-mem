@@ -6,7 +6,7 @@ import { Database } from 'bun:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { getWorkerPort, getWorkerHost } from '../shared/worker-utils.js';
-import { DATA_DIR, DB_PATH, ensureDir } from '../shared/paths.js';
+import { DATA_DIR, DB_PATH, USER_SETTINGS_PATH, ensureDir } from '../shared/paths.js';
 import { HOOK_TIMEOUTS } from '../shared/hook-constants.js';
 import { SettingsDefaultsManager } from '../shared/SettingsDefaultsManager.js';
 import { getAuthMethodDescription } from '../shared/EnvManager.js';
@@ -91,6 +91,7 @@ import { SearchRoutes } from './worker/http/routes/SearchRoutes.js';
 import { SettingsRoutes } from './worker/http/routes/SettingsRoutes.js';
 import { LogsRoutes } from './worker/http/routes/LogsRoutes.js';
 import { MemoryRoutes } from './worker/http/routes/MemoryRoutes.js';
+import { UsersRoutes } from './worker/http/routes/UsersRoutes.js';
 import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
 import { ChromaRoutes } from './worker/http/routes/ChromaRoutes.js';
 import { AdminRoutes } from './worker/http/routes/AdminRoutes.js';
@@ -114,6 +115,33 @@ export function buildStatusOutput(status: 'ready' | 'error', message?: string): 
     ...(message && { message })
   };
 }
+
+/**
+ * T-14 — pick the bind address from settings + role.
+ *
+ * Client mode (default) always binds the WORKER_HOST default (127.0.0.1)
+ * so client installs can't accidentally expose the ingest endpoint to the
+ * LAN. Server mode honours CLAUDE_MEM_SERVER_BIND_HOST when set, falling
+ * back to WORKER_HOST when blank. Returning a small struct keeps start()
+ * declarative and makes the non-loopback warning easy to test.
+ */
+function resolveBindAddress(): { host: string; role: 'client' | 'server'; advertised: boolean } {
+  const workerHost = getWorkerHost();
+  const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+  const rawRole = (settings.CLAUDE_MEM_NODE_ROLE ?? 'client').trim().toLowerCase();
+  const role: 'client' | 'server' = rawRole === 'server' ? 'server' : 'client';
+
+  let host = workerHost;
+  if (role === 'server') {
+    const serverHost = (settings.CLAUDE_MEM_SERVER_BIND_HOST ?? '').trim();
+    if (serverHost) host = serverHost;
+  }
+
+  const advertised = !LOOPBACK_HOSTS.has(host);
+  return { host, role, advertised };
+}
+
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
 
 export class WorkerService implements WorkerRef {
   private server: Server;
@@ -279,11 +307,19 @@ export class WorkerService implements WorkerRef {
     this.server.registerRoutes(new ServerV1Routes({
       getDatabase: () => this.dbManager.getConnection(),
     }));
+
+    // T-19: /api/users is server-only — surfaces user_label aggregates the
+    // viewer uses to render the employee selector. Skipping registration in
+    // client mode means an accidentally-pointed viewer 404s loudly instead
+    // of returning a misleading single-user list.
+    if (resolveBindAddress().role === 'server') {
+      this.server.registerRoutes(new UsersRoutes(this.dbManager));
+    }
   }
 
   async start(): Promise<void> {
     const port = getWorkerPort();
-    const host = getWorkerHost();
+    const { host, role, advertised } = resolveBindAddress();
 
     await startSupervisor();
     await this.sessionManager.initializeQueueEngine();
@@ -302,7 +338,14 @@ export class WorkerService implements WorkerRef {
       startedAt: new Date().toISOString()
     });
 
-    logger.info('SYSTEM', 'Worker started', { host, port, pid: process.pid });
+    logger.info('SYSTEM', 'Worker started', { host, port, pid: process.pid, role });
+
+    if (advertised) {
+      // Bind != loopback is an operator opt-in for server mode reachable via
+      // frpc / nginx (S-doc §4). Surface it loudly so a misconfiguration on
+      // a client install can't accidentally expose ingest to the LAN.
+      logger.info('SYSTEM', `Worker is listening on a non-loopback interface (${host}); ensure CLAUDE_MEM_SERVER_TRUSTED_PROXIES + ALLOWED_USERS are configured.`);
+    }
 
     this.initializeBackground().catch((error) => {
       logger.error('SYSTEM', 'Background initialization failed', {}, error as Error);

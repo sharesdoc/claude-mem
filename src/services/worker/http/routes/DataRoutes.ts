@@ -2,6 +2,7 @@
 import express, { Request, Response } from 'express';
 import { z } from 'zod';
 import path from 'path';
+import type { SQLQueryBindings } from 'bun:sqlite';
 import { readFileSync, statSync, existsSync } from 'fs';
 import { logger } from '../../../../utils/logger.js';
 import { getPackageRoot, paths } from '../../../../shared/paths.js';
@@ -241,20 +242,20 @@ export class DataRoutes extends BaseRouteHandler {
   });
 
   private handleGetObservations = this.wrapHandler((req: Request, res: Response): void => {
-    const { offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch } = this.parsePaginationParams(req);
-    const result = this.paginationHelper.getObservations(offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch);
+    const { offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch, userLabel } = this.parsePaginationParams(req);
+    const result = this.paginationHelper.getObservations(offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch, userLabel);
     res.json(result);
   });
 
   private handleGetSummaries = this.wrapHandler((req: Request, res: Response): void => {
-    const { offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch } = this.parsePaginationParams(req);
-    const result = this.paginationHelper.getSummaries(offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch);
+    const { offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch, userLabel } = this.parsePaginationParams(req);
+    const result = this.paginationHelper.getSummaries(offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch, userLabel);
     res.json(result);
   });
 
   private handleGetPrompts = this.wrapHandler((req: Request, res: Response): void => {
-    const { offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch } = this.parsePaginationParams(req);
-    const result = this.paginationHelper.getPrompts(offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch);
+    const { offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch, userLabel } = this.parsePaginationParams(req);
+    const result = this.paginationHelper.getPrompts(offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch, userLabel);
     res.json(result);
   });
 
@@ -443,34 +444,37 @@ export class DataRoutes extends BaseRouteHandler {
     const dateStart = parseEpoch(req.query.dateStart);
     const dateEnd = parseEpoch(req.query.dateEnd);
 
+    // T-20: ?userLabel=Foo scopes every projects/stats count to one
+    // employee. We need to JOIN sdk_sessions on memory_session_id for
+    // observations + summaries, and reuse the existing JOIN for prompts.
+    const rawUserLabel = req.query.userLabel;
+    const userLabel = typeof rawUserLabel === 'string' && rawUserLabel.trim().length > 0
+      ? rawUserLabel.trim()
+      : undefined;
+
     const dateConds: string[] = [];
-    const dateParams: number[] = [];
+    const dateParams: SQLQueryBindings[] = [];
     if (dateStart !== undefined) {
-      dateConds.push('created_at_epoch >= ?');
+      dateConds.push('o.created_at_epoch >= ?');
       dateParams.push(dateStart);
     }
     if (dateEnd !== undefined) {
-      dateConds.push('created_at_epoch < ?');
+      dateConds.push('o.created_at_epoch < ?');
       dateParams.push(dateEnd);
     }
-    const dateWhereObs = dateConds.length
-      ? ' WHERE ' + dateConds.join(' AND ')
-      : '';
-    // user_prompts joins sdk_sessions, so the date condition needs an `up.`
-    // prefix when it's applied there.
-    const dateCondsPrompts: string[] = [];
-    if (dateStart !== undefined) dateCondsPrompts.push('up.created_at_epoch >= ?');
-    if (dateEnd !== undefined) dateCondsPrompts.push('up.created_at_epoch < ?');
-    const dateWherePromptsExtra = dateCondsPrompts.length
-      ? ' AND ' + dateCondsPrompts.join(' AND ')
-      : '';
+    if (userLabel !== undefined) {
+      dateConds.push('s.user_label = ?');
+      dateParams.push(userLabel);
+    }
+    const userJoin = userLabel !== undefined ? ' JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id' : '';
+    const obsWhere = dateConds.length ? ' WHERE ' + dateConds.join(' AND ') : '';
 
     const obsRows = db.prepare(`
-      SELECT COALESCE(NULLIF(merged_into_project, ''), project) AS project,
+      SELECT COALESCE(NULLIF(o.merged_into_project, ''), o.project) AS project,
              COUNT(*) AS n,
-             COALESCE(MAX(created_at_epoch), 0) AS latest
-      FROM observations${dateWhereObs}
-      GROUP BY COALESCE(NULLIF(merged_into_project, ''), project)
+             COALESCE(MAX(o.created_at_epoch), 0) AS latest
+      FROM observations o${userJoin}${obsWhere}
+      GROUP BY COALESCE(NULLIF(o.merged_into_project, ''), o.project)
     `).all(...dateParams) as Array<{ project: string; n: number; latest: number }>;
     for (const row of obsRows) {
       if (!row.project) continue;
@@ -480,12 +484,16 @@ export class DataRoutes extends BaseRouteHandler {
       if (row.latest > s.latest) s.latest = row.latest;
     }
 
+    // session_summaries uses `o.` as its alias for symmetry with the obs
+    // query above so we can share `dateConds` and `dateParams`.
+    const sumWhere = dateConds.length ? ' WHERE ' + dateConds.join(' AND ') : '';
+    const sumJoin = userLabel !== undefined ? ' JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id' : '';
     const sumRows = db.prepare(`
-      SELECT COALESCE(NULLIF(merged_into_project, ''), project) AS project,
+      SELECT COALESCE(NULLIF(o.merged_into_project, ''), o.project) AS project,
              COUNT(*) AS n,
-             COALESCE(MAX(created_at_epoch), 0) AS latest
-      FROM session_summaries${dateWhereObs}
-      GROUP BY COALESCE(NULLIF(merged_into_project, ''), project)
+             COALESCE(MAX(o.created_at_epoch), 0) AS latest
+      FROM session_summaries o${sumJoin}${sumWhere}
+      GROUP BY COALESCE(NULLIF(o.merged_into_project, ''), o.project)
     `).all(...dateParams) as Array<{ project: string; n: number; latest: number }>;
     for (const row of sumRows) {
       if (!row.project) continue;
@@ -495,6 +503,23 @@ export class DataRoutes extends BaseRouteHandler {
       if (row.latest > s.latest) s.latest = row.latest;
     }
 
+    // Prompts already JOINs sdk_sessions, just append the optional filters.
+    const promptConds: string[] = [];
+    const promptParams: SQLQueryBindings[] = [];
+    if (dateStart !== undefined) {
+      promptConds.push('up.created_at_epoch >= ?');
+      promptParams.push(dateStart);
+    }
+    if (dateEnd !== undefined) {
+      promptConds.push('up.created_at_epoch < ?');
+      promptParams.push(dateEnd);
+    }
+    if (userLabel !== undefined) {
+      promptConds.push('s.user_label = ?');
+      promptParams.push(userLabel);
+    }
+    const dateWherePromptsExtra = promptConds.length ? ' AND ' + promptConds.join(' AND ') : '';
+
     const promptRows = db.prepare(`
       SELECT s.project AS project,
              COUNT(*) AS n,
@@ -503,7 +528,7 @@ export class DataRoutes extends BaseRouteHandler {
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       WHERE s.project IS NOT NULL AND s.project != ''${dateWherePromptsExtra}
       GROUP BY s.project
-    `).all(...dateParams) as Array<{ project: string; n: number; latest: number }>;
+    `).all(...promptParams) as Array<{ project: string; n: number; latest: number }>;
     for (const row of promptRows) {
       if (!row.project) continue;
       const s = ensure(row.project);
@@ -536,6 +561,7 @@ export class DataRoutes extends BaseRouteHandler {
     platformSource?: string;
     dateStartEpoch?: number;
     dateEndEpoch?: number;
+    userLabel?: string;
   } {
     const offset = parseInt(req.query.offset as string, 10) || 0;
     const limit = Math.min(parseInt(req.query.limit as string, 10) || 20, 100);
@@ -555,7 +581,14 @@ export class DataRoutes extends BaseRouteHandler {
     const dateStartEpoch = parseEpoch(req.query.dateStart);
     const dateEndEpoch = parseEpoch(req.query.dateEnd);
 
-    return { offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch };
+    // T-20: viewer (server mode) sends ?userLabel=Foo to scope all lists
+    // and stats to that employee. Empty string is treated as "no filter".
+    const rawUserLabel = req.query.userLabel;
+    const userLabel = typeof rawUserLabel === 'string' && rawUserLabel.trim().length > 0
+      ? rawUserLabel.trim()
+      : undefined;
+
+    return { offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch, userLabel };
   }
 
   private handleImport = this.wrapHandler((req: Request, res: Response): void => {
