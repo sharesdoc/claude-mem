@@ -92,6 +92,9 @@ import { SettingsRoutes } from './worker/http/routes/SettingsRoutes.js';
 import { LogsRoutes } from './worker/http/routes/LogsRoutes.js';
 import { MemoryRoutes } from './worker/http/routes/MemoryRoutes.js';
 import { UsersRoutes } from './worker/http/routes/UsersRoutes.js';
+import { SyncRoutes } from './worker/http/routes/SyncRoutes.js';
+import { SyncAgent } from './sync/SyncAgent.js';
+import { resolveUserLabel } from '../shared/user-label.js';
 import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
 import { ChromaRoutes } from './worker/http/routes/ChromaRoutes.js';
 import { AdminRoutes } from './worker/http/routes/AdminRoutes.js';
@@ -314,6 +317,15 @@ export class WorkerService implements WorkerRef {
     // of returning a misleading single-user list.
     if (resolveBindAddress().role === 'server') {
       this.server.registerRoutes(new UsersRoutes(this.dbManager));
+      // T-09: /api/sync/ingest — server-only ingest endpoint.
+      const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+      this.server.registerRoutes(new SyncRoutes(this.dbManager, {
+        CLAUDE_MEM_SERVER_TRUSTED_PROXIES: settings.CLAUDE_MEM_SERVER_TRUSTED_PROXIES ?? '',
+        CLAUDE_MEM_SERVER_REQUIRE_TLS: settings.CLAUDE_MEM_SERVER_REQUIRE_TLS ?? 'false',
+        CLAUDE_MEM_SERVER_AUTH_MODE: settings.CLAUDE_MEM_SERVER_AUTH_MODE ?? 'none',
+        CLAUDE_MEM_SERVER_ALLOWED_USERS: settings.CLAUDE_MEM_SERVER_ALLOWED_USERS ?? '',
+        CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: settings.CLAUDE_MEM_SERVER_INGEST_MAX_BATCH ?? '1000',
+      }));
     }
   }
 
@@ -373,6 +385,43 @@ export class WorkerService implements WorkerRef {
 
       logger.info('WORKER', 'Checking for one-time CWD remap...');
       runOneTimeCwdRemap();
+
+      // T-06 + T-14: launch SyncAgent only in client mode with sync turned
+      // on and a non-empty upstream URL. Anything missing → no agent, and
+      // scheduleSoon() calls degrade to no-ops via the `?.` chain.
+      try {
+        const role = (settings.CLAUDE_MEM_NODE_ROLE ?? 'client').trim().toLowerCase();
+        const syncEnabled = (settings.CLAUDE_MEM_SYNC_ENABLED ?? 'true').trim().toLowerCase() === 'true';
+        const upstream = (settings.CLAUDE_MEM_SYNC_UPSTREAM_URL ?? '').trim();
+        if (role === 'client' && syncEnabled && upstream) {
+          const redactPatterns = (settings.CLAUDE_MEM_SYNC_REDACT_PATTERNS ?? '')
+            .split(',').map(s => s.trim()).filter(Boolean);
+          const intervalMs = Math.max(5000, Number.parseInt(settings.CLAUDE_MEM_SYNC_INTERVAL_MS ?? '30000', 10) || 30000);
+          const batchSize = Math.max(1, Number.parseInt(settings.CLAUDE_MEM_SYNC_BATCH_SIZE ?? '200', 10) || 200);
+          const retryMax = Math.max(0, Number.parseInt(settings.CLAUDE_MEM_SYNC_RETRY_MAX ?? '8', 10) || 8);
+          const authModeRaw = (settings.CLAUDE_MEM_SYNC_AUTH_MODE ?? 'none').trim().toLowerCase();
+          const authMode = (['none', 'apikey', 'jwt', 'mtls'] as const).includes(authModeRaw as 'none' | 'apikey' | 'jwt' | 'mtls')
+            ? (authModeRaw as 'none' | 'apikey' | 'jwt' | 'mtls')
+            : 'none';
+          const agent = new SyncAgent(this.dbManager, {
+            upstreamUrl: upstream,
+            userLabel: resolveUserLabel(USER_SETTINGS_PATH),
+            authMode,
+            apiKey: settings.CLAUDE_MEM_SYNC_API_KEY || undefined,
+            intervalMs,
+            batchSize,
+            retryMax,
+            redactPatterns,
+          });
+          this.syncAgent = agent;
+          agent.start().catch(error => {
+            logger.error('SYNC', 'SyncAgent failed to start (continuing without sync)', {}, error as Error);
+          });
+          logger.info('SYNC', 'SyncAgent attached', { upstream, intervalMs, batchSize, authMode });
+        }
+      } catch (error) {
+        logger.error('SYNC', 'SyncAgent bootstrap failed', {}, error as Error);
+      }
 
       logger.info('WORKER', 'Adopting merged worktrees (background)...');
       adoptMergedWorktreesForAllKnownRepos({}).then(adoptions => {
