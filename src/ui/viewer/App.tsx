@@ -3,6 +3,7 @@ import { Header } from './components/Header';
 import { Feed } from './components/Feed';
 import { ContextSettingsModal } from './components/ContextSettingsModal';
 import { LogsDrawer } from './components/LogsModal';
+import { ProjectSidebar } from './components/ProjectSidebar';
 import { WelcomeCard, getStoredWelcomeDismissed, setStoredWelcomeDismissed } from './components/WelcomeCard';
 import { useSSE } from './hooks/useSSE';
 import { useSettings } from './hooks/useSettings';
@@ -100,30 +101,41 @@ export function App() {
 
   return (
     <>
-      <Header
-        isConnected={isConnected}
-        projects={projects}
-        currentFilter={currentFilter}
-        onFilterChange={setCurrentFilter}
-        isProcessing={isProcessing}
-        queueDepth={queueDepth}
-        themePreference={preference}
-        onThemeChange={setThemePreference}
-        onContextPreviewToggle={toggleContextPreview}
-        onShowHelp={() => {
-          setStoredWelcomeDismissed(false);
-          setWelcomeDismissed(false);
-        }}
-      />
-
-      <Feed
-        observations={allObservations}
-        summaries={allSummaries}
-        prompts={allPrompts}
-        onLoadMore={handleLoadMore}
-        isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
-        hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore}
-      />
+      <div className="app-shell">
+        <ProjectSidebar
+          projects={projects}
+          currentFilter={currentFilter}
+          onFilterChange={setCurrentFilter}
+          observations={observations}
+          summaries={summaries}
+          prompts={prompts}
+        />
+        <div className="app-main">
+          <Header
+            isConnected={isConnected}
+            projects={projects}
+            currentFilter={currentFilter}
+            onFilterChange={setCurrentFilter}
+            isProcessing={isProcessing}
+            queueDepth={queueDepth}
+            themePreference={preference}
+            onThemeChange={setThemePreference}
+            onContextPreviewToggle={toggleContextPreview}
+            onShowHelp={() => {
+              setStoredWelcomeDismissed(false);
+              setWelcomeDismissed(false);
+            }}
+          />
+          <Feed
+            observations={allObservations}
+            summaries={allSummaries}
+            prompts={allPrompts}
+            onLoadMore={handleLoadMore}
+            isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
+            hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore}
+          />
+        </div>
+      </div>
 
       {!welcomeDismissed && (
         <WelcomeCard onDismiss={() => setWelcomeDismissed(true)} />

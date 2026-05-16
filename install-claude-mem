@@ -100,6 +100,119 @@ check_codex_plugin() {
   check_codex_cli && codex plugin list 2>/dev/null | grep -q 'claude-mem'
 }
 
+# ── tree-sitter binary handling (local-first, proxy fallback) ───────
+# tree-sitter-cli@0.26.x postinstall fetches a ~7MB gz from github.com release
+# CDN and hard-wires the URL. To avoid this fragile download we skip its
+# postinstall (by removing from trustedDependencies) and inject the binary
+# ourselves. Source preference:
+#   1. ./download/tree-sitter-macos-<arch>.gz  in this repo
+#   2. Prompt for SOCKS5 proxy port → curl --socks5-hostname download
+
+case "$(uname -s)" in
+  Darwin) TS_OS="macos" ;;
+  Linux)  TS_OS="linux" ;;
+  *) TS_OS="" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64) TS_ARCH="x64" ;;
+  arm64|aarch64) TS_ARCH="arm64" ;;
+  *) TS_ARCH="" ;;
+esac
+LOCAL_TS_BINARY_GZ="$SCRIPT_DIR/download/tree-sitter-${TS_OS}-${TS_ARCH}.gz"
+
+# Files we'll patch in-place (and restore) during sync.
+PKGJSON_BACKUPS=()
+
+ensure_treesitter_binary() {
+  if [[ -z "$TS_OS" || -z "$TS_ARCH" ]]; then
+    fail "Unsupported platform: $(uname -s)/$(uname -m)"
+    exit 1
+  fi
+
+  if [[ -f "$LOCAL_TS_BINARY_GZ" ]]; then
+    ok "Using local tree-sitter binary: $LOCAL_TS_BINARY_GZ"
+    return
+  fi
+
+  warn "Local tree-sitter binary not found: $LOCAL_TS_BINARY_GZ"
+  info "Will download via SOCKS5 proxy. Provide your local proxy port."
+  printf "  SOCKS5 port [default 7890]: "
+  local user_port
+  read -r user_port
+  user_port="${user_port:-7890}"
+
+  if ! curl -sf --connect-timeout 3 --socks5-hostname "127.0.0.1:$user_port" \
+       https://github.com -o /dev/null 2>/dev/null; then
+    fail "SOCKS5 proxy at 127.0.0.1:$user_port not reachable"
+    exit 1
+  fi
+
+  # Determine tree-sitter-cli version pinned in plugin/package.json (most
+  # specific) — falls back to a known recent version if parsing fails.
+  local ts_version
+  ts_version="$(node -p "
+    const v = require('$SCRIPT_DIR/plugin/package.json').dependencies['tree-sitter-cli'];
+    v.replace(/^[^0-9]+/, '');
+  " 2>/dev/null || echo '0.26.8')"
+
+  local url="https://github.com/tree-sitter/tree-sitter/releases/download/v${ts_version}/tree-sitter-${TS_OS}-${TS_ARCH}.gz"
+  mkdir -p "$SCRIPT_DIR/download"
+  info "Downloading tree-sitter v${ts_version} via socks5://127.0.0.1:$user_port..."
+  if curl -fL --socks5-hostname "127.0.0.1:$user_port" \
+       --connect-timeout 10 --max-time 120 \
+       -o "$LOCAL_TS_BINARY_GZ" "$url"; then
+    ok "Downloaded to $LOCAL_TS_BINARY_GZ"
+  else
+    fail "Download failed from $url"
+    rm -f "$LOCAL_TS_BINARY_GZ"
+    exit 1
+  fi
+}
+
+patch_pkgjson_skip_treesitter() {
+  # Temporarily remove tree-sitter-cli from trustedDependencies so bun won't
+  # run its postinstall (which hard-codes the github.com download URL).
+  local f
+  for f in "$SCRIPT_DIR/package.json" "$SCRIPT_DIR/plugin/package.json"; do
+    [[ -f "$f" ]] || continue
+    cp -p "$f" "${f}.install-bak"
+    PKGJSON_BACKUPS+=("$f")
+    local tmp
+    tmp="$(mktemp)"
+    jq '.trustedDependencies = ((.trustedDependencies // []) | map(select(. != "tree-sitter-cli")))' \
+       "$f" > "$tmp"
+    cat "$tmp" > "$f"
+    rm -f "$tmp"
+  done
+  info "Disabled tree-sitter-cli postinstall in package.json (will restore after sync)"
+}
+
+restore_pkgjson() {
+  local f
+  for f in "${PKGJSON_BACKUPS[@]:-}"; do
+    [[ -z "$f" ]] && continue
+    if [[ -f "${f}.install-bak" ]]; then
+      mv "${f}.install-bak" "$f"
+    fi
+  done
+  PKGJSON_BACKUPS=()
+}
+
+inject_treesitter_binary() {
+  local target_node_modules="$1"
+  local ts_dir="$target_node_modules/tree-sitter-cli"
+  if [[ ! -d "$ts_dir" ]]; then
+    warn "tree-sitter-cli not in $target_node_modules — skip injection"
+    return
+  fi
+  gunzip -c "$LOCAL_TS_BINARY_GZ" > "$ts_dir/tree-sitter"
+  chmod +x "$ts_dir/tree-sitter"
+  ok "Injected tree-sitter binary: $ts_dir/tree-sitter"
+}
+
+# Restore package.json files even if the script aborts mid-sync.
+trap restore_pkgjson EXIT
+
 # ── Local registration (no npx, no upstream fetch) ──────────────────
 require_jq() {
   if ! command -v jq >/dev/null 2>&1; then
@@ -215,8 +328,21 @@ do_sync() {
   # sync-marketplace.cjs rsyncs into <cache>/<version>/ but won't mkdir its
   # parents — pre-create so a fresh-state install doesn't trip on first run.
   mkdir -p "$MARKETPLACE_DIR" "$PLUGIN_CACHE_DIR"
+
+  # Make sure the tree-sitter binary is available locally BEFORE we run bun
+  # install, then disable the network-dependent postinstall.
+  ensure_treesitter_binary
+  patch_pkgjson_skip_treesitter
+
   info "Running npm run sync-marketplace..."
   (cd "$SCRIPT_DIR" && npm run sync-marketplace)
+
+  # Place the binary into both bun-install locations so smart-file-read can
+  # actually call it. The marketplace dir runs at runtime; the versioned cache
+  # is what Claude Code loads from `installed_plugins.json`.
+  inject_treesitter_binary "$MARKETPLACE_DIR/node_modules"
+  inject_treesitter_binary "$PLUGIN_CACHE_DIR/node_modules"
+  restore_pkgjson
   if check_synced; then
     ok "Synced to marketplace"
   else
