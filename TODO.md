@@ -24,39 +24,39 @@
 
 | 优先 | ID | 任务 | Phase | N | F | C | 分 | 估时 | 依赖 | 状态 |
 |---:|---|---|---|---:|---:|---:|---:|---|---|---|
-| 1 | T-01 | 配置项扩展（16 个新 settings 键） | 1 | 5 | 5 | 1 | **14** | 1h | — | ☐ |
-| 1 | T-02 | `src/shared/user-label.ts` — 身份解析 | 1 | 5 | 5 | 1 | **14** | 1h | T-01 | ☐ |
-| 1 | T-03 | Migration v36 — `sdk_sessions.user_label` | 1 | 5 | 5 | 1 | **14** | 1h | — | ☐ |
-| 1 | T-04 | `createSDKSession` 写入 user_label | 1 | 5 | 5 | 1 | **14** | 1h | T-02 T-03 | ☐ |
-| 1 | T-12 | `enforceAllowList` 中间件 | 1 | 5 | 5 | 1 | **14** | 1h | T-01 | ☐ |
-| 2 | T-05 | Migration v37 — `sync_inbox` (server only) | 1 | 5 | 5 | 2 | **13** | 1h | T-03 | ☐ |
-| 2 | T-07 | `sync-state.json` 持久化（watermark） | 1 | 5 | 5 | 2 | **13** | 0.5d | T-01 | ☐ |
-| 2 | T-10 | `SyncAuthStrategy` 抽象 + `NoopAuth` | 1 | 5 | 5 | 2 | **13** | 0.5d | T-01 | ☐ |
-| 3 | T-08 | 增量采集 payload 序列化器 | 1 | 5 | 5 | 3 | **12** | 0.5d | T-03 T-07 | ☐ |
-| 3 | T-13 | 触发点接入 `scheduleSoon()` | 1 | 4 | 5 | 1 | **12** | 1h | T-06 | ☐ |
-| 3 | T-16 | frpc + nginx 部署样例文档 | 1 | 4 | 5 | 1 | **12** | 1h | — | ☐ |
-| 3 | T-18 | `/api/admin/role` 端点 | 2 | 4 | 5 | 1 | **12** | 0.5h | T-01 | ☐ |
-| 4 | T-14 | Worker 启动按 role 分支 | 1 | 5 | 4 | 3 | **11** | 0.5d | T-01 T-06 T-09 | ☐ |
-| 4 | T-19 | `/api/users` 端点 | 2 | 4 | 5 | 2 | **11** | 1h | T-03 | ☐ |
-| 4 | T-20 | Stats/list 端点加 `userLabel` 参数 | 2 | 4 | 5 | 2 | **11** | 2h | T-03 | ☐ |
-| 5 | T-06 | `SyncAgent` 主体（采集+推送+重试） | 1 | 5 | 4 | 4 | **10** | 1.5d | T-07 T-08 T-09 | ☐ |
-| 5 | T-09 | `POST /api/sync/ingest` 路由 + 事务 | 1 | 5 | 4 | 4 | **10** | 1.5d | T-05 T-10 T-11 T-12 | ☐ |
-| 5 | T-11 | `trustProxyMiddleware`（IP CIDR） | 1 | 4 | 4 | 2 | **10** | 0.5d | T-01 | ☐ |
-| 5 | T-17 | Phase 1 单元测试套件 | 1 | 4 | 5 | 3 | **10** | 0.5d | 全部 Phase 1 | ☐ |
-| 5 | T-21 | viewer Header 员工下拉 | 2 | 4 | 4 | 2 | **10** | 0.5d | T-18 T-19 T-24 | ☐ |
-| 5 | T-22 | viewer SSE 客户端按 user_label 过滤 | 2 | 3 | 5 | 1 | **10** | 1h | T-21 | ☐ |
-| 5 | T-23 | 卡片 footer 改 user_label chip | 2 | 3 | 5 | 1 | **10** | 1h | T-20 | ☐ |
-| 5 | T-24 | i18n keys（同步/员工选择器） | 2 | 3 | 5 | 1 | **10** | 0.5h | — | ☐ |
-| 5 | T-28 | 同步错误日志文件 | 3 | 3 | 5 | 1 | **10** | 1h | T-06 | ☐ |
-| 6 | T-26 | `install-claude-mem` 加 sync 参数 | 3 | 3 | 5 | 2 | **9** | 0.5d | T-01 | ☐ |
-| 7 | T-15 | redact patterns 过滤 | 1 | 3 | 4 | 2 | **8** | 0.5d | T-08 | ☐ |
-| 7 | T-25 | Header 同步状态徽章 | 3 | 3 | 4 | 2 | **8** | 0.5d | T-06 | ☐ |
-| 7 | T-31 | HTTPS / Let's Encrypt 部署文档 | 4 | 2 | 5 | 1 | **8** | 0.5d | — | ☐ |
-| 7 | T-32 | `install --api-key` 参数 | 4 | 2 | 5 | 1 | **8** | 1h | T-29 | ☐ |
-| 7 | T-33 | 零停机切 ApiKey runbook | 4 | 2 | 5 | 1 | **8** | 1h | T-29 | ☐ |
-| 8 | T-27 | `claude-mem server sync-audit` CLI | 3 | 2 | 4 | 2 | **6** | 1h | T-05 | ☐ |
-| 8 | T-30 | `server sync-keys` CLI | 4 | 2 | 4 | 2 | **6** | 0.5d | T-29 | ☐ |
-| 9 | T-29 | `ApiKeyAuth` 完整实现 | 4 | 2 | 4 | 3 | **5** | 1d | T-10 | ☐ |
+| 1 | T-01 | 配置项扩展（16 个新 settings 键） | 1 | 5 | 5 | 1 | **14** | 1h | — | ☑ |
+| 1 | T-02 | `src/shared/user-label.ts` — 身份解析 | 1 | 5 | 5 | 1 | **14** | 1h | T-01 | ☑ |
+| 1 | T-03 | Migration v36 — `sdk_sessions.user_label` | 1 | 5 | 5 | 1 | **14** | 1h | — | ☑ |
+| 1 | T-04 | `createSDKSession` 写入 user_label | 1 | 5 | 5 | 1 | **14** | 1h | T-02 T-03 | ☑ |
+| 1 | T-12 | `enforceAllowList` 中间件 | 1 | 5 | 5 | 1 | **14** | 1h | T-01 | ☑ |
+| 2 | T-05 | Migration v37 — `sync_inbox` (server only) | 1 | 5 | 5 | 2 | **13** | 1h | T-03 | ☑ |
+| 2 | T-07 | `sync-state.json` 持久化（watermark） | 1 | 5 | 5 | 2 | **13** | 0.5d | T-01 | ☑ |
+| 2 | T-10 | `SyncAuthStrategy` 抽象 + `NoopAuth` | 1 | 5 | 5 | 2 | **13** | 0.5d | T-01 | ☑ |
+| 3 | T-08 | 增量采集 payload 序列化器 | 1 | 5 | 5 | 3 | **12** | 0.5d | T-03 T-07 | ☑ |
+| 3 | T-13 | 触发点接入 `scheduleSoon()` | 1 | 4 | 5 | 1 | **12** | 1h | T-06 | ☑ |
+| 3 | T-16 | frpc + nginx 部署样例文档 | 1 | 4 | 5 | 1 | **12** | 1h | — | ☑ |
+| 3 | T-18 | `/api/admin/role` 端点 | 2 | 4 | 5 | 1 | **12** | 0.5h | T-01 | ☑ |
+| 4 | T-14 | Worker 启动按 role 分支 | 1 | 5 | 4 | 3 | **11** | 0.5d | T-01 T-06 T-09 | ☑ |
+| 4 | T-19 | `/api/users` 端点 | 2 | 4 | 5 | 2 | **11** | 1h | T-03 | ☑ |
+| 4 | T-20 | Stats/list 端点加 `userLabel` 参数 | 2 | 4 | 5 | 2 | **11** | 2h | T-03 | ☑ |
+| 5 | T-06 | `SyncAgent` 主体（采集+推送+重试） | 1 | 5 | 4 | 4 | **10** | 1.5d | T-07 T-08 T-09 | ☑ |
+| 5 | T-09 | `POST /api/sync/ingest` 路由 + 事务 | 1 | 5 | 4 | 4 | **10** | 1.5d | T-05 T-10 T-11 T-12 | ☑ |
+| 5 | T-11 | `trustProxyMiddleware`（IP CIDR） | 1 | 4 | 4 | 2 | **10** | 0.5d | T-01 | ☑ |
+| 5 | T-17 | Phase 1 单元测试套件 | 1 | 4 | 5 | 3 | **10** | 0.5d | 全部 Phase 1 | ☑ |
+| 5 | T-21 | viewer Header 员工下拉 | 2 | 4 | 4 | 2 | **10** | 0.5d | T-18 T-19 T-24 | ☑ |
+| 5 | T-22 | viewer SSE 客户端按 user_label 过滤 | 2 | 3 | 5 | 1 | **10** | 1h | T-21 | ☑ |
+| 5 | T-23 | 卡片 footer 改 user_label chip | 2 | 3 | 5 | 1 | **10** | 1h | T-20 | ☑ |
+| 5 | T-24 | i18n keys（同步/员工选择器） | 2 | 3 | 5 | 1 | **10** | 0.5h | — | ☑ |
+| 5 | T-28 | 同步错误日志文件 | 3 | 3 | 5 | 1 | **10** | 1h | T-06 | ☑ |
+| 6 | T-26 | `install-claude-mem` 加 sync 参数 | 3 | 3 | 5 | 2 | **9** | 0.5d | T-01 | ☑ |
+| 7 | T-15 | redact patterns 过滤 | 1 | 3 | 4 | 2 | **8** | 0.5d | T-08 | ☑ |
+| 7 | T-25 | Header 同步状态徽章 | 3 | 3 | 4 | 2 | **8** | 0.5d | T-06 | ☑ |
+| 7 | T-31 | HTTPS / Let's Encrypt 部署文档 | 4 | 2 | 5 | 1 | **8** | 0.5d | — | ☑ |
+| 7 | T-32 | `install --api-key` 参数 | 4 | 2 | 5 | 1 | **8** | 1h | T-29 | ☑ |
+| 7 | T-33 | 零停机切 ApiKey runbook | 4 | 2 | 5 | 1 | **8** | 1h | T-29 | ☑ |
+| 8 | T-27 | `claude-mem server sync-audit` CLI | 3 | 2 | 4 | 2 | **6** | 1h | T-05 | ☑ |
+| 8 | T-30 | `server sync-keys` CLI | 4 | 2 | 4 | 2 | **6** | 0.5d | T-29 | ☑ |
+| 9 | T-29 | `ApiKeyAuth` 完整实现 | 4 | 2 | 4 | 3 | **5** | 1d | T-10 | ☑ |
 | — | T-34 | 双向同步 (pull / reconcile) | 5 | 1 | 2 | 5 | -1 | TBD | many | ☐ Future |
 | — | T-35 | Team mem-search MCP | 5 | 1 | 2 | 5 | -1 | TBD | Phase 1-3 done | ☐ Future |
 | — | T-36 | Postgres 后端切换 | 5 | 1 | 3 | 4 | 1 | TBD | server 表大 | ☐ Future |
