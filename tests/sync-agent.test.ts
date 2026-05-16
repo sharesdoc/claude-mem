@@ -224,3 +224,37 @@ describe('SyncAgent auth headers', () => {
     expect(headers['authorization']).toBe('Bearer cmem_abc');
   });
 });
+
+describe('SyncAgent.stop', () => {
+  it('attempts one final flush on stop', async () => {
+    const db = makeDb();
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return { ok: true, status: 200, async json() { return { applied: {}, next_watermark: {} }; }, async text() { return ''; } } as Response;
+    }) as FetchFn;
+    const agent = new SyncAgent(makeManager(db), baseConfig(), fetchImpl, statePath);
+    await agent.stop();
+    // stop() runs tick() once — since we have seeded rows, fetch should be called
+    expect(calls).toBe(1);
+  });
+
+  it('scheduleSoon is no-op after stop', async () => {
+    const db = makeDb();
+    let calls = 0;
+    const fetchImpl = (async () => { calls++; return new Response('{}'); }) as FetchFn;
+    const agent = new SyncAgent(makeManager(db), baseConfig(), fetchImpl, statePath);
+    await agent.stop();
+    agent.scheduleSoon(10);
+    await new Promise(r => setTimeout(r, 30));
+    expect(calls).toBe(1); // only the stop()-triggered flush, not scheduleSoon
+  });
+
+  it('does not crash when stopped twice', async () => {
+    const db = makeDb();
+    const agent = new SyncAgent(makeManager(db), baseConfig(), async () => new Response('{}') as Response, statePath);
+    await agent.stop();
+    await agent.stop(); // must not throw
+    agent.scheduleSoon(); // must not throw
+  });
+});
