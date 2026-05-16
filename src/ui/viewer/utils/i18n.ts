@@ -67,6 +67,19 @@ export const translations: Record<Locale, Dict> = {
     'card.mergedTip': 'Merged into',
     'card.readPrefix': 'read:',
     'card.modifiedPrefix': 'modified:',
+    'card.userNameTip': 'OS user that produced this row',
+    'card.userLabelTip': 'Sync identity (server-mode label)',
+
+    'user.selectorLabel': 'User',
+    'user.selectorTip': 'Filter all views to a single employee',
+    'user.all': 'All users',
+    'user.placeholder': 'Select an employee…',
+
+    'sync.statusConnecting': 'Sync: connecting…',
+    'sync.statusOk': 'Sync: up to date',
+    'sync.statusBehind': 'Sync: {n} pending',
+    'sync.statusError': 'Sync: error (see logs)',
+    'sync.statusDisabled': 'Sync: disabled',
 
     'summary.session': 'Session Summary',
     'summary.investigated': 'Investigated',
@@ -187,6 +200,19 @@ export const translations: Record<Locale, Dict> = {
     'card.mergedTip': '已合并至',
     'card.readPrefix': '读取：',
     'card.modifiedPrefix': '修改：',
+    'card.userNameTip': '操作系统用户',
+    'card.userLabelTip': '同步身份（服务端识别标签）',
+
+    'user.selectorLabel': '员工',
+    'user.selectorTip': '按员工筛选所有视图',
+    'user.all': '全部员工',
+    'user.placeholder': '选择员工…',
+
+    'sync.statusConnecting': '同步：连接中…',
+    'sync.statusOk': '同步：已同步',
+    'sync.statusBehind': '同步：待推送 {n} 条',
+    'sync.statusError': '同步：出错（见日志）',
+    'sync.statusDisabled': '同步：已停用',
 
     'summary.session': '会话总结',
     'summary.investigated': '调查',

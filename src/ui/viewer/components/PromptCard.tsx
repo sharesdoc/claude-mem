@@ -63,7 +63,10 @@ export function PromptCard({ prompt }: PromptCardProps) {
         <span className="meta-date">
           #{prompt.id} • {date}
           {prompt.user_name && (
-            <span className="meta-user" title="OS user">  {prompt.user_name}</span>
+            <span className="meta-user" title={t('card.userNameTip')}>  {prompt.user_name}</span>
+          )}
+          {prompt.user_label && prompt.user_label !== prompt.user_name && (
+            <span className="meta-user-label" title={t('card.userLabelTip')}>  @{prompt.user_label}</span>
           )}
         </span>
         {copied && (

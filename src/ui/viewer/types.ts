@@ -16,6 +16,8 @@ export interface Observation {
   prompt_number: number | null;
   /** OS user (Mac/Windows username) that produced this row, null if unknown. */
   user_name?: string | null;
+  /** Sync identity (T-20). Populated when the row originated from a client push. */
+  user_label?: string | null;
   created_at: string;
   created_at_epoch: number;
 }
@@ -31,6 +33,7 @@ export interface Summary {
   completed?: string;
   next_steps?: string;
   user_name?: string | null;
+  user_label?: string | null;
   created_at_epoch: number;
 }
 
@@ -42,6 +45,7 @@ export interface UserPrompt {
   prompt_number: number;
   prompt_text: string;
   user_name?: string | null;
+  user_label?: string | null;
   created_at_epoch: number;
 }
 

@@ -62,7 +62,10 @@ export function SummaryCard({ summary }: SummaryCardProps) {
           {date}
         </time>
         {summary.user_name && (
-          <span className="meta-user" title="OS user">  {summary.user_name}</span>
+          <span className="meta-user" title={t('card.userNameTip')}>  {summary.user_name}</span>
+        )}
+        {summary.user_label && summary.user_label !== summary.user_name && (
+          <span className="meta-user-label" title={t('card.userLabelTip')}>  @{summary.user_label}</span>
         )}
       </footer>
     </article>

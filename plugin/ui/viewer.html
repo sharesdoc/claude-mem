@@ -1715,6 +1715,55 @@
       cursor: help;
     }
 
+    /* T-23: sync identity chip rendered next to .meta-user when the row
+       came from a multi-user sync — visually echoes .meta-user but uses
+       the accent palette so the two are distinguishable at a glance. */
+    .meta-user-label {
+      margin-left: 4px;
+      padding: 1px 6px;
+      border-radius: 9px;
+      background: var(--color-accent-soft, var(--color-bg-stat));
+      color: var(--color-accent, var(--color-text-tertiary));
+      font-size: 11px;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      letter-spacing: 0.02em;
+      cursor: help;
+    }
+
+    /* T-21: server-mode employee dropdown. Sits in the header status
+       row with the same baseline as the date / view-mode controls. */
+    .user-selector {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      border-radius: 6px;
+      background: var(--color-bg-control, transparent);
+      font-size: 12px;
+    }
+
+    .user-selector-label {
+      color: var(--color-text-muted);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .user-selector-select {
+      appearance: none;
+      background: transparent;
+      border: 1px solid var(--color-border-soft, currentColor);
+      border-radius: 4px;
+      color: inherit;
+      font: inherit;
+      padding: 2px 22px 2px 8px;
+      cursor: pointer;
+    }
+    .user-selector-select:focus {
+      outline: 2px solid var(--color-accent, currentColor);
+      outline-offset: 1px;
+    }
+
     .meta-concepts {
       color: var(--color-text-muted);
     }

@@ -12,6 +12,8 @@ import { useStats } from './hooks/useStats';
 import { usePagination } from './hooks/usePagination';
 import { useTheme } from './hooks/useTheme';
 import { useLocale } from './hooks/useLocale';
+import { useRole } from './hooks/useRole';
+import { useUsers } from './hooks/useUsers';
 import { Observation, Summary, UserPrompt } from './types';
 import { mergeAndDeduplicateByProject } from './utils/data';
 
@@ -41,6 +43,11 @@ export function App() {
   // narrows the feed and the sidebar stats to a single day.
   const [dateFilter, setDateFilter] = useState<string | null>(null);
   const [dayStats, setDayStats] = useState<Record<string, ProjectStat> | null>(null);
+  /**
+   * T-21 — server-mode employee filter. null = no scoping (all users).
+   * Hidden entirely in client mode via the Header gate.
+   */
+  const [userLabelFilter, setUserLabelFilter] = useState<string | null>(null);
 
   const setViewMode = useCallback((next: ViewMode) => {
     setViewModeState(next);
@@ -56,6 +63,8 @@ export function App() {
   const { refreshStats } = useStats();
   const { preference, setThemePreference } = useTheme();
   const { t } = useLocale();
+  const role = useRole();
+  const { users } = useUsers(role.role === 'server' && role.ready);
 
   // Convert YYYY-MM-DD (local) → half-open [start, end) ms epoch. Local
   // timezone matters: a user picking "May 16" in Asia/Shanghai should not
@@ -70,15 +79,19 @@ export function App() {
     return { start, end };
   }, [dateFilter]);
 
-  const pagination = usePagination(currentFilter, dayBounds);
+  const pagination = usePagination(currentFilter, dayBounds, userLabelFilter);
 
   const matchesSelection = useCallback(
-    (item: { project: string; created_at_epoch: number }) => {
+    (item: { project: string; created_at_epoch: number; user_label?: string | null }) => {
       if (currentFilter && item.project !== currentFilter) return false;
       if (dayBounds && (item.created_at_epoch < dayBounds.start || item.created_at_epoch >= dayBounds.end)) return false;
+      // T-22: SSE feed is global; in server mode we re-apply the picker
+      // client-side so newly-streamed rows for other users don't sneak
+      // past the server-side filter on paginated fetches.
+      if (userLabelFilter && (item.user_label ?? null) !== userLabelFilter) return false;
       return true;
     },
-    [currentFilter, dayBounds]
+    [currentFilter, dayBounds, userLabelFilter]
   );
 
   // Fetch day-scoped project stats when a day filter is active. Cleared
@@ -90,7 +103,12 @@ export function App() {
       return;
     }
     const controller = new AbortController();
-    const url = `/api/projects/stats?dateStart=${dayBounds.start}&dateEnd=${dayBounds.end}`;
+    const params = new URLSearchParams({
+      dateStart: String(dayBounds.start),
+      dateEnd: String(dayBounds.end),
+    });
+    if (userLabelFilter) params.append('userLabel', userLabelFilter);
+    const url = `/api/projects/stats?${params}`;
     fetch(url, { signal: controller.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((body: { projects?: Record<string, ProjectStat> }) => {
@@ -104,7 +122,7 @@ export function App() {
         setDayStats({});
       });
     return () => controller.abort();
-  }, [dayBounds?.start, dayBounds?.end]);
+  }, [dayBounds?.start, dayBounds?.end, userLabelFilter]);
 
   // Effective values fed into the sidebar:
   //   - day-filter active → use day-scoped stats and restrict the project
@@ -183,7 +201,7 @@ export function App() {
     setPaginatedPrompts([]);
     handleLoadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentFilter, dayBounds?.start, dayBounds?.end]);
+  }, [currentFilter, dayBounds?.start, dayBounds?.end, userLabelFilter]);
 
   /**
    * Sidebar's project-delete flow: drop matching rows from BOTH the SSE-
@@ -239,6 +257,10 @@ export function App() {
             onViewModeChange={setViewMode}
             dateFilter={dateFilter}
             onDateFilterChange={setDateFilter}
+            showUserSelector={role.role === 'server'}
+            users={users}
+            userLabelFilter={userLabelFilter}
+            onUserLabelFilterChange={setUserLabelFilter}
             onShowHelp={() => {
               setStoredWelcomeDismissed(false);
               setWelcomeDismissed(false);

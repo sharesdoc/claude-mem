@@ -3,10 +3,12 @@ import { ThemeToggle } from './ThemeToggle';
 import { LocaleToggle } from './LocaleToggle';
 import { ViewModeToggle, ViewMode } from './ViewModeToggle';
 import { DateFilterButton } from './DateFilterButton';
+import { UserSelector } from './UserSelector';
 import { ThemePreference } from '../hooks/useTheme';
 import { GitHubStarsButton } from './GitHubStarsButton';
 import { useSpinningFavicon } from '../hooks/useSpinningFavicon';
 import { useLocale } from '../hooks/useLocale';
+import type { UserRow } from '../hooks/useUsers';
 
 interface HeaderProps {
   isConnected: boolean;
@@ -23,6 +25,11 @@ interface HeaderProps {
   /** Local-timezone YYYY-MM-DD, or null when no day-filter is active. */
   dateFilter: string | null;
   onDateFilterChange: (next: string | null) => void;
+  /** Server-mode-only employee picker. */
+  showUserSelector: boolean;
+  users: UserRow[];
+  userLabelFilter: string | null;
+  onUserLabelFilterChange: (next: string | null) => void;
   onShowHelp?: () => void;
 }
 
@@ -40,6 +47,10 @@ export function Header({
   onViewModeChange,
   dateFilter,
   onDateFilterChange,
+  showUserSelector,
+  users,
+  userLabelFilter,
+  onUserLabelFilterChange,
   onShowHelp
 }: HeaderProps) {
   useSpinningFavicon(isProcessing);
@@ -61,6 +72,13 @@ export function Header({
         </h1>
       </div>
       <div className="status">
+        {showUserSelector && (
+          <UserSelector
+            users={users}
+            value={userLabelFilter}
+            onChange={onUserLabelFilterChange}
+          />
+        )}
         <DateFilterButton value={dateFilter} onChange={onDateFilterChange} />
         <ViewModeToggle
           mode={viewMode}

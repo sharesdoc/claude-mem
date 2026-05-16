@@ -120,7 +120,10 @@ export function ObservationCard({ observation }: ObservationCardProps) {
         <span className="meta-date">
           #{observation.id} • {date}
           {observation.user_name && (
-            <span className="meta-user" title="OS user">  {observation.user_name}</span>
+            <span className="meta-user" title={t('card.userNameTip')}>  {observation.user_name}</span>
+          )}
+          {observation.user_label && observation.user_label !== observation.user_name && (
+            <span className="meta-user-label" title={t('card.userLabelTip')}>  @{observation.user_label}</span>
           )}
         </span>
         {showFacts && (concepts.length > 0 || filesRead.length > 0 || filesModified.length > 0) && (
