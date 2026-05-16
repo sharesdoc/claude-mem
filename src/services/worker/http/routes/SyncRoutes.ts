@@ -113,7 +113,10 @@ export class SyncRoutes extends BaseRouteHandler {
     private readonly settings: SyncRoutesSettings,
   ) {
     super();
-    this.authChain = buildAuthChain(this.settings);
+    this.authChain = buildAuthChain({
+      settings: this.settings,
+      getDb: () => this.dbManager.getConnection(),
+    });
     const parsed = Number.parseInt(this.settings.CLAUDE_MEM_SERVER_INGEST_MAX_BATCH ?? '1000', 10);
     this.maxBatch = Number.isFinite(parsed) && parsed > 0 ? parsed : 1000;
   }

@@ -895,7 +895,7 @@ function parseWorkerServiceCommand(argv: string[]): ParsedWorkerCommand {
     if (maybeSubCommand && lifecycleCommands.has(maybeSubCommand)) {
       return { command: `server-${maybeSubCommand}`, args: rest };
     }
-    const serverCommands = new Set(['logs', 'doctor', 'migrate', 'export', 'import', 'api-key']);
+    const serverCommands = new Set(['logs', 'doctor', 'migrate', 'export', 'import', 'api-key', 'sync-keys', 'sync-audit']);
     return {
       command: maybeSubCommand && serverCommands.has(maybeSubCommand) ? `server-${maybeSubCommand}` : 'server-help',
       args: rest,
@@ -924,7 +924,10 @@ function printServerCommandUnsupported(command: string): never {
 
 function printServerCommandHelp(): never {
   console.error('Usage: worker-service server <command>');
-  console.error('Commands: start, stop, restart, status, logs, doctor, migrate, export, import, api-key create|list|revoke');
+  console.error('Commands: start, stop, restart, status, logs, doctor, migrate, export, import');
+  console.error('  api-key create|list|revoke');
+  console.error('  sync-keys create|list|revoke    (T-30: sync API key management)');
+  console.error('  sync-audit --user <LABEL>      (T-27: sync ingest audit)');
   process.exit(1);
 }
 
@@ -1045,6 +1048,161 @@ function runServerApiKeyCli(args: string[]): never {
   }
 }
 
+function runServerSyncKeysCli(args: string[]): never {
+  const subCommand = args[0];
+  const options = parseServerApiKeyOptions(args.slice(1));
+  const db = openServerCommandDatabase();
+
+  try {
+    if (subCommand === 'create') {
+      const user = options.user;
+      if (!user) {
+        console.error('Usage: worker-service server sync-keys create --user <LABEL> [--label <NAME>]');
+        process.exit(1);
+      }
+      const created = createServerApiKey(db, {
+        name: options.label ?? `sync key for ${user}`,
+        scopes: ['sync:push'],
+        boundUserLabel: user,
+      });
+      console.log(JSON.stringify({
+        id: created.record.id,
+        key: created.rawKey,
+        userLabel: user,
+        name: created.record.name,
+        note: 'Save this key securely — it will not be shown again.',
+      }, null, 2));
+      process.exit(0);
+    }
+
+    if (subCommand === 'list') {
+      const keys = listServerApiKeys(db).map(k => {
+        // T-29: include bound_user_label from the row (safe because the
+        // migration v38 column was added before this CLI ships).
+        const row = db.prepare('SELECT bound_user_label FROM api_keys WHERE id = ?')
+          .get(k.id) as { bound_user_label: string | null } | undefined;
+        return {
+          id: k.id,
+          name: k.name,
+          prefix: k.prefix,
+          userLabel: row?.bound_user_label ?? null,
+          status: k.status,
+          lastUsedAtEpoch: k.lastUsedAtEpoch,
+          expiresAtEpoch: k.expiresAtEpoch,
+          createdAtEpoch: k.createdAtEpoch,
+        };
+      });
+      console.log(JSON.stringify(keys, null, 2));
+      process.exit(0);
+    }
+
+    if (subCommand === 'revoke') {
+      const id = args[1];
+      if (!id) {
+        console.error('Usage: worker-service server sync-keys revoke <id>');
+        process.exit(1);
+      }
+      const revoked = revokeServerApiKey(db, id);
+      if (!revoked) {
+        console.error(`API key not found: ${id}`);
+        process.exit(1);
+      }
+      console.log(JSON.stringify({ id: revoked.id, status: revoked.status }, null, 2));
+      process.exit(0);
+    }
+
+    console.error(`Unknown server sync-keys subcommand: ${subCommand ?? '(none)'}`);
+    console.error('Usage: worker-service server sync-keys create|list|revoke');
+    process.exit(1);
+  } finally {
+    db.close();
+  }
+}
+
+function runServerSyncAuditCli(args: string[]): never {
+  const options = parseServerApiKeyOptions(args);
+  const db = openServerCommandDatabase();
+
+  try {
+    // T-05: sync_inbox is server-only. If it doesn't exist, we're on a client.
+    const hasInbox = db.prepare(
+      "SELECT name FROM sqlite_master WHERE type='table' AND name='sync_inbox'"
+    ).get() as { name: string } | undefined;
+    if (!hasInbox) {
+      console.error('sync_inbox table not found — this node is not a sync server (or it has no v37 migration).');
+      process.exit(1);
+    }
+
+    const conditions: string[] = [];
+    const params: (string | number)[] = [];
+
+    if (options.user) {
+      conditions.push('user_label = ?');
+      params.push(options.user);
+    }
+    if (options.since) {
+      const sinceMs = new Date(options.since).getTime();
+      if (!Number.isFinite(sinceMs)) {
+        console.error(`Invalid --since date: ${options.since}`);
+        process.exit(1);
+      }
+      conditions.push('applied_at_epoch >= ?');
+      params.push(sinceMs);
+    }
+    if (options.until) {
+      const untilMs = new Date(options.until).getTime();
+      if (!Number.isFinite(untilMs)) {
+        console.error(`Invalid --until date: ${options.until}`);
+        process.exit(1);
+      }
+      conditions.push('applied_at_epoch < ?');
+      params.push(untilMs);
+    }
+
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+
+    const summary = db.prepare(`
+      SELECT user_label,
+             source_table,
+             COUNT(*) AS rows_pushed,
+             MAX(applied_at_epoch) AS last_push
+      FROM sync_inbox${where}
+      GROUP BY user_label, source_table
+      ORDER BY user_label, last_push DESC
+    `).all(...params) as Array<{
+      user_label: string; source_table: string; rows_pushed: number; last_push: number;
+    }>;
+
+    if (summary.length === 0) {
+      console.log('No sync audit records found.');
+      process.exit(0);
+    }
+
+    // Group by user_label for human-readable output.
+    const grouped: Record<string, Array<{ table: string; rows: number; last: string }>> = {};
+    for (const r of summary) {
+      if (!grouped[r.user_label]) grouped[r.user_label] = [];
+      grouped[r.user_label].push({
+        table: r.source_table,
+        rows: r.rows_pushed,
+        last: new Date(r.last_push).toISOString(),
+      });
+    }
+
+    for (const [user, entries] of Object.entries(grouped)) {
+      const total = entries.reduce((s, e) => s + e.rows, 0);
+      console.log(`${user}  (${total} total rows)`);
+      for (const e of entries) {
+        console.log(`  ${e.table.padEnd(20)} ${String(e.rows).padStart(6)} rows  last ${e.last}`);
+      }
+    }
+
+    process.exit(0);
+  } finally {
+    db.close();
+  }
+}
+
 async function main() {
   const { command, args: commandArgs } = parseWorkerServiceCommand(process.argv.slice(2));
 
@@ -1144,6 +1302,22 @@ async function main() {
       console.error(`Unknown server api-key subcommand: ${apiKeyCommand ?? '(none)'}`);
       console.error('Usage: worker-service server api-key create|list|revoke');
       process.exit(1);
+      break;
+    }
+
+    case 'server-sync-keys': {
+      const syncKeyCommand = commandArgs[0];
+      if (syncKeyCommand === 'create' || syncKeyCommand === 'list' || syncKeyCommand === 'revoke') {
+        runServerSyncKeysCli(commandArgs);
+      }
+      console.error(`Unknown server sync-keys subcommand: ${syncKeyCommand ?? '(none)'}`);
+      console.error('Usage: worker-service server sync-keys create|list|revoke');
+      process.exit(1);
+      break;
+    }
+
+    case 'server-sync-audit': {
+      runServerSyncAuditCli(commandArgs);
       break;
     }
 

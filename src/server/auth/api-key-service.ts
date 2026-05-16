@@ -24,6 +24,8 @@ export interface CreateServerApiKeyInput {
   scopes?: string[];
   expiresAtEpoch?: number | null;
   metadata?: Record<string, unknown>;
+  /** T-29: bind this key to a sync user_label for use in ApiKeyAuth. */
+  boundUserLabel?: string | null;
 }
 
 export function hashServerApiKey(rawKey: string): string {
@@ -48,6 +50,13 @@ export function createServerApiKey(db: Database, input: CreateServerApiKeyInput)
     expiresAtEpoch: input.expiresAtEpoch ?? null,
     metadata: input.metadata ?? {},
   });
+
+  // T-29: bind the key to a sync user_label when specified.
+  if (input.boundUserLabel) {
+    db.prepare('UPDATE api_keys SET bound_user_label = ? WHERE id = ?')
+      .run(input.boundUserLabel, record.id);
+    (record as Record<string, unknown>).boundUserLabel = input.boundUserLabel;
+  }
 
   repo.createAuditLog({
     teamId: record.teamId,

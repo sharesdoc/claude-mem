@@ -100,6 +100,37 @@ export class SessionStore {
     this.addSessionUserNameColumn();
     this.addSessionUserLabelColumn();
     this.createSyncInboxTable();
+    this.addApiKeysUserLabelColumn();
+  }
+
+  /**
+   * v38 — bound_user_label on api_keys (S-doc §8 + TODO T-29).
+   *
+   * Server-mode only (role guard). Links an API key to exactly one sync
+   * identity so ApiKeyAuth can reject user_label impersonation at verify
+   * time (employee A can't use their key to push as employee B).
+   */
+  private addApiKeysUserLabelColumn(): void {
+    if (!isServerRole()) return;
+
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(38) as SchemaVersion | undefined;
+    if (applied) return;
+
+    // api_keys may not exist yet if the server hasn't run its storage
+    // bootstrap (e.g. in tests, or first-boot before api-key create).
+    const hasTable = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='api_keys'").get() as TableNameRow | undefined;
+    if (!hasTable) return;
+
+    const tableInfo = this.db.query('PRAGMA table_info(api_keys)').all() as TableColumnInfo[];
+    const hasColumn = tableInfo.some(col => col.name === 'bound_user_label');
+
+    if (!hasColumn) {
+      this.db.run('ALTER TABLE api_keys ADD COLUMN bound_user_label TEXT');
+      this.db.run('CREATE INDEX IF NOT EXISTS idx_api_keys_bound_user ON api_keys(bound_user_label)');
+      logger.debug('DB', 'Added bound_user_label column + idx_api_keys_bound_user to api_keys');
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(38, new Date().toISOString());
   }
 
   /**

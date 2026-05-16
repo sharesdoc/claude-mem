@@ -244,7 +244,81 @@ curl -I https://mem.acme.com/api/admin/role
 
 ---
 
-## 8. 切到云端 + ApiKey（未来 Phase 4）
+## 8. 零停机切换到 ApiKey（TODO T-33）
 
-首版 `auth_mode=none` 是 frpc 内网 + nginx IP 白名单的组合保护。要切到公网开放 + ApiKey
-鉴权时，只需双端改 `auth_mode=apikey` + 配 key，业务代码零改动。runbook 见 S-doc §13bis 末尾。
+首版 `auth_mode=none` 是 frpc 内网 + nginx IP 白名单的组合保护。切到公网开放 +
+ApiKey 鉴权的流程如下。
+
+### 8.1 生成 key
+
+```bash
+# 在 server 上为每个员工生成 API key
+claude-mem server sync-keys create --user ZhangSan --label "Zhang San Mac"
+# → {"id":"...","key":"cmem_xxx...","userLabel":"ZhangSan",...}
+
+claude-mem server sync-keys create --user LiSi
+claude-mem server sync-keys create --user WangWu
+```
+
+**重要**：`key` 字段只展示一次，必须立即安全传递给员工。
+
+### 8.2 员工安装 key
+
+员工收到 key 后，二选一：
+
+**方式 A — 安装时带 key**：
+```bash
+./install-claude-mem -i claude --role client --upstream https://mem.acme.com --label ZhangSan --api-key cmem_xxx
+```
+
+**方式 B — 手动改 settings**：
+```bash
+# 编辑 ~/.claude-mem/settings.json，在 env 下加：
+{
+  "CLAUDE_MEM_SYNC_AUTH_MODE": "apikey",
+  "CLAUDE_MEM_SYNC_API_KEY": "cmem_xxx"
+}
+```
+
+然后重启 worker：`claude-mem restart`
+
+### 8.3 逐人切换（零停机）
+
+1. **不要**一次改 server 的 `auth_mode` — 当前仍是 `none`，新旧 key 都接受。
+2. 员工逐个装 key，装完即用（SyncAgent 自动把 `Authorization: Bearer` 加上）。
+3. 在 server 上用 `claude-mem server sync-keys list` 确认每个员工的 `last_used_at` 落位。
+4. 全员切完后，server 改 settings：
+
+```json
+{
+  "env": {
+    "CLAUDE_MEM_SERVER_AUTH_MODE": "apikey"
+  }
+}
+```
+
+5. 重启 server worker：`claude-mem restart`
+6. **效果**：未迁移员工的 push 立即 401（SyncAgent 的 error-log 会记录），已迁移员工继续正常工作，零停机。
+
+### 8.4 撤 key
+
+```bash
+claude-mem server sync-keys revoke <key-id>
+# 该 key 立即失效，对应员工下一个 tick 收到 401。
+```
+
+### 8.5 审计
+
+```bash
+claude-mem server sync-audit --user ZhangSan --since 2026-05-01
+# 输出每张表的推送次数 + 上次推送时间
+```
+
+### 8.6 验收
+
+按 S-doc §14 Phase 4 验收项跑一次：
+
+- [ ] 双端切到 `auth_mode=apikey` 后，无 key 的 push 全部 401
+- [ ] 有 key 的正常推送，server viewer 按 user_label 可过滤
+- [ ] 员工 A 用自己的 key 把 `body.user_label` 改成 B → server 拒绝 403（key 绑定的 user_label 与 body 不一致）
+- [ ] 撤 key 后该员工 push 全部 401，本地继续正常工作
