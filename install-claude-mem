@@ -13,6 +13,8 @@ DATA_DIR="${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}"
 PID_FILE="$DATA_DIR/worker.pid"
 WORKER_SCRIPT="$MARKETPLACE_DIR/plugin/scripts/worker-service.cjs"
 BUILT_MARKER="$SCRIPT_DIR/plugin/scripts/worker-service.cjs"
+LOCAL_VERSION="$(node -p "require('$SCRIPT_DIR/package.json').version" 2>/dev/null || echo 13.2.0)"
+PLUGIN_CACHE_DIR="$HOME/.claude/plugins/cache/thedotmack/claude-mem/$LOCAL_VERSION"
 
 # ── Colors ──────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
@@ -51,7 +53,9 @@ check_built() {
 }
 
 check_synced() {
-  [[ -f "$WORKER_SCRIPT" ]]
+  # Both marketplace AND versioned cache must be populated, otherwise a partial
+  # sync (e.g. failed mid-run) would be falsely reported as "already synced".
+  [[ -f "$WORKER_SCRIPT" ]] && [[ -f "$PLUGIN_CACHE_DIR/scripts/worker-service.cjs" ]]
 }
 
 check_marketplace_registered() {
@@ -96,6 +100,88 @@ check_codex_plugin() {
   check_codex_cli && codex plugin list 2>/dev/null | grep -q 'claude-mem'
 }
 
+# ── Local registration (no npx, no upstream fetch) ──────────────────
+require_jq() {
+  if ! command -v jq >/dev/null 2>&1; then
+    fail "jq not found — required for local registration"
+    info "Install: brew install jq"
+    exit 1
+  fi
+}
+
+json_patch() {
+  # json_patch <file> <jq-filter>  — in-place update; creates {} if missing.
+  # Symlink-safe: writes through the link via shell redirection (`>`) so a
+  # symlinked settings.json keeps pointing at its real target after the patch.
+  local file="$1"
+  local filter="$2"
+  local tmp
+  tmp="$(mktemp)"
+  mkdir -p "$(dirname "$file")"
+  if [[ -f "$file" ]]; then
+    jq "$filter" "$file" > "$tmp"
+  else
+    echo '{}' | jq "$filter" > "$tmp"
+  fi
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+register_plugin_local() {
+  require_jq
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+
+  # 1) known_marketplaces.json — autoUpdate:false 防止 Claude Code 自动从 upstream 拉取覆盖
+  json_patch "$KNOWN_MARKETPLACES" \
+    ".\"thedotmack\" = {
+       source: { source: \"github\", repo: \"thedotmack/claude-mem\" },
+       installLocation: \"$MARKETPLACE_DIR\",
+       lastUpdated: \"$now\",
+       autoUpdate: false
+     }"
+  ok "Marketplace registered (autoUpdate=false → 不会被 upstream 覆盖)"
+
+  # 2) installed_plugins.json
+  json_patch "$INSTALLED_PLUGINS" \
+    "(.version //= 2) | (.plugins //= {}) |
+     .plugins[\"claude-mem@thedotmack\"] = [{
+       scope: \"user\",
+       installPath: \"$PLUGIN_CACHE_DIR\",
+       version: \"$LOCAL_VERSION\",
+       installedAt: \"$now\",
+       lastUpdated: \"$now\"
+     }]"
+  ok "Plugin recorded (v$LOCAL_VERSION)"
+
+  # 3) settings.json — 启用插件 + 禁用 Claude Code 内置 auto-memory
+  json_patch "$CLAUDE_SETTINGS" \
+    "(.enabledPlugins //= {}) |
+     .enabledPlugins[\"claude-mem@thedotmack\"] = true |
+     (.env //= {}) |
+     .env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = \"1\""
+  ok "Plugin enabled in settings.json, auto-memory disabled"
+}
+
+unregister_plugin_local() {
+  require_jq
+
+  if [[ -f "$KNOWN_MARKETPLACES" ]]; then
+    json_patch "$KNOWN_MARKETPLACES" 'del(.thedotmack)'
+    ok "Marketplace entry removed"
+  fi
+
+  if [[ -f "$INSTALLED_PLUGINS" ]]; then
+    json_patch "$INSTALLED_PLUGINS" 'del(.plugins."claude-mem@thedotmack")'
+    ok "Plugin record removed"
+  fi
+
+  if [[ -f "$CLAUDE_SETTINGS" ]]; then
+    json_patch "$CLAUDE_SETTINGS" 'del(.enabledPlugins."claude-mem@thedotmack")'
+    ok "Plugin disabled in settings.json"
+  fi
+}
+
 # ── Shared actions ──────────────────────────────────────────────────
 do_build() {
   if check_built; then
@@ -126,6 +212,9 @@ do_sync() {
     ok "Already synced to $MARKETPLACE_DIR"
     return
   fi
+  # sync-marketplace.cjs rsyncs into <cache>/<version>/ but won't mkdir its
+  # parents — pre-create so a fresh-state install doesn't trip on first run.
+  mkdir -p "$MARKETPLACE_DIR" "$PLUGIN_CACHE_DIR"
   info "Running npm run sync-marketplace..."
   (cd "$SCRIPT_DIR" && npm run sync-marketplace)
   if check_synced; then
@@ -146,8 +235,14 @@ do_start_worker() {
     return
   fi
 
-  info "Starting worker..."
-  npx claude-mem start 2>/dev/null || true
+  if [[ ! -f "$WORKER_SCRIPT" ]]; then
+    fail "Worker script not found at $WORKER_SCRIPT"
+    info "Run sync first: npm run sync-marketplace"
+    return 1
+  fi
+
+  info "Starting local worker via bun..."
+  bun "$WORKER_SCRIPT" start >/dev/null 2>&1 || true
 
   local retries=0
   while [[ $retries -lt 10 ]]; do
@@ -160,17 +255,32 @@ do_start_worker() {
   done
 
   warn "Worker health check timed out — it may still be starting"
-  info "Check status: npx claude-mem status"
+  info "Check status: bun $WORKER_SCRIPT status"
 }
 
 do_stop_worker() {
   step "Stopping worker..."
-  if ! check_worker_running; then
+  if ! check_worker_running && [[ ! -f "$PID_FILE" ]]; then
     ok "Worker not running"
     return
   fi
-  info "Stopping worker..."
-  npx claude-mem stop 2>/dev/null || true
+
+  if [[ -f "$WORKER_SCRIPT" ]]; then
+    info "Stopping worker via bun..."
+    bun "$WORKER_SCRIPT" stop >/dev/null 2>&1 || true
+  fi
+
+  # Belt-and-braces: kill by PID file if still alive
+  if [[ -f "$PID_FILE" ]]; then
+    local pid
+    pid=$(grep -o '"pid":[[:space:]]*[0-9]*' "$PID_FILE" 2>/dev/null | grep -o '[0-9]*$' || true)
+    if [[ -n "$pid" ]] && ps -p "$pid" >/dev/null 2>&1; then
+      kill "$pid" 2>/dev/null || true
+      sleep 1
+      ps -p "$pid" >/dev/null 2>&1 && kill -9 "$pid" 2>/dev/null || true
+    fi
+  fi
+
   if check_worker_running; then
     warn "Worker may still be running"
   else
@@ -208,19 +318,8 @@ do_install_claude() {
   do_build
   do_sync
 
-  step "Registering plugin with Claude Code..."
-  if check_marketplace_registered && check_plugin_enabled; then
-    ok "Already registered and enabled"
-  else
-    info "Running npx claude-mem install..."
-    npx claude-mem install --ide claude-code </dev/null || true
-    if check_marketplace_registered; then
-      ok "Registered"
-    else
-      warn "Registration may need interactive setup"
-      info "Run manually: npx claude-mem install"
-    fi
-  fi
+  step "Registering plugin with Claude Code (local-only, no npx)..."
+  register_plugin_local
 
   do_start_worker
 
@@ -240,15 +339,25 @@ do_uninstall_claude() {
 
   do_stop_worker
 
-  step "Unregistering plugin..."
-  info "Running npx claude-mem uninstall..."
-  npx claude-mem uninstall </dev/null || true
+  step "Unregistering plugin (local-only, no npx)..."
+  unregister_plugin_local
+
+  step "Removing marketplace and cache directories..."
+  if [[ -d "$MARKETPLACE_DIR" ]]; then
+    rm -rf "$MARKETPLACE_DIR" && ok "Removed $MARKETPLACE_DIR"
+  fi
+  if [[ -d "$HOME/.claude/plugins/cache/thedotmack" ]]; then
+    rm -rf "$HOME/.claude/plugins/cache/thedotmack" && ok "Removed plugin cache"
+  fi
+  if [[ -d "$HOME/.claude/plugins/data/claude-mem-thedotmack" ]]; then
+    rm -rf "$HOME/.claude/plugins/data/claude-mem-thedotmack" && ok "Removed plugin data"
+  fi
 
   printf "\n"
   if check_marketplace_registered || check_plugin_enabled; then
     warn "Plugin may not be fully removed — check manually"
   else
-    ok "Plugin unregistered"
+    ok "Plugin fully unregistered"
   fi
   printf "\n"
 }
