@@ -24,6 +24,10 @@ export class SessionEventBroadcaster {
       type: 'new_prompt',
       prompt: { ...prompt, user_name: getOsUserName() }
     });
+
+    // T-13: nudge SyncAgent so the new prompt reaches the upstream within
+    // ~2s (debounced). No-op when sync is disabled / role=server.
+    this.workerService.syncAgent?.scheduleSoon();
   }
 
   broadcastSessionStarted(sessionDbId: number, project: string): void {

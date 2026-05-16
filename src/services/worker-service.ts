@@ -93,6 +93,7 @@ import { LogsRoutes } from './worker/http/routes/LogsRoutes.js';
 import { MemoryRoutes } from './worker/http/routes/MemoryRoutes.js';
 import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
 import { ChromaRoutes } from './worker/http/routes/ChromaRoutes.js';
+import { AdminRoutes } from './worker/http/routes/AdminRoutes.js';
 
 import { CorpusStore } from './worker/knowledge/CorpusStore.js';
 import { CorpusBuilder } from './worker/knowledge/CorpusBuilder.js';
@@ -139,6 +140,11 @@ export class WorkerService implements WorkerRef {
 
   private chromaMcpManager: ChromaMcpManager | null = null;
   private transcriptWatcher: TranscriptWatcher | null = null;
+
+  // T-13 / T-06: Lazily-assigned SyncAgent. Stays undefined when sync is
+  // disabled or role=server; callers MUST use `?.scheduleSoon()` so the
+  // hook degrades to a no-op.
+  public syncAgent?: { scheduleSoon(): void };
   private initializationComplete: Promise<void>;
   private resolveInitialization!: () => void;
 
@@ -229,6 +235,7 @@ export class WorkerService implements WorkerRef {
   private registerRoutes(): void {
 
     this.server.registerRoutes(new ChromaRoutes());
+    this.server.registerRoutes(new AdminRoutes());
 
     this.server.app.get('/api/context/inject', async (req, res, next) => {
       if (!this.initializationCompleteFlag || !this.searchRoutes) {

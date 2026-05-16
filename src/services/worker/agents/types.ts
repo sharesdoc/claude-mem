@@ -7,6 +7,15 @@ export interface WorkerRef {
     broadcast(event: SSEEventPayload): void;
   };
   broadcastProcessingStatus?: () => void;
+  /**
+   * Optional SyncAgent (T-06). When present, callers fire scheduleSoon()
+   * after persisting an observation/summary/prompt so push is debounced
+   * to 2s and the local watermark stays close to real time. Optional
+   * because client-only / disabled-sync installs run without an agent.
+   */
+  syncAgent?: {
+    scheduleSoon(): void;
+  };
 }
 
 export interface ObservationSSEPayload {

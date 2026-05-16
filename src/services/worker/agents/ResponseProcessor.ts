@@ -261,6 +261,10 @@ async function syncAndBroadcastObservations(
       });
     }
   }
+
+  // T-13: nudge the SyncAgent so the new observations reach the upstream
+  // server within ~2s (debounced). No-op when sync is disabled / role=server.
+  worker?.syncAgent?.scheduleSoon();
 }
 
 async function syncAndBroadcastSummary(
@@ -320,4 +324,7 @@ async function syncAndBroadcastSummary(
   updateCursorContextForProject(session.project).catch(error => {
     logger.warn('CURSOR', 'Context update failed (non-critical)', { project: session.project }, error as Error);
   });
+
+  // T-13: same scheduleSoon nudge for summaries.
+  worker?.syncAgent?.scheduleSoon();
 }
