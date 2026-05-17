@@ -762,6 +762,10 @@ generate_server_info_md() {
   # This function MUST NOT cause the script to exit (set -e is active).
   # All commands are guarded so the user always sees token + URL even
   # when optional steps (IP detection, file write) fail.
+  #
+  # Heredoc uses QUOTED delimiter ('SERVEREOF') so bash does NOT expand
+  # backticks inside markdown code fences (```) as command substitution.
+  # Dynamic values go through __PLACEHOLDER__ → sed after the heredoc.
   local token="$1"
   local port
   port="$(get_worker_port)" || true
@@ -769,37 +773,40 @@ generate_server_info_md() {
   ip="$(get_lan_ip)" || true
 
   local file="$SCRIPT_DIR/SERVER-INFO.md"
-  # Best-effort: write the info file. Failure is non-fatal.
-  cat > "$file" 2>/dev/null <<SERVEREOF
+  local url="http://${ip}:${port}"
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+
+  cat > "$file" 2>/dev/null <<'SERVEREOF'
 # claude-mem Server Info
 
-> 生成时间：$(date '+%Y-%m-%d %H:%M:%S')
+> 生成时间：__TS__
 > 此文件包含客户端接入所需的关键信息，请妥善保管，不要提交到版本库。
 
 ## 接入信息
 
 | 项目 | 值 |
 |---|---|
-| **Server API URL** | \`http://${ip}:${port}\` |
-| **Access Token** | \`${token}\` |
+| **Server API URL** | `__URL__` |
+| **Access Token** | `__TOKEN__` |
 
 ## 客户端安装命令
 
-在员工的电脑上执行（替换 \`<员工名>\` 为实际标识，如 \`zhangsan\`）：
+在员工的电脑上执行（替换 `<员工名>` 为实际标识，如 `zhangsan`）：
 
 ```bash
-./install-claude-mem -i claude \\
-  --role client \\
-  --upstream http://${ip}:${port} \\
-  --label <员工名> \\
-  --token ${token}
+./install-claude-mem -i claude \
+  --role client \
+  --upstream __URL__ \
+  --label <员工名> \
+  --token __TOKEN__
 ```
 
 ## 验证连通性
 
 ```bash
 # 在客户端执行
-curl -s -H "Authorization: Bearer ${token}" "http://${ip}:${port}/api/sync/status"
+curl -s -H "Authorization: Bearer __TOKEN__" "__URL__/api/sync/status"
 ```
 
 返回 JSON 即表示连通成功。
@@ -807,9 +814,15 @@ curl -s -H "Authorization: Bearer ${token}" "http://${ip}:${port}/api/sync/statu
 ## 安全提醒
 
 - 此 token 是共享密钥，泄露后任何人都能向 server 推送数据
-- 如需轮换 token，server 端改 \`CLAUDE_MEM_SERVER_ACCESS_TOKEN\`，所有客户端同步更新
+- 如需轮换 token，server 端改 `CLAUDE_MEM_SERVER_ACCESS_TOKEN`，所有客户端同步更新
 - 建议将此文件移出共享目录或加密存储
 SERVEREOF
+
+  # Substitute placeholders with actual values.
+  if [[ -s "$file" ]]; then
+    sed "s|__URL__|${url}|g; s|__TOKEN__|${token}|g; s|__TS__|${ts}|g" \
+      "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+  fi
 
   if [[ -s "$file" ]]; then
     ok "SERVER-INFO.md generated at $file"
@@ -821,7 +834,7 @@ SERVEREOF
   echo ""
   echo "  ┌─────────────────────────────────────────────┐"
   printf "  │  🔑 Access Token:  %-25s │\n" "$token"
-  printf "  │  🌐 Server URL:    %-25s │\n" "http://${ip}:${port}"
+  printf "  │  🌐 Server URL:    %-25s │\n" "$url"
   echo "  └─────────────────────────────────────────────┘"
   echo ""
   printf "  ${DIM}将以上信息发给每个需要接入的员工。${RESET}\n"
