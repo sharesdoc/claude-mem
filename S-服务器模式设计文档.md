@@ -205,9 +205,9 @@ Nginx (Let's Encrypt) → claude-mem (云上 VPS)
 
 | Key | 类型 | 默认 | 说明 |
 |---|---|---|---|
-| `CLAUDE_MEM_SERVER_BIND_HOST` | string | `0.0.0.0` | bind 地址（首版 0.0.0.0 让 frpc 能转发；云端可改 VPN 内网） |
+| `CLAUDE_MEM_SERVER_BIND_HOST` | string | `""`（继承 `WORKER_HOST`，即 `127.0.0.1`） | bind 地址。空值时沿用 WORKER_HOST；填 `0.0.0.0` 让 frpc 能转发。非 loopback 启动时日志会显式提醒配防火墙 |
 | `CLAUDE_MEM_SERVER_AUTH_MODE` | `none\|apikey\|jwt\|mtls` | `none` | 同步端点的鉴权策略；首版 `none` |
-| `CLAUDE_MEM_SERVER_TRUSTED_PROXIES` | csv CIDR | `""` | 信任的反代源 IP；非空时 server 只接受来自这些 IP 的同步请求（首版可填 frpc 出口 IP） |
+| `CLAUDE_MEM_SERVER_TRUSTED_PROXIES` | csv CIDR | `127.0.0.1/32,::1/128` | 信任的反代源 IP；默认只允许 loopback（frpc/nginx 都终结在本机）。非空时 server 只接受来自这些 IP 的同步请求，用 socket 层 IP 而非 X-Forwarded-For 避免欺骗 |
 | `CLAUDE_MEM_SERVER_ALLOWED_USERS` | csv string | `""`（空=全部允许） | user_label 白名单 |
 | `CLAUDE_MEM_SERVER_INGEST_MAX_BATCH` | int | `1000` | 单 batch 上限（防止超大 payload） |
 | `CLAUDE_MEM_SERVER_REQUIRE_TLS` | bool | `false` | 若为 true，拒绝非 https 请求（需配合 nginx 设 `X-Forwarded-Proto`） |
