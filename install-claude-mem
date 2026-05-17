@@ -855,10 +855,8 @@ SERVEREOF
 
   # Token and URL are ALWAYS printed, regardless of file write success.
   echo ""
-  echo "  ┌─────────────────────────────────────────────┐"
-  printf "  │  🔑 Access Token:  %-25s │\n" "$token"
-  printf "  │  🌐 Server URL:    %-25s │\n" "$url"
-  echo "  └─────────────────────────────────────────────┘"
+  printf "  ${BOLD}🔑 Access Token:${RESET}  ${GREEN}%s${RESET}\n" "$token"
+  printf "  ${BOLD}🌐 Server URL:  ${RESET} ${BLUE}%s${RESET}\n" "$url"
   echo ""
   printf "  ${DIM}将以上信息发给每个需要接入的员工。${RESET}\n"
   if [[ -s "$file" ]]; then
