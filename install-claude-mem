@@ -65,6 +65,40 @@ show_help() {
   printf "  Auto-detects state → builds → syncs → registers → starts worker\n\n"
 }
 
+# ── Dependencies ─────────────────────────────────────────────────────
+ensure_bun() {
+  if command -v bun &>/dev/null; then return 0; fi
+
+  step "Bun not found — auto-installing"
+  # Respect user's existing bun install if it's just not on PATH
+  for candidate in "$HOME/.bun/bin/bun" "/usr/local/bin/bun"; do
+    if [[ -x "$candidate" ]]; then
+      export PATH="$HOME/.bun/bin:$PATH"
+      ok "Found bun at $candidate, added to PATH"
+      return 0
+    fi
+  done
+
+  info "Downloading and installing bun..."
+  if command -v curl &>/dev/null; then
+    curl -fsSL https://bun.sh/install | bash
+  elif command -v wget &>/dev/null; then
+    wget -qO- https://bun.sh/install | bash
+  else
+    fail "Need curl or wget to install bun. Install one of them and retry."
+    exit 1
+  fi
+
+  export PATH="$HOME/.bun/bin:$PATH"
+  if command -v bun &>/dev/null; then
+    ok "bun installed successfully ($(bun --version))"
+  else
+    fail "bun installation completed but bun is still not on PATH"
+    info "Try: export PATH=\"\$HOME/.bun/bin:\$PATH\" && bun --version"
+    exit 1
+  fi
+}
+
 # ── Detection ───────────────────────────────────────────────────────
 check_built() {
   [[ -f "$BUILT_MARKER" ]]
@@ -459,6 +493,7 @@ do_install_claude() {
     return
   fi
 
+  ensure_bun
   do_build
   do_sync
 
@@ -535,6 +570,7 @@ do_install_codex() {
     return
   fi
 
+  ensure_bun
   do_build
   do_sync
 
