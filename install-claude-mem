@@ -955,7 +955,7 @@ main() {
       sync_role="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_NODE_ROLE||'')}catch(e){}" 2>/dev/null || true)"
       sync_upstream="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_UPSTREAM_URL||'')}catch(e){}" 2>/dev/null || true)"
       sync_label="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_USER_LABEL||'')}catch(e){}" 2>/dev/null || true)"
-      sync_token="$(node -p "try{const c=require('$DATA_DIR/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_ACCESS_TOKEN||e.CLAUDE_MEM_SERVER_ACCESS_TOKEN||'')}catch(e){}" 2>/dev/null || true)"
+      sync_token="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_ACCESS_TOKEN||e.CLAUDE_MEM_SERVER_ACCESS_TOKEN||'')}catch(e){}" 2>/dev/null || true)"
       if [[ -n "$sync_role" ]]; then
         ok "Reinstalling with preserved config (role=$sync_role, label=${sync_label:-?})"
       fi
