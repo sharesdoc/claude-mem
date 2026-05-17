@@ -189,27 +189,29 @@ export class SyncRoutes extends BaseRouteHandler {
       return;
     }
 
-    const { applied, nextWatermark } = this.applyBatch(payload);
+    const { applied, nextWatermark, inserted } = this.applyBatch(payload);
     res.json({
       applied,
       next_watermark: nextWatermark,
     });
 
-    // Broadcast SSE events so the viewer refreshes in real-time.
-    this.broadcastBatchEvents(payload, applied);
+    this.broadcastBatchEvents(payload, inserted);
   });
 
   /**
    * Apply the whole batch inside one transaction so partial failures
-   * roll back cleanly. Returns per-table counts + the server-side
-   * watermark so the client can advance.
-   *
-   * `sync_inbox` records every accepted row so a re-push of an
-   * already-applied uid is silently skipped (idempotent ingest).
+   * roll back cleanly. Returns per-table counts, the server-side
+   * watermark, and arrays of items that were actually inserted (not
+   * skipped by the inbox dedup).
    */
   private applyBatch(payload: SyncIngestPayload): {
     applied: Record<string, { inserted: number; skipped: number }>;
     nextWatermark: Record<string, number>;
+    inserted: {
+      observations: SyncIngestPayload['observations'];
+      summaries: SyncIngestPayload['summaries'];
+      prompts: SyncIngestPayload['prompts'];
+    };
   } {
     const db = this.dbManager.getConnection();
     const applied = {
@@ -218,6 +220,9 @@ export class SyncRoutes extends BaseRouteHandler {
       summaries: { inserted: 0, skipped: 0 },
       prompts: { inserted: 0, skipped: 0 },
     };
+    const insertedObs: SyncIngestPayload['observations'] = [];
+    const insertedSum: SyncIngestPayload['summaries'] = [];
+    const insertedPrm: SyncIngestPayload['prompts'] = [];
 
     const recordInbox = db.prepare(`
       INSERT OR IGNORE INTO sync_inbox (user_label, source_table, source_uid, applied_at_epoch, applied_row_id)
@@ -306,6 +311,7 @@ export class SyncRoutes extends BaseRouteHandler {
         );
         recordInbox.run(p.user_label, 'observations', sourceUid, now, o.id);
         applied.observations.inserted++;
+        insertedObs.push(o);
       }
 
       for (const s of p.summaries) {
@@ -331,6 +337,7 @@ export class SyncRoutes extends BaseRouteHandler {
         );
         recordInbox.run(p.user_label, 'session_summaries', sourceUid, now, s.id);
         applied.summaries.inserted++;
+        insertedSum.push(s);
       }
 
       for (const pr of p.prompts) {
@@ -348,13 +355,22 @@ export class SyncRoutes extends BaseRouteHandler {
         );
         recordInbox.run(p.user_label, 'user_prompts', sourceUid, now, pr.id);
         applied.prompts.inserted++;
+        insertedPrm.push(pr);
       }
     });
 
     tx(payload);
 
     const nextWatermark = this.computeWatermark(payload.user_label);
-    return { applied, nextWatermark };
+    return {
+      applied,
+      nextWatermark,
+      inserted: {
+        observations: insertedObs,
+        summaries: insertedSum,
+        prompts: insertedPrm,
+      },
+    };
   }
 
   /**
@@ -389,21 +405,17 @@ export class SyncRoutes extends BaseRouteHandler {
    */
   private broadcastBatchEvents(
     payload: SyncIngestPayload,
-    applied: Record<string, { inserted: number; skipped: number }>,
+    inserted: {
+      observations: SyncIngestPayload['observations'];
+      summaries: SyncIngestPayload['summaries'];
+      prompts: SyncIngestPayload['prompts'];
+    },
   ): void {
     if (!this.sseBroadcaster) return;
 
-    // Build content_session_id → project map from sessions for prompts.
-    // Also build memory_session_id → user_label and content_session_id →
-    // user_label maps so SSE deltas carry identity for viewer grouping
-    // (without it, the server viewer falls back to path parsing and shows
-    // an UNKNOWN group until the next full refresh).
     const sessionProject = new Map<string, string>();
     const memorySessionUser = new Map<string, string>();
     const contentSessionUser = new Map<string, string>();
-    // Top-level payload.user_label is validated as `min(1)`, so it's safe
-    // to use as the fallback when an individual session record carries a
-    // null/empty user_label of its own.
     const fallbackUserLabel = (payload.user_label ?? '').trim();
     for (const s of payload.sessions) {
       if (s.project) sessionProject.set(s.content_session_id, s.project);
@@ -415,71 +427,66 @@ export class SyncRoutes extends BaseRouteHandler {
       }
     }
 
-    if (applied.observations.inserted > 0) {
-      for (const o of payload.observations) {
-        if (!shouldEmitProjectRow(o.project)) continue;
-        this.sseBroadcaster.broadcast({
-          type: 'new_observation',
-          observation: {
-            id: o.id,
-            memory_session_id: o.memory_session_id,
-            session_id: o.memory_session_id,
-            platform_source: 'sync',
-            type: o.type,
-            title: o.title ?? null,
-            subtitle: o.subtitle ?? null,
-            text: o.text ?? null,
-            narrative: o.narrative ?? null,
-            facts: o.facts ?? '',
-            concepts: o.concepts ?? '',
-            files_read: o.files_read ?? '',
-            files_modified: o.files_modified ?? '',
-            project: o.project,
-            prompt_number: o.prompt_number ?? 0,
-            user_name: null,
-            user_label: memorySessionUser.get(o.memory_session_id) ?? fallbackUserLabel ?? null,
-            created_at_epoch: o.created_at_epoch,
-          },
-        });
-      }
+    for (const o of inserted.observations) {
+      if (!shouldEmitProjectRow(o.project)) continue;
+      this.sseBroadcaster.broadcast({
+        type: 'new_observation',
+        observation: {
+          id: o.id,
+          memory_session_id: o.memory_session_id,
+          session_id: o.memory_session_id,
+          platform_source: 'sync',
+          type: o.type,
+          title: o.title ?? null,
+          subtitle: o.subtitle ?? null,
+          text: o.text ?? null,
+          narrative: o.narrative ?? null,
+          facts: o.facts ?? '',
+          concepts: o.concepts ?? '',
+          files_read: o.files_read ?? '',
+          files_modified: o.files_modified ?? '',
+          project: o.project,
+          prompt_number: o.prompt_number ?? 0,
+          user_name: null,
+          user_label: memorySessionUser.get(o.memory_session_id) ?? fallbackUserLabel ?? null,
+          created_at_epoch: o.created_at_epoch,
+        },
+      });
     }
 
-    if (applied.summaries.inserted > 0) {
-      for (const s of payload.summaries) {
-        if (!shouldEmitProjectRow(s.project)) continue;
-        this.sseBroadcaster.broadcast({
-          type: 'new_summary',
-          summary: {
-            id: s.id,
-            session_id: s.memory_session_id,
-            platform_source: 'sync',
-            request: s.request ?? null,
-            investigated: s.investigated ?? null,
-            learned: s.learned ?? null,
-            completed: s.completed ?? null,
-            next_steps: s.next_steps ?? null,
-            notes: s.notes ?? null,
-            project: s.project,
-            prompt_number: s.prompt_number ?? 0,
-            user_name: null,
-            user_label: memorySessionUser.get(s.memory_session_id) ?? fallbackUserLabel ?? null,
-            created_at_epoch: s.created_at_epoch,
-          },
-        });
-      }
+    for (const s of inserted.summaries) {
+      if (!shouldEmitProjectRow(s.project)) continue;
+      this.sseBroadcaster.broadcast({
+        type: 'new_summary',
+        summary: {
+          id: s.id,
+          session_id: s.memory_session_id,
+          platform_source: 'sync',
+          request: s.request ?? null,
+          investigated: s.investigated ?? null,
+          learned: s.learned ?? null,
+          completed: s.completed ?? null,
+          next_steps: s.next_steps ?? null,
+          notes: s.notes ?? null,
+          project: s.project,
+          prompt_number: s.prompt_number ?? 0,
+          user_name: null,
+          user_label: memorySessionUser.get(s.memory_session_id) ?? fallbackUserLabel ?? null,
+          created_at_epoch: s.created_at_epoch,
+        },
+      });
     }
 
-    if (applied.prompts.inserted > 0) {
-      for (const p of payload.prompts) {
-        const project = sessionProject.get(p.content_session_id) ?? '';
-        if (!shouldEmitProjectRow(project)) continue;
-        this.sseBroadcaster.broadcast({
-          type: 'new_prompt',
-          prompt: {
-            id: p.id,
-            content_session_id: p.content_session_id,
-            project,
-            platform_source: 'sync',
+    for (const p of inserted.prompts) {
+      const project = sessionProject.get(p.content_session_id) ?? '';
+      if (!shouldEmitProjectRow(project)) continue;
+      this.sseBroadcaster.broadcast({
+        type: 'new_prompt',
+        prompt: {
+          id: p.id,
+          content_session_id: p.content_session_id,
+          project,
+          platform_source: 'sync',
             prompt_number: p.prompt_number,
             prompt_text: p.prompt_text,
             user_name: null,
@@ -487,7 +494,6 @@ export class SyncRoutes extends BaseRouteHandler {
             created_at_epoch: p.created_at_epoch,
           },
         } as any);
-      }
     }
   }
 }
