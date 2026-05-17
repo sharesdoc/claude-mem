@@ -947,6 +947,20 @@ main() {
     sync_label="$(whoami)"
   fi
 
+
+  # Reinstall (-r) without explicit sync flags: read existing config
+  # from settings.json so the user does not need to re-specify everything.
+  if [[ "$action" == "-r" && -z "$sync_role" && -z "$sync_upstream" && -z "$sync_label" && -z "$sync_token" && -z "$sync_api_key" ]]; then
+    if [[ -f "$DATA_DIR/settings.json" ]]; then
+      sync_role="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_NODE_ROLE||'')}catch(e){}" 2>/dev/null || true)"
+      sync_upstream="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_UPSTREAM_URL||'')}catch(e){}" 2>/dev/null || true)"
+      sync_label="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_USER_LABEL||'')}catch(e){}" 2>/dev/null || true)"
+      sync_token="$(node -p "try{const c=require('$DATA_DIR/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_ACCESS_TOKEN||e.CLAUDE_MEM_SERVER_ACCESS_TOKEN||'')}catch(e){}" 2>/dev/null || true)"
+      if [[ -n "$sync_role" ]]; then
+        ok "Reinstalling with preserved config (role=$sync_role, label=${sync_label:-?})"
+      fi
+    fi
+  fi
   # Server mode: preserve existing access token on reinstall, regenerate
   # only on first install or when --reset-token is explicitly passed.
   if [[ "$sync_role" == "server" && -z "$sync_token" ]]; then
