@@ -24,6 +24,13 @@ interface ProjectSidebarProps {
    */
   projectStats?: Record<string, ProjectStat>;
   /**
+   * Authoritative map of project → user_label sourced from sdk_sessions.
+   * Drives sidebar user-grouping; missing entries fall back to parsing the
+   * project ID, then to the "unknown" bucket. Optional so older worker
+   * builds without this map degrade gracefully to path-only grouping.
+   */
+  projectUsers?: Record<string, string | null>;
+  /**
    * Called after successful project deletion with the list of project IDs the
    * server confirmed gone. Parent must drop matching rows from any local
    * caches so the UI doesn't show ghost entries.
@@ -193,6 +200,7 @@ export function ProjectSidebar({
   summaries,
   prompts,
   projectStats,
+  projectUsers,
   onProjectsDeleted,
 }: ProjectSidebarProps) {
   const { t } = useLocale();
@@ -378,9 +386,20 @@ export function ProjectSidebar({
     latest: number;          // max(latest) — drives group sort order
   }
   const projectGroups = useMemo<ProjectGroup[]>(() => {
+    // User resolution priority:
+    //   1. server-authoritative `projectUsers[project]` (user_label from
+    //      sdk_sessions — same field the SyncAgent sends upstream)
+    //   2. legacy path-based extraction (handles older rows synced before
+    //      the server learned to expose user_label)
+    //   3. empty string → renders as "unknown" group label
+    const resolveUser = (project: string): string => {
+      const fromServer = projectUsers?.[project];
+      if (fromServer && fromServer.trim()) return fromServer.trim();
+      return parseProjectId(project)?.username ?? '';
+    };
     const byUser = new Map<string, ProjectGroup>();
     for (const project of sortedProjects) {
-      const user = parseProjectId(project)?.username ?? '';
+      const user = resolveUser(project);
       let group = byUser.get(user);
       if (!group) {
         group = { user, projects: [], messageCount: 0, latest: 0 };
@@ -397,7 +416,7 @@ export function ProjectSidebar({
       if (a.latest !== b.latest) return b.latest - a.latest;
       return a.user.localeCompare(b.user);
     });
-  }, [sortedProjects, stats]);
+  }, [sortedProjects, stats, projectUsers]);
 
   const groupingEnabled = projectGroups.length > 1;
 
@@ -456,7 +475,19 @@ export function ProjectSidebar({
 
   const handleDelete = useCallback(async () => {
     if (selected.size === 0 || deleting) return;
-    const confirmMsg = t('sidebar.deleteConfirm', { count: selected.size });
+    // Defensive filter: drop empty / whitespace-only entries so a bad row
+    // synced from upstream can't poison the request (server-side Zod schema
+    // rejects the whole batch on first invalid item).
+    const sanitized = [...selected].filter((p) => p && p.trim().length > 0);
+    if (sanitized.length === 0) {
+      setToast({
+        kind: 'warn',
+        msg: t('sidebar.deleteError', { error: 'no valid projects selected' }),
+        ts: Date.now(),
+      });
+      return;
+    }
+    const confirmMsg = t('sidebar.deleteConfirm', { count: sanitized.length });
     if (typeof window !== 'undefined' && !window.confirm(confirmMsg)) return;
 
     setDeleting(true);
@@ -464,7 +495,7 @@ export function ProjectSidebar({
       const response = await fetch(API_ENDPOINTS.PROJECTS_DELETE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ projects: [...selected] }),
+        body: JSON.stringify({ projects: sanitized }),
       });
 
       if (!response.ok) {

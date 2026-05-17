@@ -16,6 +16,10 @@ export function useSSE() {
   const [summaries, setSummaries] = useState<Summary[]>([]);
   const [prompts, setPrompts] = useState<UserPrompt[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
+  // Map of project → user_label (from sdk_sessions). Authoritative source
+  // for sidebar user grouping; absent entries fall back to path parsing
+  // then to "unknown" so legacy / cross-OS project IDs still group sanely.
+  const [projectUsers, setProjectUsers] = useState<Record<string, string | null>>({});
   // Authoritative per-project counts. Seeded from /api/projects/stats on
   // first SSE open, then bumped incrementally by new_* events. Survives
   // worker restarts (the SSE reconnect re-fetches it).
@@ -104,6 +108,9 @@ export function useSSE() {
               projects: data.projects?.length || 0
             });
             setProjects(data.projects || []);
+            // Adopt the freshest user-label map; falls back to {} if the
+            // server is on an older build that doesn't send projectUsers.
+            setProjectUsers((data as { projectUsers?: Record<string, string | null> }).projectUsers ?? {});
             break;
 
           case 'new_observation':
@@ -204,6 +211,7 @@ export function useSSE() {
     summaries,
     prompts,
     projects,
+    projectUsers,
     projectStats,
     isProcessing,
     queueDepth,

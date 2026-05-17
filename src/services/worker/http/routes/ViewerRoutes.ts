@@ -94,6 +94,7 @@ export class ViewerRoutes extends BaseRouteHandler {
       projects: projectCatalog.projects,
       sources: projectCatalog.sources,
       projectsBySource: projectCatalog.projectsBySource,
+      projectUsers: projectCatalog.projectUsers,
       timestamp: Date.now()
     });
 
