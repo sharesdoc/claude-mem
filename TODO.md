@@ -57,11 +57,6 @@
 | 8 | T-27 | `claude-mem server sync-audit` CLI | 3 | 2 | 4 | 2 | **6** | 1h | T-05 | ☑ |
 | 8 | T-30 | `server sync-keys` CLI | 4 | 2 | 4 | 2 | **6** | 0.5d | T-29 | ☑ |
 | 9 | T-29 | `ApiKeyAuth` 完整实现 | 4 | 2 | 4 | 3 | **5** | 1d | T-10 | ☑ |
-| — | T-34 | 双向同步 (pull / reconcile) | 5 | 1 | 2 | 5 | -1 | TBD | many | ☐ Future |
-| — | T-35 | Team mem-search MCP | 5 | 1 | 2 | 5 | -1 | TBD | Phase 1-3 done | ☐ Future |
-| — | T-36 | Postgres 后端切换 | 5 | 1 | 3 | 4 | 1 | TBD | server 表大 | ☐ Future |
-| — | T-37 | WebSocket 实时推送（替代轮询） | 5 | 1 | 3 | 4 | 1 | TBD | — | ☐ Future |
-| — | T-38 | JWT / mTLS 策略 | 5 | 1 | 3 | 4 | 1 | TBD | T-10 | ☐ Future |
 
 **Phase 1 关键路径** (依赖图)：
 ```
@@ -902,19 +897,6 @@ claude-mem server sync-keys revoke <id>
 ### 验收
 - 按 runbook 切完，未迁移员工被立即 401，已迁移员工正常工作
 
----
-
-# Phase 5 — 未来（暂不实现）
-
-| ID | 任务 | 启动条件 |
-|---|---|---|
-| T-34 | 双向同步（pull / reconcile） | Phase 1-4 稳定后，且有"员工互看选定项目"需求 |
-| T-35 | Team-level mem-search MCP | T-34 完成 + 大量员工数据沉淀 |
-| T-36 | Postgres 后端切换 | server 库表 > 5GB 或日增 > 100k 行 |
-| T-37 | WebSocket 实时推送 | 30s 延迟成为瓶颈（典型 100+ 员工同时活跃） |
-| T-38 | JWT / mTLS 策略 | 跨公司 / 合规要求强加密 |
-
----
 
 ## 附 A: 验收 checklist（与 S- doc §14 对应）
 

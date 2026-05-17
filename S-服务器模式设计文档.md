@@ -26,10 +26,9 @@
 - 老板服务器上同样跑 claude-mem，**自己也正常 hook claude/codex**，同时通过 web viewer 查看**所有员工 + 自己**的数据；
 - **同一套代码，由配置切换角色**：`CLAUDE_MEM_NODE_ROLE=client | server`。
 
-### 1.2 非目标（首版不做）
-- 双向同步（老板看员工 + 员工看老板/同事）
+### 1.2 非目标（不做）
 - 服务端→客户端的 push 通道
-- 浏览器多用户登录 / RBAC（首版用 nginx Basic Auth 或 VPN 把 server viewer 私有化即可）
+- 浏览器多用户登录 / RBAC（用 nginx Basic Auth 或 VPN 把 server viewer 私有化即可）
 - 数据加密存储（首版传输 HTTPS + 静态文件权限 0600 即可）
 - 离线工作的客户端**搜索**远程数据（首版客户端只看自己本地）
 
@@ -812,13 +811,6 @@ viewer 启动时 fetch `/api/admin/role`，server 返回 `{ "role": "server" }`�
 - [ ] HTTPS 部署文档 + Let's Encrypt 自动化
 - [ ] `install-claude-mem` 增加 `--api-key` 参数
 - [ ] 切换 runbook：「双端 `auth_mode=none` → `apikey`」零停机迁移指引
-
-### Phase 5（可选）：高级
-- [ ] 双向同步（员工互看选定项目）
-- [ ] team-level mem-search MCP（跨员工语义搜索）
-- [ ] Postgres 替代 SQLite（大数据量场景，每天 > 100k 行）
-- [ ] WebSocket 实时推送（替代轮询）
-- [ ] JWT / mTLS 策略（高安全场景）
 
 ---
 
