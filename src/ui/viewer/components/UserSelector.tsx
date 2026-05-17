@@ -33,7 +33,7 @@ export function UserSelector({ users, value, onChange }: UserSelectorProps) {
         <option value="__all__">{t('user.all')}</option>
         {users.map((u) => (
           <option key={u.user_label} value={u.user_label}>
-            {u.user_label} · {u.sessions}
+            {u.user_label}
           </option>
         ))}
       </select>
