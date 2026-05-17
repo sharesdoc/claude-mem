@@ -56,6 +56,7 @@ interface ToastState {
 interface TooltipState {
   project: string;
   rect: DOMRect;
+  listRect: DOMRect;
 }
 
 interface DeleteResponse {
@@ -121,39 +122,35 @@ function formatLastActive(epoch: number): string {
 
 interface TooltipProps {
   project: string;
-  rect: DOMRect;
+  listRect: DOMRect;
   stats?: ProjectStat;
   t: (key: string, vars?: Record<string, string | number>) => string;
 }
 
 /**
- * Floating tooltip rendered as `position: fixed`, ~2× the width of the native
- * browser tooltip so the full project ID has room to sit on one line. Anchored
- * to the right of the source row; flips to the left when it would overflow
- * the viewport.
+ * Floating tooltip rendered as `position: fixed` below the last project in
+ * the sidebar list. Anchored to the right of the sidebar; flips to the left
+ * when it would overflow the viewport. Vertical position is fixed to the
+ * bottom of the sidebar list so the tooltip stays in a predictable spot.
  *
- * `pointer-events: none` keeps the tooltip purely passive — moving the mouse
- * onto it doesn't fire `mouseleave` on the source row, so the hover state
- * stays consistent.
+ * `pointer-events: none` keeps the tooltip purely passive.
  */
-function ProjectTooltip({ project, rect, stats, t }: TooltipProps) {
+function ProjectTooltip({ project, listRect, stats, t }: TooltipProps) {
   const alias = getProjectAlias(project);
   const vw = typeof window === 'undefined' ? 1280 : window.innerWidth;
   const vh = typeof window === 'undefined' ? 800 : window.innerHeight;
 
-  // Try right side first; flip to the left when the right side would clip.
-  let left = rect.right + TOOLTIP_GAP;
+  // Horizontal: right of sidebar, flip left if it would clip.
+  let left = listRect.right + TOOLTIP_GAP;
   if (left + TOOLTIP_WIDTH > vw - TOOLTIP_GAP) {
-    left = rect.left - TOOLTIP_WIDTH - TOOLTIP_GAP;
+    left = listRect.left - TOOLTIP_WIDTH - TOOLTIP_GAP;
     if (left < TOOLTIP_GAP) {
       left = Math.max(TOOLTIP_GAP, vw - TOOLTIP_WIDTH - TOOLTIP_GAP);
     }
   }
 
-  // Vertical anchoring: top-align with the source row, clamp to viewport
-  // with a generous 200px height budget (we don't know the actual rendered
-  // height until after paint, and 200px is a safe upper bound for 4 lines).
-  let top = rect.top;
+  // Vertical: fixed below the last project in the sidebar list.
+  let top = listRect.bottom + TOOLTIP_GAP;
   if (top + 200 > vh - TOOLTIP_GAP) {
     top = Math.max(TOOLTIP_GAP, vh - 200 - TOOLTIP_GAP);
   }
@@ -220,6 +217,7 @@ export function ProjectSidebar({
   const [toast, setToast] = useState<ToastState | null>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sidebarListRef = useRef<HTMLDivElement | null>(null);
 
   // Rows that the server refused to delete because an AI session is still
   // active. Surfaced as an "in use" chip on the row + tooltip hint. Cleared
@@ -438,9 +436,10 @@ export function ProjectSidebar({
   const showTooltipFor = useCallback((project: string, ev: React.MouseEvent<HTMLElement>) => {
     const target = ev.currentTarget;
     const rect = target.getBoundingClientRect();
+    const listRect = sidebarListRef.current?.getBoundingClientRect() ?? rect;
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
-      setTooltip({ project, rect });
+      setTooltip({ project, rect, listRect });
     }, HOVER_DELAY_MS);
   }, []);
 
@@ -626,7 +625,7 @@ export function ProjectSidebar({
         )}
       </div>
 
-      <div className="project-sidebar-list">
+      <div className="project-sidebar-list" ref={sidebarListRef}>
         <button
           type="button"
           className={`project-sidebar-item${currentFilter === '' ? ' is-active' : ''}`}
@@ -748,7 +747,7 @@ export function ProjectSidebar({
       {tooltip && (
         <ProjectTooltip
           project={tooltip.project}
-          rect={tooltip.rect}
+          listRect={tooltip.listRect}
           stats={stats[tooltip.project]}
           t={t}
         />
