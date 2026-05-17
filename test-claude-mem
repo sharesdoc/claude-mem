@@ -1,0 +1,140 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-mem connectivity test — auto-reads settings.json, tests server/client link
+
+SETTINGS="$HOME/.claude-mem/settings.json"
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
+BLUE='\033[0;34m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
+
+ok()   { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
+fail() { printf "  ${RED}✗${RESET} %s\n" "$1"; }
+warn() { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
+info() { printf "  ${BLUE}→${RESET} %s\n" "$1"; }
+
+# ── Read config ─────────────────────────────────────────────────────
+if [[ ! -f "$SETTINGS" ]]; then
+  fail "settings.json not found at $SETTINGS"
+  exit 1
+fi
+
+ROLE=$(node -e "try{const c=require('$SETTINGS');const e=c.env||c;console.log(e.CLAUDE_MEM_NODE_ROLE||'client')}catch(e){console.log('client')}" 2>/dev/null || echo "client")
+UPSTREAM=$(node -e "try{const c=require('$SETTINGS');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_UPSTREAM_URL||'')}catch(e){console.log('')}" 2>/dev/null || echo "")
+TOKEN=$(node -e "try{const c=require('$SETTINGS');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_ACCESS_TOKEN||e.CLAUDE_MEM_SERVER_ACCESS_TOKEN||'')}catch(e){console.log('')}" 2>/dev/null || echo "")
+ENABLED=$(node -e "try{const c=require('$SETTINGS');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_ENABLED||'true')}catch(e){console.log('true')}" 2>/dev/null || echo "true")
+LABEL=$(node -e "try{const c=require('$SETTINGS');const e=c.env||c;console.log(e.CLAUDE_MEM_USER_LABEL||require('os').userInfo().username)}catch(e){console.log(require('os').userInfo().username)}" 2>/dev/null || echo "unknown")
+
+HOST=$(node -e "const u=require('os').userInfo();console.log(37700 + (u.uid % 100))" 2>/dev/null || echo "37700")
+
+# ── Header ──────────────────────────────────────────────────────────
+echo ""
+printf "${BOLD}claude-mem 连通性测试${RESET}\n\n"
+printf "  角色:     ${BLUE}%s${RESET}\n" "$ROLE"
+printf "  标识:     ${BLUE}%s${RESET}\n" "$LABEL"
+printf "  本地端口: ${BLUE}%s${RESET}\n" "$HOST"
+printf "  上游 URL: ${BLUE}%s${RESET}\n" "${UPSTREAM:-（无）}"
+printf "  Token:    ${BLUE}%s${RESET}\n" "${TOKEN:0:10}...${TOKEN: -6}"
+echo ""
+
+# ── 1. Local worker ─────────────────────────────────────────────────
+echo "${BOLD}1. 本地 worker${RESET}"
+if curl -s -m 3 "http://127.0.0.1:$HOST/api/admin/role" >/dev/null 2>&1; then
+  ROLE_RESP=$(curl -s -m 3 "http://127.0.0.1:$HOST/api/admin/role")
+  LOCAL_ROLE=$(echo "$ROLE_RESP" | node -e "process.stdin.on('data',d=>{try{console.log(JSON.parse(d).role)}catch(e){console.log('?')}})" 2>/dev/null || echo "?")
+  ok "本地 worker 运行中 (role=$LOCAL_ROLE)"
+else
+  fail "本地 worker 未响应 (http://127.0.0.1:$HOST)"
+fi
+
+# ── 2. Sync status ──────────────────────────────────────────────────
+echo ""
+echo "${BOLD}2. 同步状态${RESET}"
+SYNC=$(curl -s -m 5 "http://127.0.0.1:$HOST/api/sync/status" 2>/dev/null || echo '{}')
+LAG=$(echo "$SYNC" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.lag?.total ?? '?')}catch(e){console.log('?')}})" 2>/dev/null || echo "?")
+FAILURES=$(echo "$SYNC" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.consecutive_failures ?? '?')}catch(e){console.log('?')}})" 2>/dev/null || echo "?")
+
+if [[ "$ENABLED" == "false" ]]; then
+  warn "同步已禁用 (CLAUDE_MEM_SYNC_ENABLED=false)"
+elif [[ -z "$UPSTREAM" ]]; then
+  if [[ "$ROLE" == "server" ]]; then
+    ok "服务端模式 — 等待客户端连接"
+  else
+    warn "未配置上游 URL"
+  fi
+else
+  printf "  待推送: ${YELLOW}%s${RESET} 条\n" "$LAG"
+  printf "  连续失败: ${YELLOW}%s${RESET} 次\n" "$FAILURES"
+  if [[ "$LAG" == "0" ]]; then
+    ok "无待推送数据（已同步）"
+  fi
+  if [[ "$FAILURES" != "0" && "$FAILURES" != "?" ]]; then
+    warn "有推送失败，检查 sync-errors.log"
+  fi
+fi
+
+# ── 3. Upstream connectivity ────────────────────────────────────────
+if [[ -n "$UPSTREAM" ]]; then
+  echo ""
+  echo "${BOLD}3. 上游服务端连通性${RESET} ($UPSTREAM)"
+
+  # 3a. Basic reachability
+  if curl -s -m 5 "$UPSTREAM/api/admin/role" >/dev/null 2>&1; then
+    SROLE=$(curl -s -m 5 "$UPSTREAM/api/admin/role" | node -e "process.stdin.on('data',d=>{try{console.log(JSON.parse(d).role)}catch(e){console.log('?')}})" 2>/dev/null || echo "?")
+    ok "服务端可达 (role=$SROLE)"
+  else
+    fail "无法连接服务端 — 检查 IP/端口/防火墙"
+  fi
+
+  # 3b. Token auth
+  if [[ -n "$TOKEN" ]]; then
+    HTTP=$(curl -s -o /dev/null -w "%{http_code}" -m 5 -H "Authorization: Bearer $TOKEN" "$UPSTREAM/api/sync/status" 2>/dev/null || echo "000")
+    if [[ "$HTTP" == "200" ]]; then
+      ok "Token 验证通过"
+    elif [[ "$HTTP" == "401" ]]; then
+      fail "Token 错误 (401) — 检查 token 是否一致"
+    elif [[ "$HTTP" == "403" ]]; then
+      fail "禁止访问 (403) — 检查 ALLOWED_USERS 或 TRUSTED_PROXIES"
+    elif [[ "$HTTP" == "000" ]]; then
+      warn "无响应 — 服务端可能未开启或路径不通"
+    else
+      warn "HTTP $HTTP — 检查服务端日志"
+    fi
+  else
+    warn "未配置 token"
+  fi
+
+  # 3c. Error log
+  if [[ -f "$HOME/.claude-mem/logs/sync-errors.log" ]]; then
+    ERRORS=$(wc -l < "$HOME/.claude-mem/logs/sync-errors.log" 2>/dev/null || echo 0)
+    if [[ "$ERRORS" -gt 0 ]]; then
+      echo ""
+      warn "近期同步错误 (最近 3 条):"
+      tail -3 "$HOME/.claude-mem/logs/sync-errors.log" | while read -r line; do
+        printf "    ${DIM}%s${RESET}\n" "$line"
+      done
+    fi
+  fi
+fi
+
+# ── Summary ──────────────────────────────────────────────────────────
+echo ""
+echo "${BOLD}─────────────────────────────${RESET}"
+echo ""
+
+if [[ "$ROLE" == "server" ]]; then
+  echo "  这是 ${GREEN}服务端${RESET}。客户端接入命令："
+  echo ""
+  if [[ -n "$TOKEN" ]]; then
+    printf "  ${DIM}./install-claude-mem -i claude --role client --upstream http://<IP>:%s --label <用户名> --token %s${RESET}\n" "$HOST" "$TOKEN"
+  fi
+  if [[ -f "SERVER-INFO.md" ]]; then
+    printf "  ${DIM}详见: %s${RESET}\n" "$(pwd)/SERVER-INFO.md"
+  fi
+elif [[ -z "$UPSTREAM" ]]; then
+  echo "  这是 ${YELLOW}独立客户端${RESET} — 未连接服务端。"
+  printf "  配置同步：${DIM}./install-claude-mem -r claude --role client --upstream <URL> --label %s --token <TOKEN>${RESET}\n" "$LABEL"
+else
+  echo "  这是 ${GREEN}客户端${RESET}，正在向 $UPSTREAM 同步。"
+fi
+
+echo ""
