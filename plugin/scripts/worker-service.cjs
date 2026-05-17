@@ -11341,7 +11341,8 @@ ${n}`;return/effort parameter/i.test(i)&&!Uqe&&(Uqe=!0,E.warn("SDK","Anthropic A
         o.prompt_number,
         s.user_name as user_name,
         o.created_at,
-        o.created_at_epoch
+        o.created_at_epoch,
+        o.content_hash
       FROM observations o
       LEFT JOIN sdk_sessions s ON o.memory_session_id = s.memory_session_id
     `,u=[],d=[];n?(d.push("(o.project = ? OR o.merged_into_project = ?)"),u.push(n,n)):(d.push("o.project != ?"),u.push(yi)),i&&(d.push("COALESCE(s.platform_source, 'claude') = ?"),u.push(i)),s!==void 0&&(d.push("o.created_at_epoch >= ?"),u.push(s)),o!==void 0&&(d.push("o.created_at_epoch < ?"),u.push(o)),a&&(d.push("s.user_label = ?"),u.push(a)),d.length>0&&(l+=` WHERE ${d.join(" AND ")}`),l+=" ORDER BY o.created_at_epoch DESC LIMIT ? OFFSET ?",u.push(r+1,e);let p=c.prepare(l).all(...u),f={items:p.slice(0,r),hasMore:p.length>r,offset:e,limit:r};return{...f,items:f.items.map(m=>this.sanitizeObservation(m))}}getSummaries(e,r,n,i,s,o,a){let c=this.dbManager.getSessionStore().db,l=`

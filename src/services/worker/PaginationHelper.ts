@@ -80,7 +80,8 @@ export class PaginationHelper {
         o.prompt_number,
         s.user_name as user_name,
         o.created_at,
-        o.created_at_epoch
+        o.created_at_epoch,
+        o.content_hash
       FROM observations o
       LEFT JOIN sdk_sessions s ON o.memory_session_id = s.memory_session_id
     `;
