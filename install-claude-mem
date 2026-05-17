@@ -22,8 +22,8 @@ LOCAL_VERSION="$(node -p "require('$SCRIPT_DIR/package.json').version" 2>/dev/nu
 PLUGIN_CACHE_DIR="$HOME/.claude/plugins/cache/thedotmack/claude-mem/$LOCAL_VERSION"
 
 # ── Colors ──────────────────────────────────────────────────────────
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[0;33m'
-BLUE='\033[0;34m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
+BLUE=$'\033[0;34m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
 
 ok()   { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
 fail() { printf "  ${RED}✗${RESET} %s\n" "$1"; }
@@ -638,9 +638,11 @@ do_purge_data() {
   fi
 
   # Refuse to rm -rf a path that's obviously not our data dir. Cheap guard
-  # against a typo'd CLAUDE_MEM_DATA_DIR=/ or similar.
+  # against a typo'd CLAUDE_MEM_DATA_DIR=/ or similar. Note: HOME itself is
+  # blocked here; any subpath under HOME (the normal case) passes through
+  # to the .claude-mem substring check below.
   case "$DATA_DIR" in
-    /|/home|/root|/Users|/Users/*|"$HOME")
+    /|/home|/root|/Users|"$HOME")
       fail "Refusing to delete suspicious path: $DATA_DIR"
       return 1
       ;;
