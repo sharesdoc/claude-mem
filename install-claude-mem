@@ -889,10 +889,10 @@ main() {
 
   # Server mode: auto-generate an access token if the user didn't provide one.
   if [[ "$sync_role" == "server" && -z "$sync_token" ]]; then
-    sync_token="$(node -e "console.log(require('crypto').randomBytes(16).toString('base64url'))" 2>/dev/null)"
+    sync_token="$(node -e "console.log(require('crypto').randomBytes(20).toString('hex'))" 2>/dev/null)"
     if [[ -z "$sync_token" ]]; then
       # Fallback if node is unavailable during install
-      sync_token="$(openssl rand -hex 16 2>/dev/null || echo "change-me-$(date +%s)")"
+      sync_token="$(openssl rand -hex 20 2>/dev/null || echo "change-me-$(date +%s)")"
     fi
   fi
 

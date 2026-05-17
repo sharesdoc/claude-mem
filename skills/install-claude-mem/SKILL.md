@@ -55,7 +55,7 @@
 > 这是客户端连上来时必须提供的凭证。Token 只用于 LAN 内网鉴权。
 
 如果用户自己设了 token，记下它——后面要发给员工。
-如果用户不填，用 `node -e "console.log(require('crypto').randomBytes(16).toString('base64url'))"` 生成。
+如果用户不填，用 `node -e "console.log(require('crypto').randomBytes(20).toString('hex'))"` 生成 40 位哈希 token。
 
 ---
 
