@@ -53,10 +53,6 @@ interface ToastState {
   ts: number;
 }
 
-interface TooltipState {
-  project: string;
-}
-
 interface DeleteResponse {
   deleted: string[];
   skipped: Array<{ project: string; reason: string; detail?: string }>;
@@ -73,10 +69,7 @@ const MIN_WIDTH = 160;
 const MAX_RATIO = 0.50;
 const DEFAULT_RATIO = 0.20;
 
-const HOVER_DELAY_MS = 200;
 const TOAST_DURATION_MS = 5000;
-const TOOLTIP_WIDTH = 560;
-const TOOLTIP_GAP = 8;
 
 function getViewportWidth(): number {
   return typeof window === 'undefined' ? 1280 : window.innerWidth;
@@ -106,70 +99,6 @@ function readInitialRatio(): number {
   return DEFAULT_RATIO;
 }
 
-function formatLastActive(epoch: number): string {
-  if (!epoch) return '';
-  return new Date(epoch).toLocaleString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: false,
-  });
-}
-
-interface TooltipProps {
-  project: string;
-  stats?: ProjectStat;
-  t: (key: string, vars?: Record<string, string | number>) => string;
-}
-
-/**
- * Floating tooltip rendered as `position: fixed`, pinned to the bottom of
- * the sidebar project list. Horizontal: right of sidebar, flips left if
- * clipped. Vertical: tooltip bottom aligns with list bottom.
- *
- * `pointer-events: none` keeps the tooltip purely passive.
- */
-function ProjectTooltip({ project, stats, t }: TooltipProps) {
-  const alias = getProjectAlias(project);
-
-  // Fixed top-left corner of the viewport.
-
-  const obs = stats?.observations ?? 0;
-  const sum = stats?.summaries ?? 0;
-  const pro = stats?.prompts ?? 0;
-
-  return (
-    <div
-      className="project-sidebar-tooltip"
-      style={{ left: TOOLTIP_GAP, top: TOOLTIP_GAP, width: TOOLTIP_WIDTH }}
-      role="tooltip"
-    >
-      <div className="project-tooltip-row">
-        <span className="project-tooltip-label">{t('sidebar.alias')}</span>
-        <span className="project-tooltip-value is-mono">{alias}</span>
-      </div>
-      <div className="project-tooltip-row">
-        <span className="project-tooltip-label">{t('sidebar.fullId')}</span>
-        <span className="project-tooltip-value is-mono is-full-id">{project}</span>
-      </div>
-      <div className="project-tooltip-row">
-        <span className="project-tooltip-label">
-          {t('sidebar.observations')} / {t('sidebar.summaries')} / {t('sidebar.prompts')}
-        </span>
-        <span className="project-tooltip-value">{obs} / {sum} / {pro}</span>
-      </div>
-      <div className="project-tooltip-row">
-        <span className="project-tooltip-label">{t('sidebar.lastActive')}</span>
-        <span className="project-tooltip-value">
-          {stats?.latest ? formatLastActive(stats.latest) : t('sidebar.lastActiveNever')}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 export function ProjectSidebar({
   projects,
   currentFilter,
@@ -196,8 +125,6 @@ export function ProjectSidebar({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
-  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Rows that the server refused to delete because an AI session is still
   // active. Surfaced as an "in use" chip on the row + tooltip hint. Cleared
@@ -266,15 +193,6 @@ export function ProjectSidebar({
     return () => clearTimeout(id);
   }, [toast]);
 
-  // Clear any pending hover timer on unmount so a late-firing setTimeout
-  // doesn't try to setTooltip on a dead component (React warning + memory leak).
-  useEffect(() => () => {
-    if (hoverTimerRef.current) {
-      clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
-  }, []);
-
   // When the project list changes (SSE arrival or post-delete prune), prune
   // selections AND in-use markers that point at projects no longer in the
   // list — otherwise a re-entering selection mode would "remember" deleted
@@ -310,13 +228,11 @@ export function ProjectSidebar({
     for (const o of observations) {
       const s = ensure(o.project);
       s.observations += 1;
-      s.total += 1;
       if (o.created_at_epoch > s.latest) s.latest = o.created_at_epoch;
     }
     for (const s of summaries) {
       const st = ensure(s.project);
       st.summaries += 1;
-      st.total += 1;
       if (s.created_at_epoch > st.latest) st.latest = s.created_at_epoch;
     }
     for (const p of prompts) {
@@ -336,7 +252,7 @@ export function ProjectSidebar({
           observations: server.observations,
           summaries: server.summaries,
           prompts: server.prompts,
-          total: server.total,
+          total: server.prompts,
           latest: Math.max(server.latest, local?.latest ?? 0),
         };
       }
@@ -386,7 +302,7 @@ export function ProjectSidebar({
       group.projects.push(project);
       const s = stats[project];
       if (s) {
-        group.messageCount += s.prompts + s.summaries;
+        group.messageCount += s.prompts;
         if (s.latest > group.latest) group.latest = s.latest;
       }
     }
@@ -412,21 +328,6 @@ export function ProjectSidebar({
   // / summaries / prompts arrays are only SSE-live).
   const totalCount = Object.values(stats).reduce((acc, s) => acc + s.total, 0);
   const allSelected = projects.length > 0 && selected.size === projects.length;
-
-  const showTooltipFor = useCallback((project: string, _ev: React.MouseEvent<HTMLElement>) => {
-    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
-    hoverTimerRef.current = setTimeout(() => {
-      setTooltip({ project });
-    }, HOVER_DELAY_MS);
-  }, []);
-
-  const hideTooltip = useCallback(() => {
-    if (hoverTimerRef.current) {
-      clearTimeout(hoverTimerRef.current);
-      hoverTimerRef.current = null;
-    }
-    setTooltip(null);
-  }, []);
 
   const toggleSelected = useCallback((project: string) => {
     setSelected((prev) => {
@@ -645,8 +546,6 @@ export function ProjectSidebar({
                   (isInUse ? ' is-in-use' : '') +
                   (indented ? ' is-grouped' : '')
                 }
-                onMouseEnter={(e) => showTooltipFor(project, e)}
-                onMouseLeave={hideTooltip}
               >
                 {selectMode && (
                   <input
@@ -720,14 +619,6 @@ export function ProjectSidebar({
         aria-orientation="vertical"
         aria-label={t('sidebar.resize')}
       />
-
-      {tooltip && (
-        <ProjectTooltip
-          project={tooltip.project}
-          stats={stats[tooltip.project]}
-          t={t}
-        />
-      )}
 
       {toast && (
         <div className={`project-sidebar-toast is-${toast.kind}`} role="status" aria-live="polite">
