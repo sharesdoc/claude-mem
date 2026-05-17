@@ -96,10 +96,10 @@ export function App() {
     (item: { project: string; created_at_epoch: number; user_label?: string | null }) => {
       if (currentFilter && item.project !== currentFilter) return false;
       if (dayBounds && (item.created_at_epoch < dayBounds.start || item.created_at_epoch >= dayBounds.end)) return false;
-      // T-22: SSE feed is global; in server mode we re-apply the picker
-      // client-side so newly-streamed rows for other users don't sneak
-      // past the server-side filter on paginated fetches.
-      if (userLabelFilter && (item.user_label ?? null) !== userLabelFilter) return false;
+      // T-22: paginated API data is already server-filtered and does not
+      // carry user_label in the response. Only filter SSE data which
+      // broadcasts globally and explicitly includes user_label.
+      if (userLabelFilter && item.user_label != null && item.user_label !== userLabelFilter) return false;
       return true;
     },
     [currentFilter, dayBounds, userLabelFilter]
