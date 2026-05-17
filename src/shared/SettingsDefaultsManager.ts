@@ -185,7 +185,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_SYNC_UPSTREAM_URL: '',                        // e.g. 'http://mem.acme.com'
     CLAUDE_MEM_SYNC_AUTH_MODE: 'none',                       // 'none' for v1 frpc tunnel; 'apikey' for cloud
     CLAUDE_MEM_SYNC_API_KEY: '',                             // only used when auth_mode=apikey
-    CLAUDE_MEM_SYNC_INTERVAL_MS: '30000',
+    CLAUDE_MEM_SYNC_INTERVAL_MS: '5000',
     CLAUDE_MEM_SYNC_BATCH_SIZE: '200',
     CLAUDE_MEM_SYNC_RETRY_MAX: '8',
     CLAUDE_MEM_SYNC_REDACT_PATTERNS: '',                     // csv globs

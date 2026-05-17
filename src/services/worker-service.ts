@@ -841,7 +841,7 @@ export class WorkerService implements WorkerRef {
     }
     const redactPatterns = (settings.CLAUDE_MEM_SYNC_REDACT_PATTERNS ?? '')
       .split(',').map(s => s.trim()).filter(Boolean);
-    const intervalMs = Math.max(5000, Number.parseInt(settings.CLAUDE_MEM_SYNC_INTERVAL_MS ?? '30000', 10) || 30000);
+    const intervalMs = Math.max(5000, Number.parseInt(settings.CLAUDE_MEM_SYNC_INTERVAL_MS ?? '5000', 10) || 5000);
     const batchSize = Math.max(1, Number.parseInt(settings.CLAUDE_MEM_SYNC_BATCH_SIZE ?? '200', 10) || 200);
     const retryMax = Math.max(0, Number.parseInt(settings.CLAUDE_MEM_SYNC_RETRY_MAX ?? '8', 10) || 8);
     const authModeRaw = (settings.CLAUDE_MEM_SYNC_AUTH_MODE ?? 'none').trim().toLowerCase();
