@@ -427,6 +427,9 @@ export class SyncRoutes extends BaseRouteHandler {
       }
     }
 
+    const resolveObsUser = (memorySessionId: string) =>
+      memorySessionUser.get(memorySessionId) || fallbackUserLabel;
+
     for (const o of inserted.observations) {
       if (!shouldEmitProjectRow(o.project)) continue;
       this.sseBroadcaster.broadcast({
@@ -448,12 +451,16 @@ export class SyncRoutes extends BaseRouteHandler {
           project: o.project,
           prompt_number: o.prompt_number ?? 0,
           user_name: null,
-          user_label: memorySessionUser.get(o.memory_session_id) ?? fallbackUserLabel ?? null,
+          user_label: resolveObsUser(o.memory_session_id),
+          created_at: o.created_at,
           created_at_epoch: o.created_at_epoch,
           content_hash: o.content_hash ?? null,
         },
       });
     }
+
+    const resolveSumUser = (memorySessionId: string) =>
+      memorySessionUser.get(memorySessionId) || fallbackUserLabel;
 
     for (const s of inserted.summaries) {
       if (!shouldEmitProjectRow(s.project)) continue;
@@ -472,11 +479,15 @@ export class SyncRoutes extends BaseRouteHandler {
           project: s.project,
           prompt_number: s.prompt_number ?? 0,
           user_name: null,
-          user_label: memorySessionUser.get(s.memory_session_id) ?? fallbackUserLabel ?? null,
+          user_label: resolveSumUser(s.memory_session_id),
+          created_at: s.created_at,
           created_at_epoch: s.created_at_epoch,
         },
       });
     }
+
+    const resolvePromptUser = (contentSessionId: string) =>
+      contentSessionUser.get(contentSessionId) || fallbackUserLabel;
 
     for (const p of inserted.prompts) {
       const project = sessionProject.get(p.content_session_id) ?? '';
@@ -488,13 +499,14 @@ export class SyncRoutes extends BaseRouteHandler {
           content_session_id: p.content_session_id,
           project,
           platform_source: 'sync',
-            prompt_number: p.prompt_number,
-            prompt_text: p.prompt_text,
-            user_name: null,
-            user_label: contentSessionUser.get(p.content_session_id) ?? fallbackUserLabel ?? null,
-            created_at_epoch: p.created_at_epoch,
-          },
-        } as any);
+          prompt_number: p.prompt_number,
+          prompt_text: p.prompt_text,
+          user_name: null,
+          user_label: resolvePromptUser(p.content_session_id),
+          created_at: p.created_at,
+          created_at_epoch: p.created_at_epoch,
+        },
+      } as any);
     }
   }
 }
