@@ -18,6 +18,7 @@ import type { ObservationSearchResult, SessionSummarySearchResult } from './type
 import { computeObservationContentHash } from './observations/store.js';
 import { parseFileList } from './observations/files.js';
 import { DEFAULT_PLATFORM_SOURCE, normalizePlatformSource, sortPlatformSources } from '../../shared/platform-source.js';
+import { resolveUserLabel } from '../../shared/user-label.js';
 
 function resolveCreateSessionArgs(
   customTitle?: string,
@@ -185,18 +186,33 @@ export class SessionStore {
 
   private addSessionUserLabelColumn(): void {
     const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(36) as SchemaVersion | undefined;
-    if (applied) return;
 
-    const tableInfo = this.db.query('PRAGMA table_info(sdk_sessions)').all() as TableColumnInfo[];
-    const hasColumn = tableInfo.some(col => col.name === 'user_label');
+    if (!applied) {
+      const tableInfo = this.db.query('PRAGMA table_info(sdk_sessions)').all() as TableColumnInfo[];
+      const hasColumn = tableInfo.some(col => col.name === 'user_label');
 
-    if (!hasColumn) {
-      this.db.run('ALTER TABLE sdk_sessions ADD COLUMN user_label TEXT');
-      this.db.run('CREATE INDEX IF NOT EXISTS idx_sdk_sessions_user ON sdk_sessions(user_label)');
-      logger.debug('DB', 'Added user_label column + idx_sdk_sessions_user to sdk_sessions');
+      if (!hasColumn) {
+        this.db.run('ALTER TABLE sdk_sessions ADD COLUMN user_label TEXT');
+        this.db.run('CREATE INDEX IF NOT EXISTS idx_sdk_sessions_user ON sdk_sessions(user_label)');
+        logger.debug('DB', 'Added user_label column + idx_sdk_sessions_user to sdk_sessions');
+      }
+
+      this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(36, new Date().toISOString());
     }
 
-    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(36, new Date().toISOString());
+    // One-time backfill: sessions created before v36 have NULL user_label.
+    // Runs on every boot until all rows are filled (idempotent — only
+    // touches rows with NULL/empty label, never overwrites set values).
+    const nullCount = (this.db.prepare(
+      "SELECT COUNT(*) AS n FROM sdk_sessions WHERE COALESCE(user_label, '') = ''"
+    ).get() as { n: number }).n;
+    if (nullCount > 0) {
+      const label = resolveUserLabel();
+      this.db.prepare(
+        "UPDATE sdk_sessions SET user_label = ? WHERE COALESCE(user_label, '') = ''"
+      ).run(label);
+      logger.debug('DB', `Backfilled user_label for ${nullCount} sessions -> "${label}"`);
+    }
   }
 
   private dropWorkerPidColumn(): void {
