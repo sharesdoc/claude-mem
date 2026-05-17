@@ -1443,22 +1443,35 @@ export class SessionStore {
     projects: string[];
     sources: string[];
     projectsBySource: Record<string, string[]>;
+    /**
+     * Map of project → user_label, picked from the row with the latest
+     * started_at_epoch. Empty/null user_labels are stored as null so the
+     * sidebar can decide whether to group as "unknown" or fall back to
+     * path-based extraction.
+     */
+    projectUsers: Record<string, string | null>;
   } {
     const rows = this.db.prepare(`
       SELECT
         COALESCE(platform_source, '${DEFAULT_PLATFORM_SOURCE}') as platform_source,
         project,
-        MAX(started_at_epoch) as latest_epoch
+        user_label,
+        started_at_epoch
       FROM sdk_sessions
       WHERE project IS NOT NULL AND project != ''
         AND project != ?
-      GROUP BY COALESCE(platform_source, '${DEFAULT_PLATFORM_SOURCE}'), project
-      ORDER BY latest_epoch DESC
-    `).all(OBSERVER_SESSIONS_PROJECT) as Array<{ platform_source: string; project: string; latest_epoch: number }>;
+      ORDER BY started_at_epoch DESC
+    `).all(OBSERVER_SESSIONS_PROJECT) as Array<{
+      platform_source: string;
+      project: string;
+      user_label: string | null;
+      started_at_epoch: number;
+    }>;
 
     const projects: string[] = [];
     const seenProjects = new Set<string>();
     const projectsBySource: Record<string, string[]> = {};
+    const projectUsers: Record<string, string | null> = {};
 
     for (const row of rows) {
       const source = normalizePlatformSource(row.platform_source);
@@ -1474,6 +1487,11 @@ export class SessionStore {
       if (!seenProjects.has(row.project)) {
         seenProjects.add(row.project);
         projects.push(row.project);
+        // Rows are ordered by started_at_epoch DESC, so the first time we
+        // see a project the user_label is from its most-recent session —
+        // the freshest signal of who currently owns it.
+        const label = row.user_label?.trim();
+        projectUsers[row.project] = label ? label : null;
       }
     }
 
@@ -1484,7 +1502,8 @@ export class SessionStore {
       sources,
       projectsBySource: Object.fromEntries(
         sources.map(source => [source, projectsBySource[source] || []])
-      )
+      ),
+      projectUsers,
     };
   }
 

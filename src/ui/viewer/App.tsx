@@ -59,7 +59,7 @@ export function App() {
     }
   }, []);
 
-  const { observations, summaries, prompts, projects, projectStats, isProcessing, queueDepth, isConnected, pruneByProjects } = useSSE();
+  const { observations, summaries, prompts, projects, projectUsers, projectStats, isProcessing, queueDepth, isConnected, pruneByProjects } = useSSE();
   const { settings, saveSettings, isSaving, saveStatus } = useSettings();
   const { refreshStats } = useStats();
   const { preference, setThemePreference } = useTheme();
@@ -251,6 +251,7 @@ export function App() {
           summaries={summaries}
           prompts={prompts}
           projectStats={effectiveProjectStats}
+          projectUsers={projectUsers}
           onProjectsDeleted={handleProjectsDeleted}
         />
         <div className="app-main">
