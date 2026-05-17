@@ -62,4 +62,11 @@ describe('tokenAuth', () => {
     const r = await run('   ', undefined);
     expect(r.called).toBe(true);
   });
+
+  it('rejects overlong token (more than 256 chars)', async () => {
+    const overlong = 'x'.repeat(300);
+    const r = await run('secret', `Bearer ${overlong}`);
+    expect(r.called).toBe(false);
+    expect(r.status).toBe(401);
+  });
 });

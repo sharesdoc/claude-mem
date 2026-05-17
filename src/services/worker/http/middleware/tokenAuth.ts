@@ -21,6 +21,10 @@ export function tokenAuth(serverToken: string) {
     return (_req: Request, _res: Response, next: NextFunction): void => next();
   }
 
+  const MAX = 256;
+  const expectedBuf = Buffer.alloc(MAX, 0);
+  Buffer.from(expected.slice(0, MAX), 'ascii').copy(expectedBuf);
+
   return (req: Request, res: Response, next: NextFunction): void => {
     const header = extractBearer(req);
     if (!header) {
@@ -35,10 +39,13 @@ export function tokenAuth(serverToken: string) {
       return;
     }
 
-    if (
-      header.length !== expected.length ||
-      !timingSafeEqual(Buffer.from(header), Buffer.from(expected))
-    ) {
+    // Pad user input to the same fixed length before comparison so
+    // timingSafeEqual always sees equal-length buffers and the
+    // comparison time leaks no information about token length.
+    const userBuf = Buffer.alloc(MAX, 0);
+    Buffer.from(header.slice(0, MAX), 'ascii').copy(userBuf);
+
+    if (!timingSafeEqual(userBuf, expectedBuf)) {
       logger.warn('HTTP', 'tokenAuth: invalid access token', {
         path: req.path,
         address: req.socket.remoteAddress ?? '(unknown)',
@@ -60,5 +67,8 @@ function extractBearer(req: Request): string | null {
   const trimmed = header.trim();
   if (!trimmed.startsWith('Bearer ')) return null;
   const token = trimmed.slice(7).trim();
-  return token.length > 0 ? token : null;
+  if (token.length === 0) return null;
+  // Reject unreasonably long tokens before buffer allocation.
+  if (token.length > 256) return null;
+  return token;
 }
