@@ -329,6 +329,7 @@ export class WorkerService implements WorkerRef {
         CLAUDE_MEM_SERVER_REQUIRE_TLS: settings.CLAUDE_MEM_SERVER_REQUIRE_TLS ?? 'false',
         CLAUDE_MEM_SERVER_AUTH_MODE: settings.CLAUDE_MEM_SERVER_AUTH_MODE ?? 'none',
         CLAUDE_MEM_SERVER_ALLOWED_USERS: settings.CLAUDE_MEM_SERVER_ALLOWED_USERS ?? '',
+        CLAUDE_MEM_SERVER_ACCESS_TOKEN: settings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '',
         CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: settings.CLAUDE_MEM_SERVER_INGEST_MAX_BATCH ?? '1000',
       }));
     }
@@ -408,11 +409,13 @@ export class WorkerService implements WorkerRef {
           const authMode = (['none', 'apikey', 'jwt', 'mtls'] as const).includes(authModeRaw as 'none' | 'apikey' | 'jwt' | 'mtls')
             ? (authModeRaw as 'none' | 'apikey' | 'jwt' | 'mtls')
             : 'none';
+          const accessToken = (settings.CLAUDE_MEM_SYNC_ACCESS_TOKEN ?? '').trim();
           const agent = new SyncAgent(this.dbManager, {
             upstreamUrl: upstream,
             userLabel: resolveUserLabel(USER_SETTINGS_PATH),
             authMode,
             apiKey: settings.CLAUDE_MEM_SYNC_API_KEY || undefined,
+            accessToken: accessToken || undefined,
             intervalMs,
             batchSize,
             retryMax,

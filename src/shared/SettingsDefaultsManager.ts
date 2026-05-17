@@ -97,8 +97,10 @@ export interface SettingsDefaults {
   CLAUDE_MEM_SERVER_AUTH_MODE: string;        // 'none' | 'apikey' | 'jwt' | 'mtls'
   CLAUDE_MEM_SERVER_TRUSTED_PROXIES: string;  // csv CIDR; only these source IPs may POST /api/sync/*
   CLAUDE_MEM_SERVER_ALLOWED_USERS: string;    // csv user_labels; empty = allow all
+  CLAUDE_MEM_SERVER_ACCESS_TOKEN: string;      // shared secret for LAN deployments (Bearer token)
   CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: string;
   CLAUDE_MEM_SERVER_REQUIRE_TLS: string;
+  CLAUDE_MEM_SYNC_ACCESS_TOKEN: string;        // client-side copy of the shared secret
 }
 
 export class SettingsDefaultsManager {
@@ -192,8 +194,10 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_SERVER_AUTH_MODE: 'none',
     CLAUDE_MEM_SERVER_TRUSTED_PROXIES: '127.0.0.1/32,::1/128',  // accept only loopback by default; frpc/nginx terminate locally
     CLAUDE_MEM_SERVER_ALLOWED_USERS: '',                     // empty = allow any user_label
+    CLAUDE_MEM_SERVER_ACCESS_TOKEN: '',                      // shared secret for LAN; empty = no token check
     CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: '1000',
     CLAUDE_MEM_SERVER_REQUIRE_TLS: 'false',
+    CLAUDE_MEM_SYNC_ACCESS_TOKEN: '',                        // client copy of the same shared secret
   };
 
   static getAllDefaults(): SettingsDefaults {

@@ -4,6 +4,7 @@ import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { validateBody } from '../middleware/validateBody.js';
 import { trustProxies } from '../middleware/trustProxies.js';
 import { enforceAllowList } from '../middleware/enforceAllowList.js';
+import { tokenAuth } from '../middleware/tokenAuth.js';
 import { logger } from '../../../../utils/logger.js';
 import { buildAuthChain, type SyncAuthStrategy } from '../../../sync/auth/index.js';
 import type { DatabaseManager } from '../../DatabaseManager.js';
@@ -101,6 +102,7 @@ export interface SyncRoutesSettings {
   CLAUDE_MEM_SERVER_REQUIRE_TLS: string;
   CLAUDE_MEM_SERVER_AUTH_MODE: string;
   CLAUDE_MEM_SERVER_ALLOWED_USERS: string;
+  CLAUDE_MEM_SERVER_ACCESS_TOKEN: string;
   CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: string;
 }
 
@@ -125,6 +127,7 @@ export class SyncRoutes extends BaseRouteHandler {
     app.post(
       '/api/sync/ingest',
       trustProxies(this.settings.CLAUDE_MEM_SERVER_TRUSTED_PROXIES ?? ''),
+      tokenAuth(this.settings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? ''),
       this.requireTls(),
       this.authMiddleware(),
       enforceAllowList(this.settings.CLAUDE_MEM_SERVER_ALLOWED_USERS ?? ''),

@@ -30,6 +30,8 @@ export interface SyncAgentConfig {
   userLabel: string;
   authMode: 'none' | 'apikey' | 'jwt' | 'mtls';
   apiKey?: string;
+  /** Shared access token for LAN deployments (simpler than apiKey). */
+  accessToken?: string;
   intervalMs: number;
   batchSize: number;
   retryMax: number;
@@ -191,7 +193,10 @@ export class SyncAgent {
       'content-type': 'application/json',
       'x-sync-user': this.config.userLabel,
     };
-    if (this.config.authMode === 'apikey' && this.config.apiKey) {
+    // Access token (LAN shared secret) takes priority over apiKey.
+    if (this.config.accessToken) {
+      headers['authorization'] = `Bearer ${this.config.accessToken}`;
+    } else if (this.config.authMode === 'apikey' && this.config.apiKey) {
       headers['authorization'] = `Bearer ${this.config.apiKey}`;
     }
 
