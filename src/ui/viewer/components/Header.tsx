@@ -130,6 +130,7 @@ export function Header({
         <select
           value={currentFilter}
           onChange={e => onFilterChange(e.target.value)}
+          style={{ maxWidth: '360px' }}
         >
           <option value="">{t('header.allProjects')}</option>
           {projects.map(project => (
