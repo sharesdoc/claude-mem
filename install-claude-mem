@@ -815,13 +815,13 @@ generate_server_info_md() {
 
 ## 客户端安装命令
 
-在员工的电脑上执行（替换 `<员工名>` 为实际标识，如 `zhangsan`）：
+在用户的电脑上执行（替换 `<用户名>` 为实际标识，如 `zhangsan`）：
 
 ```bash
 ./install-claude-mem -i claude \
   --role client \
   --upstream __URL__ \
-  --label <员工名> \
+  --label <用户名> \
   --token __TOKEN__
 ```
 
@@ -858,7 +858,7 @@ SERVEREOF
   printf "  ${BOLD}🔑 Access Token:${RESET}  ${GREEN}%s${RESET}\n" "$token"
   printf "  ${BOLD}🌐 Server URL:  ${RESET} ${BLUE}%s${RESET}\n" "$url"
   echo ""
-  printf "  ${DIM}将以上信息发给每个需要接入的员工。${RESET}\n"
+  printf "  ${DIM}将以上信息发给每个需要接入的用户。${RESET}\n"
   if [[ -s "$file" ]]; then
     printf "  ${DIM}完整信息已写入 %s${RESET}\n" "$file"
   fi

@@ -75,7 +75,7 @@ function usePaginationFor<TItem extends DataItem>(
       params.append('dateEnd', String(dateBounds.end));
     }
     if (userLabel) {
-      // T-22: when server-mode viewer picks an employee, every list fetch
+      // T-22: when server-mode viewer picks a user, every list fetch
       // is scoped server-side so the client cannot reveal stale rows from
       // a different label while paginating.
       params.append('userLabel', userLabel);

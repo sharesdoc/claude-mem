@@ -71,9 +71,9 @@ export const translations: Record<Locale, Dict> = {
     'card.userLabelTip': 'Sync identity (server-mode label)',
 
     'user.selectorLabel': 'User',
-    'user.selectorTip': 'Filter all views to a single employee',
+    'user.selectorTip': 'Filter all views to a single user',
     'user.all': 'All users',
-    'user.placeholder': 'Select an employee…',
+    'user.placeholder': 'Select a user…',
 
     'sync.statusConnecting': 'Sync: connecting…',
     'sync.statusOk': 'Sync: up to date',
@@ -203,10 +203,10 @@ export const translations: Record<Locale, Dict> = {
     'card.userNameTip': '操作系统用户',
     'card.userLabelTip': '同步身份（服务端识别标签）',
 
-    'user.selectorLabel': '员工',
-    'user.selectorTip': '按员工筛选所有视图',
-    'user.all': '全部员工',
-    'user.placeholder': '选择员工…',
+    'user.selectorLabel': '用户',
+    'user.selectorTip': '按用户筛选所有视图',
+    'user.all': '全部用户',
+    'user.placeholder': '选择用户…',
 
     'sync.statusConnecting': '同步：连接中…',
     'sync.statusOk': '同步：已同步',

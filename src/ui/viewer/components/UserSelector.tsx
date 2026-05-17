@@ -9,7 +9,7 @@ interface UserSelectorProps {
 }
 
 /**
- * T-21 — server-mode employee picker.
+ * T-21 — server-mode user picker.
  *
  * Renders only when the parent has decided the worker is in server mode
  * (App.tsx gates on /api/admin/role). Empty selection = "all users",

@@ -16,8 +16,8 @@
 
 > 你要把这台机器配置成**服务端**还是**客户端**？
 >
-> - **服务端**：这台机器接收其他员工推送的数据，老板在这台机器的 viewer 上看全团队数据
-> - **客户端**：员工电脑，安装后自动把本地 AI 对话数据推到服务端
+> - **服务端**：这台机器接收其他用户推送的数据，在这台机器的 viewer 上看全团队数据
+> - **客户端**：用户电脑，安装后自动把本地 AI 对话数据推到服务端
 
 收集用户的回答，存入变量 `ROLE`（值为 `client` 或 `server`）。
 
@@ -31,7 +31,7 @@
 
 **User Label**（用户标识）：
 > 你的标识名是什么？（英文，如 `zhangsan`、`boss`）
-> 这是服务端 viewer 里区分不同员工的标签。默认为你当前的 OS 用户名 `$(whoami)`。
+> 这是服务端 viewer 里区分不同用户的标签。默认为你当前的 OS 用户名 `$(whoami)`。
 
 如果用户不填，默认用 `whoami` 的输出。
 
@@ -54,7 +54,7 @@
 >
 > 这是客户端连上来时必须提供的凭证。Token 只用于 LAN 内网鉴权。
 
-如果用户自己设了 token，记下它——后面要发给员工。
+如果用户自己设了 token，记下它——后面要发给其他用户。
 如果用户不填，用 `node -e "console.log(require('crypto').randomBytes(20).toString('hex'))"` 生成 40 位哈希 token。
 
 ---
@@ -154,15 +154,15 @@ grep -o '"CLAUDE_MEM_SERVER_ACCESS_TOKEN":"[^"]*"' ~/.claude-mem/settings.json |
 🌐 Server API URL：http://<IP>:<PORT>
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 客户端接入信息（复制发给每个员工）
+📋 客户端接入信息（复制发给每个用户）
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-在员工电脑上执行（替换 <员工名>）：
+在用户电脑上执行（替换 <用户名>）：
 
   ./install-claude-mem -i claude \
     --role client \
     --upstream http://<IP>:<PORT> \
-    --label <员工名> \
+    --label <用户名> \
     --token <TOKEN>
 
 或通过 AI 助手安装：在本对话中说"安装 claude-mem 客户端"，
@@ -170,7 +170,7 @@ grep -o '"CLAUDE_MEM_SERVER_ACCESS_TOKEN":"[^"]*"' ~/.claude-mem/settings.json |
 ```
 
 如果 token 是用户自己设定的，额外提示：
-> ⚠️ 你使用的是自定义 token，请确保已安全地告知每位员工。token 泄露后任何人都能向 server 推送数据。
+> ⚠️ 你使用的是自定义 token，请确保已安全地告知每位用户。token 泄露后任何人都能向 server 推送数据。
 
 如果 token 是自动生成的，额外提示：
 > 💡 此 token 由系统自动生成。完整信息已写入 `SERVER-INFO.md`。如需轮换 token，直接修改 server 的 `~/.claude-mem/settings.json` 中 `CLAUDE_MEM_SERVER_ACCESS_TOKEN`，然后同步更新所有客户端。
@@ -191,8 +191,8 @@ grep -o '"CLAUDE_MEM_SERVER_ACCESS_TOKEN":"[^"]*"' ~/.claude-mem/settings.json |
 
 安装完成提醒时：
 > 如果你是老板，打开浏览器访问 `http://<SERVER_IP>:<PORT>/` 即可看到全团队的 AI 工作记录。
-> 所有员工的 observation/summary/prompt 都会同步到服务端。
-> 服务端 viewer 里可以按员工筛选数据。
+> 所有用户的 observation/summary/prompt 都会同步到服务端。
+> 服务端 viewer 里可以按用户筛选数据。
 
 ---
 

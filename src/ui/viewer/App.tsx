@@ -45,7 +45,7 @@ export function App() {
   const [dateFilter, setDateFilter] = useState<string | null>(null);
   const [dayStats, setDayStats] = useState<Record<string, ProjectStat> | null>(null);
   /**
-   * T-21 — server-mode employee filter. null = no scoping (all users).
+   * T-21 — server-mode user filter. null = no scoping (all users).
    * Hidden entirely in client mode via the Header gate.
    */
   const [userLabelFilter, setUserLabelFilter] = useState<string | null>(null);

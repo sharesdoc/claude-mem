@@ -27,7 +27,7 @@ interface HeaderProps {
   /** Local-timezone YYYY-MM-DD, or null when no day-filter is active. */
   dateFilter: string | null;
   onDateFilterChange: (next: string | null) => void;
-  /** Server-mode-only employee picker. */
+  /** Server-mode-only user picker. */
   showUserSelector: boolean;
   users: UserRow[];
   userLabelFilter: string | null;

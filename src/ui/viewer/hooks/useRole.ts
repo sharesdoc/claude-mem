@@ -4,7 +4,7 @@ import { authFetch } from '../utils/api';
 /**
  * Resolved server-side role + identity (T-18 / S-doc §11).
  *
- * Fetched once at viewer boot. The result gates the employee selector
+ * Fetched once at viewer boot. The result gates the user selector
  * (T-21) and the "you are pushing as X" badge (future T-25).
  *
  * On error we default to `client` / null — that's the conservative
