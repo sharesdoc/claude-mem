@@ -426,6 +426,12 @@ export class WorkerService implements WorkerRef {
             logger.error('SYNC', 'SyncAgent failed to start (continuing without sync)', {}, error as Error);
           });
           logger.info('SYNC', 'SyncAgent attached', { upstream, intervalMs, batchSize, authMode });
+        } else {
+          const reasons: string[] = [];
+          if (role !== 'client') reasons.push(`role=${role}`);
+          if (!syncEnabled) reasons.push('sync disabled');
+          if (!upstream) reasons.push('no upstream URL');
+          logger.warn('SYNC', `SyncAgent skipped: ${reasons.join(', ')}`);
         }
       } catch (error) {
         logger.error('SYNC', 'SyncAgent bootstrap failed', {}, error as Error);

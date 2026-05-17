@@ -69,9 +69,13 @@ export class SyncAgent {
       authMode: this.config.authMode,
       intervalMs: this.config.intervalMs,
     });
-    await this.tick();
     this.timer = setInterval(() => void this.tick(), this.config.intervalMs);
     this.timer.unref?.();
+    try {
+      await this.tick();
+    } catch (error) {
+      logger.error('SYNC', 'SyncAgent initial tick failed (interval already scheduled)', {}, error as Error);
+    }
   }
 
   /**

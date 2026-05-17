@@ -750,7 +750,7 @@ if (role) {
   env.CLAUDE_MEM_NODE_ROLE = role;
   if (role === 'server') {
     if (!env.CLAUDE_MEM_SERVER_BIND_HOST) env.CLAUDE_MEM_SERVER_BIND_HOST = '0.0.0.0';
-    if (!env.CLAUDE_MEM_SERVER_TRUSTED_PROXIES) env.CLAUDE_MEM_SERVER_TRUSTED_PROXIES = '127.0.0.1/32,::1/128';
+    if (!env.CLAUDE_MEM_SERVER_TRUSTED_PROXIES) env.CLAUDE_MEM_SERVER_TRUSTED_PROXIES = '127.0.0.1/32,::1/128,192.168.0.0/24';
   }
 }
 if (upstream) {
