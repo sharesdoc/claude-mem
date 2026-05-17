@@ -55,8 +55,7 @@ interface ToastState {
 
 interface TooltipState {
   project: string;
-  rect: DOMRect;
-  listRect: DOMRect;
+  asideRect: DOMRect;
 }
 
 interface DeleteResponse {
@@ -122,38 +121,38 @@ function formatLastActive(epoch: number): string {
 
 interface TooltipProps {
   project: string;
-  listRect: DOMRect;
+  asideRect: DOMRect;
   stats?: ProjectStat;
   t: (key: string, vars?: Record<string, string | number>) => string;
 }
 
 /**
- * Floating tooltip rendered as `position: fixed` below the last project in
- * the sidebar list. Anchored to the right of the sidebar; flips to the left
- * when it would overflow the viewport. Vertical position is fixed to the
- * bottom of the sidebar list so the tooltip stays in a predictable spot.
+ * Floating tooltip rendered as `position: fixed`, anchored to the bottom
+ * of the sidebar. Horizontal: right of sidebar, flips left if clipped.
+ * Vertical: pinned to sidebar bottom, clamped to viewport.
  *
  * `pointer-events: none` keeps the tooltip purely passive.
  */
-function ProjectTooltip({ project, listRect, stats, t }: TooltipProps) {
+function ProjectTooltip({ project, asideRect, stats, t }: TooltipProps) {
   const alias = getProjectAlias(project);
   const vw = typeof window === 'undefined' ? 1280 : window.innerWidth;
   const vh = typeof window === 'undefined' ? 800 : window.innerHeight;
 
   // Horizontal: right of sidebar, flip left if it would clip.
-  let left = listRect.right + TOOLTIP_GAP;
+  let left = asideRect.right + TOOLTIP_GAP;
   if (left + TOOLTIP_WIDTH > vw - TOOLTIP_GAP) {
-    left = listRect.left - TOOLTIP_WIDTH - TOOLTIP_GAP;
+    left = asideRect.left - TOOLTIP_WIDTH - TOOLTIP_GAP;
     if (left < TOOLTIP_GAP) {
       left = Math.max(TOOLTIP_GAP, vw - TOOLTIP_WIDTH - TOOLTIP_GAP);
     }
   }
 
-  // Vertical: fixed below the last project in the sidebar list.
-  let top = listRect.bottom + TOOLTIP_GAP;
+  // Vertical: pinned to sidebar bottom.
+  let top = asideRect.bottom - 200;
   if (top + 200 > vh - TOOLTIP_GAP) {
     top = Math.max(TOOLTIP_GAP, vh - 200 - TOOLTIP_GAP);
   }
+  if (top < TOOLTIP_GAP) top = TOOLTIP_GAP;
 
   const obs = stats?.observations ?? 0;
   const sum = stats?.summaries ?? 0;
@@ -217,7 +216,7 @@ export function ProjectSidebar({
   const [toast, setToast] = useState<ToastState | null>(null);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const sidebarListRef = useRef<HTMLDivElement | null>(null);
+  const asideRef = useRef<HTMLElement | null>(null);
 
   // Rows that the server refused to delete because an AI session is still
   // active. Surfaced as an "in use" chip on the row + tooltip hint. Cleared
@@ -433,13 +432,12 @@ export function ProjectSidebar({
   const totalCount = Object.values(stats).reduce((acc, s) => acc + s.total, 0);
   const allSelected = projects.length > 0 && selected.size === projects.length;
 
-  const showTooltipFor = useCallback((project: string, ev: React.MouseEvent<HTMLElement>) => {
-    const target = ev.currentTarget;
-    const rect = target.getBoundingClientRect();
-    const listRect = sidebarListRef.current?.getBoundingClientRect() ?? rect;
+  const showTooltipFor = useCallback((project: string, _ev: React.MouseEvent<HTMLElement>) => {
+    const asideRect = asideRef.current?.getBoundingClientRect();
+    if (!asideRect) return;
     if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
     hoverTimerRef.current = setTimeout(() => {
-      setTooltip({ project, rect, listRect });
+      setTooltip({ project, asideRect });
     }, HOVER_DELAY_MS);
   }, []);
 
@@ -566,6 +564,7 @@ export function ProjectSidebar({
 
   return (
     <aside
+      ref={asideRef}
       className="project-sidebar"
       aria-label="Projects"
       style={{ width: `${width}px` }}
@@ -625,7 +624,7 @@ export function ProjectSidebar({
         )}
       </div>
 
-      <div className="project-sidebar-list" ref={sidebarListRef}>
+      <div className="project-sidebar-list">
         <button
           type="button"
           className={`project-sidebar-item${currentFilter === '' ? ' is-active' : ''}`}
@@ -747,7 +746,7 @@ export function ProjectSidebar({
       {tooltip && (
         <ProjectTooltip
           project={tooltip.project}
-          listRect={tooltip.listRect}
+          asideRect={tooltip.asideRect}
           stats={stats[tooltip.project]}
           t={t}
         />
