@@ -35,6 +35,9 @@ export interface ObservationSSEPayload {
   project: string;
   prompt_number: number;
   user_name?: string | null;
+  /** Sync identity (sdk_sessions.user_label) — viewer uses this to update
+   * its project→user map without waiting for a full refresh. */
+  user_label?: string | null;
   created_at_epoch: number;
 }
 
@@ -51,6 +54,7 @@ export interface SummarySSEPayload {
   project: string;
   prompt_number: number;
   user_name?: string | null;
+  user_label?: string | null;
   created_at_epoch: number;
 }
 

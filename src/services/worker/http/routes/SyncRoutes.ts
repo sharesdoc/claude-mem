@@ -394,9 +394,25 @@ export class SyncRoutes extends BaseRouteHandler {
     if (!this.sseBroadcaster) return;
 
     // Build content_session_id → project map from sessions for prompts.
+    // Also build memory_session_id → user_label and content_session_id →
+    // user_label maps so SSE deltas carry identity for viewer grouping
+    // (without it, the server viewer falls back to path parsing and shows
+    // an UNKNOWN group until the next full refresh).
     const sessionProject = new Map<string, string>();
+    const memorySessionUser = new Map<string, string>();
+    const contentSessionUser = new Map<string, string>();
+    // Top-level payload.user_label is validated as `min(1)`, so it's safe
+    // to use as the fallback when an individual session record carries a
+    // null/empty user_label of its own.
+    const fallbackUserLabel = (payload.user_label ?? '').trim();
     for (const s of payload.sessions) {
       if (s.project) sessionProject.set(s.content_session_id, s.project);
+      const label = (s.user_label ?? '').trim();
+      const resolved = label || fallbackUserLabel;
+      if (resolved) {
+        if (s.memory_session_id) memorySessionUser.set(s.memory_session_id, resolved);
+        contentSessionUser.set(s.content_session_id, resolved);
+      }
     }
 
     if (applied.observations.inserted > 0) {
@@ -421,6 +437,7 @@ export class SyncRoutes extends BaseRouteHandler {
             project: o.project,
             prompt_number: o.prompt_number ?? 0,
             user_name: null,
+            user_label: memorySessionUser.get(o.memory_session_id) ?? fallbackUserLabel ?? null,
             created_at_epoch: o.created_at_epoch,
           },
         });
@@ -445,6 +462,7 @@ export class SyncRoutes extends BaseRouteHandler {
             project: s.project,
             prompt_number: s.prompt_number ?? 0,
             user_name: null,
+            user_label: memorySessionUser.get(s.memory_session_id) ?? fallbackUserLabel ?? null,
             created_at_epoch: s.created_at_epoch,
           },
         });
@@ -465,6 +483,7 @@ export class SyncRoutes extends BaseRouteHandler {
             prompt_number: p.prompt_number,
             prompt_text: p.prompt_text,
             user_name: null,
+            user_label: contentSessionUser.get(p.content_session_id) ?? fallbackUserLabel ?? null,
             created_at_epoch: p.created_at_epoch,
           },
         } as any);

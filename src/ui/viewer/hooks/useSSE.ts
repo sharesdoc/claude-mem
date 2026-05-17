@@ -34,6 +34,20 @@ export function useSSE() {
     setProjects(prev => prev.includes(project) ? prev : [...prev, project]);
   };
 
+  /**
+   * Update the project → user_label map from an SSE delta. Without this,
+   * new projects that arrive via sync between full refreshes have no entry
+   * in projectUsers, fall back to path parsing, and end up in the UNKNOWN
+   * group on the server viewer. Null / empty labels are ignored so we
+   * never overwrite a known label with garbage.
+   */
+  const recordProjectUser = (project: string, label: string | null | undefined) => {
+    if (!project) return;
+    const trimmed = (label ?? '').trim();
+    if (!trimmed) return;
+    setProjectUsers(prev => (prev[project] === trimmed ? prev : { ...prev, [project]: trimmed }));
+  };
+
   const bumpStat = (
     project: string,
     field: 'observations' | 'summaries' | 'prompts',
@@ -117,6 +131,7 @@ export function useSSE() {
             if (data.observation) {
               console.log('[SSE] New observation:', data.observation.id);
               addProjectIfNew(data.observation.project);
+              recordProjectUser(data.observation.project, (data.observation as { user_label?: string | null }).user_label);
               setObservations(prev => [data.observation!, ...prev]);
               bumpStat(data.observation.project, 'observations', data.observation.created_at_epoch);
             }
@@ -126,6 +141,7 @@ export function useSSE() {
             if (data.summary) {
               console.log('[SSE] New summary:', data.summary.id);
               addProjectIfNew(data.summary.project);
+              recordProjectUser(data.summary.project, (data.summary as { user_label?: string | null }).user_label);
               setSummaries(prev => [data.summary!, ...prev]);
               bumpStat(data.summary.project, 'summaries', data.summary.created_at_epoch);
             }
@@ -135,6 +151,7 @@ export function useSSE() {
             if (data.prompt) {
               console.log('[SSE] New prompt:', data.prompt.id);
               addProjectIfNew(data.prompt.project);
+              recordProjectUser(data.prompt.project, (data.prompt as { user_label?: string | null }).user_label);
               setPrompts(prev => [data.prompt!, ...prev]);
               bumpStat(data.prompt.project, 'prompts', data.prompt.created_at_epoch);
             }
@@ -159,6 +176,13 @@ export function useSSE() {
               setSummaries(prev => prev.filter(s => !removed.has(s.project)));
               setPrompts(prev => prev.filter(p => !removed.has(p.project)));
               setProjects(prev => prev.filter(p => !removed.has(p)));
+              setProjectUsers(prev => {
+                const next: Record<string, string | null> = {};
+                for (const [k, v] of Object.entries(prev)) {
+                  if (!removed.has(k)) next[k] = v;
+                }
+                return next;
+              });
               setProjectStats(prev => {
                 const next: Record<string, ProjectStat> = {};
                 for (const [k, v] of Object.entries(prev)) {
