@@ -48,7 +48,8 @@ show_help() {
   printf "  --upstream <URL>       (client) URL of the sync server, e.g. https://mem.acme.com\n"
   printf "  --label <NAME>         Sync identity (defaults to whoami in client mode)\n"
   printf "  --api-key <KEY>        Cloud-mode API key; flips auth_mode=apikey\n"
-  printf "  --token <TOKEN>        LAN shared access token (simpler than apiKey)\n\n"
+  printf "  --token <TOKEN>        LAN shared access token (simpler than apiKey)\n"
+  printf "  --reset-token          Force regenerate access token on reinstall\n\n"
   printf "${BOLD}Data preservation:${RESET}\n"
   printf "  ${DIM}-i / -u / -r never touch %s — DB, archives, chroma, logs all survive.${RESET}\n" "$DATA_DIR"
   printf "  ${DIM}-d explicitly deletes %s after a typed YES confirmation.${RESET}\n\n" "$DATA_DIR"
@@ -909,6 +910,7 @@ main() {
   local sync_label=""
   local sync_api_key=""
   local sync_token=""
+  local reset_token=""
 
   # T-26: pull sync flags out of the argv first so the existing
   # action/target positional logic stays unchanged.
@@ -925,6 +927,7 @@ main() {
       --api-key=*) sync_api_key="${1#--api-key=}"; shift ;;
       --token) sync_token="${2:-}"; shift 2 ;;
       --token=*) sync_token="${1#--token=}"; shift ;;
+      --reset-token) reset_token="1"; shift ;;
       *) args+=("$1"); shift ;;
     esac
   done
@@ -944,12 +947,21 @@ main() {
     sync_label="$(whoami)"
   fi
 
-  # Server mode: auto-generate an access token if the user didn't provide one.
+  # Server mode: preserve existing access token on reinstall, regenerate
+  # only on first install or when --reset-token is explicitly passed.
   if [[ "$sync_role" == "server" && -z "$sync_token" ]]; then
-    sync_token="$(node -e "console.log(require('crypto').randomBytes(20).toString('hex'))" 2>/dev/null)"
+    if [[ -z "$reset_token" && -f "$DATA_DIR/settings.json" ]]; then
+      # Reuse existing token so connected clients don't break.
+      sync_token="$(grep -o '"CLAUDE_MEM_SERVER_ACCESS_TOKEN":"[^"]*"' "$DATA_DIR/settings.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+      if [[ -n "$sync_token" ]]; then
+        ok "Reusing existing access token (use --reset-token to regenerate)"
+      fi
+    fi
     if [[ -z "$sync_token" ]]; then
-      # Fallback if node is unavailable during install
-      sync_token="$(openssl rand -hex 20 2>/dev/null || echo "change-me-$(date +%s)")"
+      sync_token="$(node -e "console.log(require('crypto').randomBytes(20).toString('hex'))" 2>/dev/null)"
+      if [[ -z "$sync_token" ]]; then
+        sync_token="$(openssl rand -hex 20 2>/dev/null || echo "change-me-$(date +%s)")"
+      fi
     fi
   fi
 
