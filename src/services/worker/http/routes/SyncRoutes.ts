@@ -9,6 +9,8 @@ import { logger } from '../../../../utils/logger.js';
 import { buildAuthChain, type SyncAuthStrategy } from '../../../sync/auth/index.js';
 import type { DatabaseManager } from '../../DatabaseManager.js';
 import type { Request as ExpressRequest, Response as ExpressResponse, NextFunction } from 'express';
+import type { SSEBroadcaster } from '../../SSEBroadcaster.js';
+import { shouldEmitProjectRow } from '../../../../shared/should-track-project.js';
 
 /**
  * T-09 — POST /api/sync/ingest (server-only).
@@ -109,12 +111,15 @@ export interface SyncRoutesSettings {
 export class SyncRoutes extends BaseRouteHandler {
   private readonly authChain: SyncAuthStrategy;
   private readonly maxBatch: number;
+  private readonly sseBroadcaster: SSEBroadcaster | undefined;
 
   constructor(
     private readonly dbManager: DatabaseManager,
     private readonly settings: SyncRoutesSettings,
+    sseBroadcaster?: SSEBroadcaster,
   ) {
     super();
+    this.sseBroadcaster = sseBroadcaster;
     this.authChain = buildAuthChain({
       settings: this.settings,
       getDb: () => this.dbManager.getConnection(),
@@ -189,6 +194,9 @@ export class SyncRoutes extends BaseRouteHandler {
       applied,
       next_watermark: nextWatermark,
     });
+
+    // Broadcast SSE events so the viewer refreshes in real-time.
+    this.broadcastBatchEvents(payload, applied);
   });
 
   /**
@@ -373,5 +381,94 @@ export class SyncRoutes extends BaseRouteHandler {
       }
     }
     return wm;
+  }
+
+  /**
+   * Broadcast SSE events for newly inserted items so the viewer UI
+   * refreshes in real-time after a client sync push.
+   */
+  private broadcastBatchEvents(
+    payload: SyncIngestPayload,
+    applied: Record<string, { inserted: number; skipped: number }>,
+  ): void {
+    if (!this.sseBroadcaster) return;
+
+    // Build content_session_id → project map from sessions for prompts.
+    const sessionProject = new Map<string, string>();
+    for (const s of payload.sessions) {
+      if (s.project) sessionProject.set(s.content_session_id, s.project);
+    }
+
+    if (applied.observations.inserted > 0) {
+      for (const o of payload.observations) {
+        if (!shouldEmitProjectRow(o.project)) continue;
+        this.sseBroadcaster.broadcast({
+          type: 'new_observation',
+          observation: {
+            id: o.id,
+            memory_session_id: o.memory_session_id,
+            session_id: o.memory_session_id,
+            platform_source: 'sync',
+            type: o.type,
+            title: o.title ?? null,
+            subtitle: o.subtitle ?? null,
+            text: o.text ?? null,
+            narrative: o.narrative ?? null,
+            facts: o.facts ?? '',
+            concepts: o.concepts ?? '',
+            files_read: o.files_read ?? '',
+            files_modified: o.files_modified ?? '',
+            project: o.project,
+            prompt_number: o.prompt_number ?? 0,
+            user_name: null,
+            created_at_epoch: o.created_at_epoch,
+          },
+        });
+      }
+    }
+
+    if (applied.summaries.inserted > 0) {
+      for (const s of payload.summaries) {
+        if (!shouldEmitProjectRow(s.project)) continue;
+        this.sseBroadcaster.broadcast({
+          type: 'new_summary',
+          summary: {
+            id: s.id,
+            session_id: s.memory_session_id,
+            platform_source: 'sync',
+            request: s.request ?? null,
+            investigated: s.investigated ?? null,
+            learned: s.learned ?? null,
+            completed: s.completed ?? null,
+            next_steps: s.next_steps ?? null,
+            notes: s.notes ?? null,
+            project: s.project,
+            prompt_number: s.prompt_number ?? 0,
+            user_name: null,
+            created_at_epoch: s.created_at_epoch,
+          },
+        });
+      }
+    }
+
+    if (applied.prompts.inserted > 0) {
+      for (const p of payload.prompts) {
+        const project = sessionProject.get(p.content_session_id) ?? '';
+        if (!shouldEmitProjectRow(project)) continue;
+        this.sseBroadcaster.broadcast({
+          type: 'new_prompt',
+          prompt: {
+            id: p.id,
+            content_session_id: p.content_session_id,
+            project,
+            platform_source: 'sync',
+            prompt_number: p.prompt_number,
+            prompt_text: p.prompt_text,
+            user_name: null,
+            created_at_epoch: p.created_at_epoch,
+          },
+        } as any);
+      }
+    }
   }
 }

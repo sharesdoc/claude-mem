@@ -332,7 +332,7 @@ export class WorkerService implements WorkerRef {
         CLAUDE_MEM_SERVER_ALLOWED_USERS: settings.CLAUDE_MEM_SERVER_ALLOWED_USERS ?? '',
         CLAUDE_MEM_SERVER_ACCESS_TOKEN: settings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '',
         CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: settings.CLAUDE_MEM_SERVER_INGEST_MAX_BATCH ?? '1000',
-      }));
+      }, this.sseBroadcaster));
     }
   }
 
