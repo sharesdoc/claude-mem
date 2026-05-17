@@ -39,6 +39,8 @@ export interface ObservationSSEPayload {
    * its project→user map without waiting for a full refresh. */
   user_label?: string | null;
   created_at_epoch: number;
+  /** Content hash for dedup across local + sync sources. */
+  content_hash?: string | null;
 }
 
 export interface SummarySSEPayload {
@@ -56,6 +58,7 @@ export interface SummarySSEPayload {
   user_name?: string | null;
   user_label?: string | null;
   created_at_epoch: number;
+  content_hash?: string | null;
 }
 
 export type SSEEventPayload =

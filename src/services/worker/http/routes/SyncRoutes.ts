@@ -450,6 +450,7 @@ export class SyncRoutes extends BaseRouteHandler {
           user_name: null,
           user_label: memorySessionUser.get(o.memory_session_id) ?? fallbackUserLabel ?? null,
           created_at_epoch: o.created_at_epoch,
+          content_hash: o.content_hash ?? null,
         },
       });
     }

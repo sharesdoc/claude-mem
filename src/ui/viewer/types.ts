@@ -20,6 +20,8 @@ export interface Observation {
   user_label?: string | null;
   created_at: string;
   created_at_epoch: number;
+  /** Content hash for dedup across local + sync sources. */
+  content_hash?: string | null;
 }
 
 export interface Summary {
@@ -35,6 +37,7 @@ export interface Summary {
   user_name?: string | null;
   user_label?: string | null;
   created_at_epoch: number;
+  content_hash?: string | null;
 }
 
 export interface UserPrompt {
@@ -47,6 +50,7 @@ export interface UserPrompt {
   user_name?: string | null;
   user_label?: string | null;
   created_at_epoch: number;
+  content_hash?: string | null;
 }
 
 export type FeedItem =
