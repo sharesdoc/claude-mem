@@ -66,6 +66,15 @@ export function App() {
   const { t } = useLocale();
   const role = useRole();
   const { users } = useUsers(role.role === 'server' && role.ready);
+  // Always include the current user in the picker — even before any sync
+  // data arrives, the server operator needs to be able to filter their
+  // own rows.
+  const pickerUsers = useMemo(() => {
+    if (!role.userLabel) return users;
+    const has = users.some(u => u.user_label === role.userLabel);
+    if (has) return users;
+    return [{ user_label: role.userLabel, sessions: 0, last_active: null }, ...users];
+  }, [users, role.userLabel]);
   const { status: syncStatus, ready: syncStatusReady } = useSyncStatus();
 
   // Convert YYYY-MM-DD (local) → half-open [start, end) ms epoch. Local
@@ -260,7 +269,7 @@ export function App() {
             dateFilter={dateFilter}
             onDateFilterChange={setDateFilter}
             showUserSelector={role.role === 'server'}
-            users={users}
+            users={pickerUsers}
             userLabelFilter={userLabelFilter}
             onUserLabelFilterChange={setUserLabelFilter}
             syncStatus={syncStatus}

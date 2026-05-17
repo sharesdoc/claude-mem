@@ -22,7 +22,6 @@ export function UserSelector({ users, value, onChange }: UserSelectorProps) {
 
   return (
     <label className="user-selector" title={t('user.selectorTip')}>
-      <span className="user-selector-label">{t('user.selectorLabel')}</span>
       <select
         className="user-selector-select"
         value={selectValue}
