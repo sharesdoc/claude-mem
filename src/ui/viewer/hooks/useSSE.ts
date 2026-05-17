@@ -68,6 +68,8 @@ export function useSSE() {
   // Pull authoritative project counts from the worker. Called once after
   // SSE opens so the sidebar reflects historical data — without this, every
   // worker restart leaves the sidebar at zero until new SSE events arrive.
+  // Also scheduled on a debounce after each stat-changing SSE event so the
+  // incremental bumpStat never drifts far from the DB truth.
   const fetchProjectStats = async () => {
     try {
       const r = await fetch('/api/projects/stats');
@@ -78,6 +80,15 @@ export function useSSE() {
       // Network blip or worker not ready — fall back to incremental SSE
       // accumulation (still wrong-but-not-broken).
     }
+  };
+
+  const statsRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleStatsRefresh = () => {
+    if (statsRefreshRef.current) clearTimeout(statsRefreshRef.current);
+    statsRefreshRef.current = setTimeout(() => {
+      statsRefreshRef.current = null;
+      void fetchProjectStats();
+    }, 3000);
   };
 
   useEffect(() => {
@@ -134,6 +145,7 @@ export function useSSE() {
               recordProjectUser(data.observation.project, (data.observation as { user_label?: string | null }).user_label);
               setObservations(prev => [data.observation!, ...prev]);
               bumpStat(data.observation.project, 'observations', data.observation.created_at_epoch);
+              scheduleStatsRefresh();
             }
             break;
 
@@ -144,6 +156,7 @@ export function useSSE() {
               recordProjectUser(data.summary.project, (data.summary as { user_label?: string | null }).user_label);
               setSummaries(prev => [data.summary!, ...prev]);
               bumpStat(data.summary.project, 'summaries', data.summary.created_at_epoch);
+              scheduleStatsRefresh();
             }
             break;
 
@@ -154,6 +167,7 @@ export function useSSE() {
               recordProjectUser(data.prompt.project, (data.prompt as { user_label?: string | null }).user_label);
               setPrompts(prev => [data.prompt!, ...prev]);
               bumpStat(data.prompt.project, 'prompts', data.prompt.created_at_epoch);
+              scheduleStatsRefresh();
             }
             break;
 
@@ -204,6 +218,9 @@ export function useSSE() {
       }
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (statsRefreshRef.current) {
+        clearTimeout(statsRefreshRef.current);
       }
     };
   }, []);
