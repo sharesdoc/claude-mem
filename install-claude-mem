@@ -952,7 +952,16 @@ main() {
   if [[ "$sync_role" == "server" && -z "$sync_token" ]]; then
     if [[ -z "$reset_token" && -f "$DATA_DIR/settings.json" ]]; then
       # Reuse existing token so connected clients don't break.
-      sync_token="$(grep -o '"CLAUDE_MEM_SERVER_ACCESS_TOKEN":"[^"]*"' "$DATA_DIR/settings.json" 2>/dev/null | head -1 | cut -d'"' -f4)"
+      # Use node to read JSON safely (avoids grep/sed encoding issues
+      # and pipefail + command-substitution bugs in macOS bash 3.2).
+      sync_token="$(node -e "
+try {
+  const raw = require('fs').readFileSync('$DATA_DIR/settings.json','utf-8');
+  const data = JSON.parse(raw);
+  const env = data.env || data;
+  const t = env.CLAUDE_MEM_SERVER_ACCESS_TOKEN || '';
+  if (t) console.log(t);
+} catch(e) {}" 2>/dev/null || true)"
       if [[ -n "$sync_token" ]]; then
         ok "Reusing existing access token (use --reset-token to regenerate)"
       fi
