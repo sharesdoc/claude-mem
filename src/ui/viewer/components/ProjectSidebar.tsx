@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Observation, Summary, UserPrompt } from '../types';
 import { useLocale } from '../hooks/useLocale';
 import { API_ENDPOINTS } from '../constants/api';
-import { getProjectAlias } from '../utils/projectAlias';
+import { getProjectAlias, parseProjectId } from '../utils/projectAlias';
 
 interface ProjectSidebarProps {
   projects: string[];
@@ -219,6 +219,11 @@ export function ProjectSidebar({
   // and the response no longer lists them) or vanish entirely.
   const [inUse, setInUse] = useState<Set<string>>(new Set());
 
+  // User groups default to collapsed. Expanded set is keyed by username; a
+  // user appears here only after the user explicitly expands their group, so
+  // the initial state has zero stored entries even with N users present.
+  const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     ratioRef.current = ratio;
   }, [ratio]);
@@ -361,6 +366,49 @@ export function ProjectSidebar({
       return a.localeCompare(b);
     });
   }, [projects, stats]);
+
+  // Group projects by username extracted from the project ID. Single-user
+  // setups fall back to a flat list (no group headers); two+ users get
+  // collapsible group headers sorted by most-recent activity, with the
+  // user's combined prompt + summary count on the right of the header row.
+  interface ProjectGroup {
+    user: string;            // empty string for projects without a recoverable username
+    projects: string[];      // already sorted by `latest desc`
+    messageCount: number;    // prompts + summaries across the user's projects
+    latest: number;          // max(latest) — drives group sort order
+  }
+  const projectGroups = useMemo<ProjectGroup[]>(() => {
+    const byUser = new Map<string, ProjectGroup>();
+    for (const project of sortedProjects) {
+      const user = parseProjectId(project)?.username ?? '';
+      let group = byUser.get(user);
+      if (!group) {
+        group = { user, projects: [], messageCount: 0, latest: 0 };
+        byUser.set(user, group);
+      }
+      group.projects.push(project);
+      const s = stats[project];
+      if (s) {
+        group.messageCount += s.prompts + s.summaries;
+        if (s.latest > group.latest) group.latest = s.latest;
+      }
+    }
+    return Array.from(byUser.values()).sort((a, b) => {
+      if (a.latest !== b.latest) return b.latest - a.latest;
+      return a.user.localeCompare(b.user);
+    });
+  }, [sortedProjects, stats]);
+
+  const groupingEnabled = projectGroups.length > 1;
+
+  const toggleUser = useCallback((user: string) => {
+    setExpandedUsers((prev) => {
+      const next = new Set(prev);
+      if (next.has(user)) next.delete(user);
+      else next.add(user);
+      return next;
+    });
+  }, []);
 
   // Sum of per-project totals; pulls from the merged `stats` so the "All
   // Projects" badge stays correct after worker restart (the raw observations
@@ -562,65 +610,97 @@ export function ProjectSidebar({
           <div className="project-sidebar-empty">{t('sidebar.empty')}</div>
         )}
 
-        {sortedProjects.map((project) => {
-          const s =
-            stats[project] ?? { total: 0, observations: 0, summaries: 0, prompts: 0, latest: 0 };
-          const isActive = currentFilter === project;
-          const isSelected = selected.has(project);
-          const isInUse = inUse.has(project);
-          const alias = getProjectAlias(project);
+        {(() => {
+          const renderProjectRow = (project: string, indented: boolean) => {
+            const s =
+              stats[project] ?? { total: 0, observations: 0, summaries: 0, prompts: 0, latest: 0 };
+            const isActive = currentFilter === project;
+            const isSelected = selected.has(project);
+            const isInUse = inUse.has(project);
+            const alias = getProjectAlias(project);
 
-          // Single click semantics:
-          //   select-mode  → toggle the checkbox
-          //   normal       → filter the feed by this project
-          const onItemClick = () => {
-            if (selectMode) toggleSelected(project);
-            else onFilterChange(project);
+            // Single click semantics:
+            //   select-mode  → toggle the checkbox
+            //   normal       → filter the feed by this project
+            const onItemClick = () => {
+              if (selectMode) toggleSelected(project);
+              else onFilterChange(project);
+            };
+
+            return (
+              <div
+                key={project}
+                className={
+                  'project-sidebar-item-wrap' +
+                  (isActive ? ' is-active' : '') +
+                  (selectMode ? ' is-select-mode' : '') +
+                  (isSelected ? ' is-selected' : '') +
+                  (isInUse ? ' is-in-use' : '') +
+                  (indented ? ' is-grouped' : '')
+                }
+                onMouseEnter={(e) => showTooltipFor(project, e)}
+                onMouseLeave={hideTooltip}
+              >
+                {selectMode && (
+                  <input
+                    type="checkbox"
+                    className="project-sidebar-checkbox"
+                    checked={isSelected}
+                    onChange={() => toggleSelected(project)}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label={t('sidebar.selectCheckbox')}
+                  />
+                )}
+                <button
+                  type="button"
+                  className={`project-sidebar-item${isActive ? ' is-active' : ''}`}
+                  onClick={onItemClick}
+                >
+                  <span className="project-sidebar-item-name">{alias}</span>
+                  {isInUse && (
+                    <span
+                      className="project-sidebar-in-use-chip"
+                      title={t('sidebar.inUseTip')}
+                      aria-label={t('sidebar.inUseTip')}
+                    >
+                      {t('sidebar.inUseChip')}
+                    </span>
+                  )}
+                  <span className="project-sidebar-item-count">{s.total}</span>
+                </button>
+              </div>
+            );
           };
 
-          return (
-            <div
-              key={project}
-              className={
-                'project-sidebar-item-wrap' +
-                (isActive ? ' is-active' : '') +
-                (selectMode ? ' is-select-mode' : '') +
-                (isSelected ? ' is-selected' : '') +
-                (isInUse ? ' is-in-use' : '')
-              }
-              onMouseEnter={(e) => showTooltipFor(project, e)}
-              onMouseLeave={hideTooltip}
-            >
-              {selectMode && (
-                <input
-                  type="checkbox"
-                  className="project-sidebar-checkbox"
-                  checked={isSelected}
-                  onChange={() => toggleSelected(project)}
-                  onClick={(e) => e.stopPropagation()}
-                  aria-label={t('sidebar.selectCheckbox')}
-                />
-              )}
-              <button
-                type="button"
-                className={`project-sidebar-item${isActive ? ' is-active' : ''}`}
-                onClick={onItemClick}
-              >
-                <span className="project-sidebar-item-name">{alias}</span>
-                {isInUse && (
-                  <span
-                    className="project-sidebar-in-use-chip"
-                    title={t('sidebar.inUseTip')}
-                    aria-label={t('sidebar.inUseTip')}
-                  >
-                    {t('sidebar.inUseChip')}
+          // Flat list when there's exactly one user (or none) — keeps the
+          // single-user case visually identical to the pre-grouping layout.
+          if (!groupingEnabled) {
+            return sortedProjects.map((p) => renderProjectRow(p, false));
+          }
+
+          return projectGroups.map((group) => {
+            const label = group.user || t('sidebar.unknownUser');
+            const isExpanded = expandedUsers.has(group.user);
+            return (
+              <div key={`group:${group.user}`} className="project-sidebar-group">
+                <button
+                  type="button"
+                  className={`project-sidebar-group-header${isExpanded ? ' is-expanded' : ''}`}
+                  onClick={() => toggleUser(group.user)}
+                  aria-expanded={isExpanded}
+                  title={t('sidebar.userGroupTip')}
+                >
+                  <span className="project-sidebar-group-caret" aria-hidden="true">
+                    {isExpanded ? '▾' : '▸'}
                   </span>
-                )}
-                <span className="project-sidebar-item-count">{s.total}</span>
-              </button>
-            </div>
-          );
-        })}
+                  <span className="project-sidebar-group-name">{label}</span>
+                  <span className="project-sidebar-group-count">{group.messageCount}</span>
+                </button>
+                {isExpanded && group.projects.map((p) => renderProjectRow(p, true))}
+              </div>
+            );
+          });
+        })()}
       </div>
 
       <div

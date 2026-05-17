@@ -1,6 +1,6 @@
 
 import path from 'path';
-import { existsSync } from 'fs';
+import { existsSync, watchFile, unwatchFile } from 'fs';
 import { spawn } from 'child_process';
 import { Database } from 'bun:sqlite';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -177,6 +177,7 @@ export class WorkerService implements WorkerRef {
   // disabled or role=server; callers MUST use `?.scheduleSoon()` so the
   // hook degrades to a no-op.
   public syncAgent?: { scheduleSoon(): void };
+  private syncSettingsWatcherActive = false;
   private initializationComplete: Promise<void>;
   private resolveInitialization!: () => void;
 
@@ -393,45 +394,13 @@ export class WorkerService implements WorkerRef {
       runOneTimeCwdRemap();
 
       // T-06 + T-14: launch SyncAgent only in client mode with sync turned
-      // on and a non-empty upstream URL. Anything missing → no agent, and
-      // scheduleSoon() calls degrade to no-ops via the `?.` chain.
+      // on and a non-empty upstream URL. Anything missing → no agent now,
+      // but a watcher on settings.json will retry once the install/restart
+      // script writes the sync config (race seen in practice when worker
+      // boots before install script finishes writing settings.json).
       try {
-        const role = (settings.CLAUDE_MEM_NODE_ROLE ?? 'client').trim().toLowerCase();
-        const syncEnabled = (settings.CLAUDE_MEM_SYNC_ENABLED ?? 'true').trim().toLowerCase() === 'true';
-        const upstream = (settings.CLAUDE_MEM_SYNC_UPSTREAM_URL ?? '').trim();
-        if (role === 'client' && syncEnabled && upstream) {
-          const redactPatterns = (settings.CLAUDE_MEM_SYNC_REDACT_PATTERNS ?? '')
-            .split(',').map(s => s.trim()).filter(Boolean);
-          const intervalMs = Math.max(5000, Number.parseInt(settings.CLAUDE_MEM_SYNC_INTERVAL_MS ?? '30000', 10) || 30000);
-          const batchSize = Math.max(1, Number.parseInt(settings.CLAUDE_MEM_SYNC_BATCH_SIZE ?? '200', 10) || 200);
-          const retryMax = Math.max(0, Number.parseInt(settings.CLAUDE_MEM_SYNC_RETRY_MAX ?? '8', 10) || 8);
-          const authModeRaw = (settings.CLAUDE_MEM_SYNC_AUTH_MODE ?? 'none').trim().toLowerCase();
-          const authMode = (['none', 'apikey', 'jwt', 'mtls'] as const).includes(authModeRaw as 'none' | 'apikey' | 'jwt' | 'mtls')
-            ? (authModeRaw as 'none' | 'apikey' | 'jwt' | 'mtls')
-            : 'none';
-          const accessToken = (settings.CLAUDE_MEM_SYNC_ACCESS_TOKEN ?? '').trim();
-          const agent = new SyncAgent(this.dbManager, {
-            upstreamUrl: upstream,
-            userLabel: resolveUserLabel(USER_SETTINGS_PATH),
-            authMode,
-            apiKey: settings.CLAUDE_MEM_SYNC_API_KEY || undefined,
-            accessToken: accessToken || undefined,
-            intervalMs,
-            batchSize,
-            retryMax,
-            redactPatterns,
-          });
-          this.syncAgent = agent;
-          agent.start().catch(error => {
-            logger.error('SYNC', 'SyncAgent failed to start (continuing without sync)', {}, error as Error);
-          });
-          logger.info('SYNC', 'SyncAgent attached', { upstream, intervalMs, batchSize, authMode });
-        } else {
-          const reasons: string[] = [];
-          if (role !== 'client') reasons.push(`role=${role}`);
-          if (!syncEnabled) reasons.push('sync disabled');
-          if (!upstream) reasons.push('no upstream URL');
-          logger.warn('SYNC', `SyncAgent skipped: ${reasons.join(', ')}`);
+        if (!this.tryStartSyncAgent()) {
+          this.watchSyncSettings();
         }
       } catch (error) {
         logger.error('SYNC', 'SyncAgent bootstrap failed', {}, error as Error);
@@ -850,7 +819,90 @@ export class WorkerService implements WorkerRef {
     this.sessionManager.removeSessionImmediate(sessionDbId);
   }
 
+  /**
+   * Read settings.json fresh and start SyncAgent if config is complete.
+   * Idempotent — returns true if an agent is already running. Returns
+   * false (and logs the reason) when prerequisites aren't met yet so the
+   * caller can install a file watcher and retry.
+   */
+  private tryStartSyncAgent(): boolean {
+    if (this.syncAgent) return true;
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const role = (settings.CLAUDE_MEM_NODE_ROLE ?? 'client').trim().toLowerCase();
+    const syncEnabled = (settings.CLAUDE_MEM_SYNC_ENABLED ?? 'true').trim().toLowerCase() === 'true';
+    const upstream = (settings.CLAUDE_MEM_SYNC_UPSTREAM_URL ?? '').trim();
+    if (!(role === 'client' && syncEnabled && upstream)) {
+      const reasons: string[] = [];
+      if (role !== 'client') reasons.push(`role=${role}`);
+      if (!syncEnabled) reasons.push('sync disabled');
+      if (!upstream) reasons.push('no upstream URL');
+      logger.warn('SYNC', `SyncAgent skipped: ${reasons.join(', ')}`);
+      return false;
+    }
+    const redactPatterns = (settings.CLAUDE_MEM_SYNC_REDACT_PATTERNS ?? '')
+      .split(',').map(s => s.trim()).filter(Boolean);
+    const intervalMs = Math.max(5000, Number.parseInt(settings.CLAUDE_MEM_SYNC_INTERVAL_MS ?? '30000', 10) || 30000);
+    const batchSize = Math.max(1, Number.parseInt(settings.CLAUDE_MEM_SYNC_BATCH_SIZE ?? '200', 10) || 200);
+    const retryMax = Math.max(0, Number.parseInt(settings.CLAUDE_MEM_SYNC_RETRY_MAX ?? '8', 10) || 8);
+    const authModeRaw = (settings.CLAUDE_MEM_SYNC_AUTH_MODE ?? 'none').trim().toLowerCase();
+    const authMode = (['none', 'apikey', 'jwt', 'mtls'] as const).includes(authModeRaw as 'none' | 'apikey' | 'jwt' | 'mtls')
+      ? (authModeRaw as 'none' | 'apikey' | 'jwt' | 'mtls')
+      : 'none';
+    const accessToken = (settings.CLAUDE_MEM_SYNC_ACCESS_TOKEN ?? '').trim();
+    const agent = new SyncAgent(this.dbManager, {
+      upstreamUrl: upstream,
+      userLabel: resolveUserLabel(USER_SETTINGS_PATH),
+      authMode,
+      apiKey: settings.CLAUDE_MEM_SYNC_API_KEY || undefined,
+      accessToken: accessToken || undefined,
+      intervalMs,
+      batchSize,
+      retryMax,
+      redactPatterns,
+    });
+    this.syncAgent = agent;
+    agent.start().catch(error => {
+      logger.error('SYNC', 'SyncAgent failed to start (continuing without sync)', {}, error as Error);
+    });
+    logger.info('SYNC', 'SyncAgent attached', { upstream, intervalMs, batchSize, authMode });
+    return true;
+  }
+
+  /**
+   * Poll settings.json for changes and retry SyncAgent bootstrap when it
+   * appears. Stops itself once the agent comes up. Covers the worker-
+   * starts-before-install-writes-settings race that otherwise leaves the
+   * client permanently silent.
+   */
+  private watchSyncSettings(): void {
+    if (this.syncSettingsWatcherActive) return;
+    this.syncSettingsWatcherActive = true;
+    let debounce: ReturnType<typeof setTimeout> | null = null;
+    watchFile(USER_SETTINGS_PATH, { interval: 1000 }, (curr) => {
+      if (curr.size === 0) return;
+      if (debounce) clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        debounce = null;
+        try {
+          if (this.tryStartSyncAgent()) {
+            unwatchFile(USER_SETTINGS_PATH);
+            this.syncSettingsWatcherActive = false;
+            logger.info('SYNC', 'SyncAgent late-started after settings.json updated');
+          }
+        } catch (error) {
+          logger.error('SYNC', 'SyncAgent late-start failed', {}, error as Error);
+        }
+      }, 200);
+      debounce.unref?.();
+    });
+    logger.info('SYNC', 'Watching settings.json for sync config', { path: USER_SETTINGS_PATH });
+  }
+
   async shutdown(): Promise<void> {
+    if (this.syncSettingsWatcherActive) {
+      unwatchFile(USER_SETTINGS_PATH);
+      this.syncSettingsWatcherActive = false;
+    }
     if (this.transcriptWatcher) {
       this.transcriptWatcher.stop();
       this.transcriptWatcher = null;

@@ -55,6 +55,8 @@ export const translations: Record<Locale, Dict> = {
     'sidebar.inUseChip': 'in use',
     'sidebar.inUseTip': 'Currently in use by an AI session — cannot be deleted right now.',
     'sidebar.selectCheckbox': 'Select this project',
+    'sidebar.userGroupTip': 'Click to expand/collapse projects for this user',
+    'sidebar.unknownUser': 'unknown',
 
     'feed.empty': 'No items to display',
     'feed.loading': 'Loading more...',
@@ -188,6 +190,8 @@ export const translations: Record<Locale, Dict> = {
     'sidebar.inUseChip': '使用中',
     'sidebar.inUseTip': '该项目正被 AI 会话使用，暂时无法删除。',
     'sidebar.selectCheckbox': '选择该项目',
+    'sidebar.userGroupTip': '点击展开/收起该用户的项目',
+    'sidebar.unknownUser': '未知',
 
     'feed.empty': '暂无内容',
     'feed.loading': '正在加载更多……',
