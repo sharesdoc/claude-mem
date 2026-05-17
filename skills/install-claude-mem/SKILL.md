@@ -50,11 +50,12 @@
 #### 1.3 服务端专属
 
 **Access Token**（可选但强烈推荐）：
-> 设置一个 Access Token（共享密钥），客户端连上来时必须带上这个 token。直接回车我会随机生成一个 32 字符的 token。
+> 设置一个 Access Token（共享密钥）。直接回车我会自动生成一个随机 token。
 >
-> Token 只用于 LAN 内网鉴权——比 CSV 白名单简单，比 API Key 体系轻量。
+> 这是客户端连上来时必须提供的凭证。Token 只用于 LAN 内网鉴权。
 
-如果用户不填，用 `node -e "console.log(require('crypto').randomBytes(16).toString('base64url'))"` 生成一个。
+如果用户自己设了 token，记下它——后面要发给员工。
+如果用户不填，用 `node -e "console.log(require('crypto').randomBytes(16).toString('base64url'))"` 生成。
 
 ---
 
@@ -125,15 +126,47 @@ curl -s -m 5 -H "Authorization: Bearer <ACCESS_TOKEN>" "http://<SERVER_URL>/api/
 根据 `ROLE` 输出不同的完成信息：
 
 **服务端**：
+
+首先确定本机 IP 和端口：
+```bash
+# 获取本机 LAN IP
+ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'
+# 获取 worker 端口
+cat ~/.claude-mem/worker.pid | grep -o '"port":[0-9]*'
+```
+
+然后输出完整的接入信息（替换 `<IP>` `<PORT>` `<TOKEN>` 为实际值）：
+
 ```
 ✅ 服务端安装完成！
 
-- Viewer 地址：http://<本机IP>:<端口>/
-- 员工接入信息（告诉每个员工）：
-  - Server URL: http://<本机IP>:37701
-  - Access Token: <TOKEN>
-- 下一步：在另一台机器上用 claude-mem AI 助手执行客户端安装
+📄 SERVER-INFO.md 已生成在 install-claude-mem 所在目录，包含全部接入信息。
+
+🔑 Access Token：<TOKEN>
+   （请妥善保存——这是客户端接入的唯一凭证）
+🌐 Server API URL：http://<IP>:<PORT>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 客户端接入信息（复制发给每个员工）
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+在员工电脑上执行（替换 <员工名>）：
+
+  ./install-claude-mem -i claude \
+    --role client \
+    --upstream http://<IP>:<PORT> \
+    --label <员工名> \
+    --token <TOKEN>
+
+或通过 AI 助手安装：在本对话中说"安装 claude-mem 客户端"，
+按提示填写 Server URL 和 Access Token 即可。
 ```
+
+如果 token 是用户自己设定的，额外提示：
+> ⚠️ 你使用的是自定义 token，请确保已安全地告知每位员工。token 泄露后任何人都能向 server 推送数据。
+
+如果 token 是自动生成的，额外提示：
+> 💡 此 token 由系统自动生成。完整信息已写入 `SERVER-INFO.md`。如需轮换 token，直接修改 server 的 `~/.claude-mem/settings.json` 中 `CLAUDE_MEM_SERVER_ACCESS_TOKEN`，然后同步更新所有客户端。
 
 **客户端**：
 ```

@@ -726,11 +726,80 @@ console.log(' ✓ settings.json updated');
 EOF
 
   if [[ "$role" == "server" ]]; then
-    info "Server mode: bind=0.0.0.0; shared access token configured"
+    info "Server mode: bind=0.0.0.0"
   fi
   if [[ "$role" == "client" && -z "$upstream" ]]; then
     warn "client mode without --upstream: SyncAgent will not start until you set CLAUDE_MEM_SYNC_UPSTREAM_URL"
   fi
+}
+
+# ── Server info generator ───────────────────────────────────────────
+get_lan_ip() {
+  if command -v ipconfig &>/dev/null; then
+    ipconfig getifaddr en0 2>/dev/null && return
+  fi
+  if command -v hostname &>/dev/null && hostname -I &>/dev/null; then
+    hostname -I 2>/dev/null | awk '{print $1}' | grep -v '^$' && return
+  fi
+  echo "(无法自动检测，请用 ifconfig / ip addr 查看)"
+}
+
+generate_server_info_md() {
+  local token="$1"
+  local port
+  port="$(get_worker_port)"
+  local ip
+  ip="$(get_lan_ip)"
+
+  local file="$SCRIPT_DIR/SERVER-INFO.md"
+  cat > "$file" <<SERVEREOF
+# claude-mem Server Info
+
+> 生成时间：$(date '+%Y-%m-%d %H:%M:%S')
+> 此文件包含客户端接入所需的关键信息，请妥善保管，不要提交到版本库。
+
+## 接入信息
+
+| 项目 | 值 |
+|---|---|
+| **Server API URL** | \`http://${ip}:${port}\` |
+| **Access Token** | \`${token}\` |
+
+## 客户端安装命令
+
+在员工的电脑上执行（替换 \`<员工名>\` 为实际标识，如 \`zhangsan\`）：
+
+```bash
+./install-claude-mem -i claude \\
+  --role client \\
+  --upstream http://${ip}:${port} \\
+  --label <员工名> \\
+  --token ${token}
+```
+
+## 验证连通性
+
+```bash
+# 在客户端执行
+curl -s -H "Authorization: Bearer ${token}" "http://${ip}:${port}/api/sync/status"
+```
+
+返回 JSON 即表示连通成功。
+
+## 安全提醒
+
+- 此 token 是共享密钥，泄露后任何人都能向 server 推送数据
+- 如需轮换 token，server 端改 \`CLAUDE_MEM_SERVER_ACCESS_TOKEN\`，所有客户端同步更新
+- 建议将此文件移出共享目录或加密存储
+SERVEREOF
+
+  ok "SERVER-INFO.md generated at $file"
+  echo ""
+  printf "  ${BOLD}🔑 Access Token:${RESET} ${GREEN}%s${RESET}\n" "$token"
+  printf "  ${BOLD}🌐 Server URL:  ${RESET}%s\n" "http://${ip}:${port}"
+  echo ""
+  printf "  ${DIM}将此信息发给每个需要接入的员工。${RESET}\n"
+  printf "  ${DIM}客户端安装命令已写入 %s${RESET}\n" "$file"
 }
 
 # ── Main ────────────────────────────────────────────────────────────
@@ -777,6 +846,15 @@ main() {
     sync_label="$(whoami)"
   fi
 
+  # Server mode: auto-generate an access token if the user didn't provide one.
+  if [[ "$sync_role" == "server" && -z "$sync_token" ]]; then
+    sync_token="$(node -e "console.log(require('crypto').randomBytes(16).toString('base64url'))" 2>/dev/null)"
+    if [[ -z "$sync_token" ]]; then
+      # Fallback if node is unavailable during install
+      sync_token="$(openssl rand -hex 16 2>/dev/null || echo "change-me-$(date +%s)")"
+    fi
+  fi
+
   # No args → help
   if [[ -z "$action" ]]; then
     show_help
@@ -793,8 +871,10 @@ main() {
         exit 1
       fi
       case "$target" in
-        claude) do_install_claude; apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token" ;;
-        codex)  do_install_codex;  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token" ;;
+        claude) do_install_claude; apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
+        codex)  do_install_codex;  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac
       ;;
