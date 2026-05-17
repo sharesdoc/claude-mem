@@ -127,12 +127,19 @@ curl -s -m 5 -H "Authorization: Bearer <ACCESS_TOKEN>" "http://<SERVER_URL>/api/
 
 **服务端**：
 
-首先确定本机 IP 和端口：
+安装脚本已自动生成 `SERVER-INFO.md`，先读取它获取 token 和 URL：
+```bash
+cat SERVER-INFO.md
+```
+
+如果 SERVER-INFO.md 不在当前目录，手动获取：
 ```bash
 # 获取本机 LAN IP
 ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'
 # 获取 worker 端口
-cat ~/.claude-mem/worker.pid | grep -o '"port":[0-9]*'
+grep -o '"port":[0-9]*' ~/.claude-mem/worker.pid | grep -o '[0-9]*'
+# 获取 token
+grep -o '"CLAUDE_MEM_SERVER_ACCESS_TOKEN":"[^"]*"' ~/.claude-mem/settings.json | cut -d'"' -f4
 ```
 
 然后输出完整的接入信息（替换 `<IP>` `<PORT>` `<TOKEN>` 为实际值）：

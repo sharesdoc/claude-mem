@@ -685,6 +685,16 @@ apply_sync_settings() {
     printf '{"env":{}}\n' > "$file"
   fi
 
+  # Pre-compute JS-safe string-or-null values before the heredoc.
+  # The old ${var:+\"$var\"}${var:-null} pattern was broken: when var is set,
+  # BOTH branches expand, producing '"value"value' which is a JS syntax error.
+  _js() { if [[ -n "$1" ]]; then printf '"%s"' "$1"; else printf null; fi; }
+  local _role_js;    _role_js="$(_js "$role")"
+  local _upstream_js; _upstream_js="$(_js "$upstream")"
+  local _label_js;    _label_js="$(_js "$label")"
+  local _apikey_js;   _apikey_js="$(_js "$api_key")"
+  local _token_js;    _token_js="$(_js "$token")"
+
   step "Applying sync settings"
   node - <<EOF
 const fs = require('fs');
@@ -693,11 +703,11 @@ let raw = {};
 try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
 const env = raw.env && typeof raw.env === 'object' ? raw.env : (raw.env = {});
 
-const role = ${role:+\"$role\"}${role:-null};
-const upstream = ${upstream:+\"$upstream\"}${upstream:-null};
-const label = ${label:+\"$label\"}${label:-null};
-const apiKey = ${api_key:+\"$api_key\"}${api_key:-null};
-const token = ${token:+\"$token\"}${token:-null};
+const role = ${_role_js};
+const upstream = ${_upstream_js};
+const label = ${_label_js};
+const apiKey = ${_apikey_js};
+const token = ${_token_js};
 
 if (role) {
   env.CLAUDE_MEM_NODE_ROLE = role;
@@ -736,12 +746,16 @@ EOF
 # ── Server info generator ───────────────────────────────────────────
 get_lan_ip() {
   if command -v ipconfig &>/dev/null; then
-    ipconfig getifaddr en0 2>/dev/null && return
+    local ip
+    ip="$(ipconfig getifaddr en0 2>/dev/null)"
+    if [[ -n "$ip" ]]; then echo "$ip"; return; fi
   fi
-  if command -v hostname &>/dev/null && hostname -I &>/dev/null; then
-    hostname -I 2>/dev/null | awk '{print $1}' | grep -v '^$' && return
+  if command -v hostname &>/dev/null; then
+    local ip
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    if [[ -n "$ip" ]]; then echo "$ip"; return; fi
   fi
-  echo "(无法自动检测，请用 ifconfig / ip addr 查看)"
+  echo "YOUR-SERVER-IP"
 }
 
 generate_server_info_md() {
@@ -895,8 +909,10 @@ main() {
         exit 1
       fi
       case "$target" in
-        claude) do_uninstall_claude; do_install_claude ;;
-        codex)  do_uninstall_codex;  do_install_codex ;;
+        claude) do_uninstall_claude; do_install_claude; apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
+        codex)  do_uninstall_codex;  do_install_codex;  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac
       ;;
