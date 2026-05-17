@@ -24,32 +24,39 @@ TOKEN=$(node -e "try{const c=require('$SETTINGS');const e=c.env||c;console.log(e
 ENABLED=$(node -e "try{const c=require('$SETTINGS');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_ENABLED||'true')}catch(e){console.log('true')}" 2>/dev/null || echo "true")
 LABEL=$(node -e "try{const c=require('$SETTINGS');const e=c.env||c;console.log(e.CLAUDE_MEM_USER_LABEL||require('os').userInfo().username)}catch(e){console.log(require('os').userInfo().username)}" 2>/dev/null || echo "unknown")
 
-HOST=$(node -e "const u=require('os').userInfo();console.log(37700 + (u.uid % 100))" 2>/dev/null || echo "37700")
+# Read port: worker.pid > settings.json > default uid calc
+if [[ -f "$HOME/.claude-mem/worker.pid" ]]; then
+  PORT=$(grep -o '"port":[[:space:]]*[0-9]*' "$HOME/.claude-mem/worker.pid" 2>/dev/null | grep -o '[0-9]*$' || true)
+fi
+if [[ -z "${PORT:-}" && -f "$SETTINGS" ]]; then
+  PORT=$(node -e "try{const c=require('$SETTINGS');const e=c.env||c;console.log(e.CLAUDE_MEM_WORKER_PORT||'')}catch(e){console.log('')}" 2>/dev/null || true)
+fi
+PORT="${PORT:-$(node -e "const u=require('os').userInfo();console.log(37700 + (u.uid % 100))" 2>/dev/null || echo "37700")}"
 
 # ── Header ──────────────────────────────────────────────────────────
 echo ""
 printf "${BOLD}claude-mem 连通性测试${RESET}\n\n"
 printf "  角色:     ${BLUE}%s${RESET}\n" "$ROLE"
 printf "  标识:     ${BLUE}%s${RESET}\n" "$LABEL"
-printf "  本地端口: ${BLUE}%s${RESET}\n" "$HOST"
+printf "  本地端口: ${BLUE}%s${RESET}\n" "$PORT"
 printf "  上游 URL: ${BLUE}%s${RESET}\n" "${UPSTREAM:-（无）}"
 printf "  Token:    ${BLUE}%s${RESET}\n" "${TOKEN:0:10}...${TOKEN: -6}"
 echo ""
 
 # ── 1. Local worker ─────────────────────────────────────────────────
 echo "${BOLD}1. 本地 worker${RESET}"
-if curl -s -m 3 "http://127.0.0.1:$HOST/api/admin/role" >/dev/null 2>&1; then
-  ROLE_RESP=$(curl -s -m 3 "http://127.0.0.1:$HOST/api/admin/role")
+if curl -s -m 3 "http://127.0.0.1:$PORT/api/admin/role" >/dev/null 2>&1; then
+  ROLE_RESP=$(curl -s -m 3 "http://127.0.0.1:$PORT/api/admin/role")
   LOCAL_ROLE=$(echo "$ROLE_RESP" | node -e "process.stdin.on('data',d=>{try{console.log(JSON.parse(d).role)}catch(e){console.log('?')}})" 2>/dev/null || echo "?")
   ok "本地 worker 运行中 (role=$LOCAL_ROLE)"
 else
-  fail "本地 worker 未响应 (http://127.0.0.1:$HOST)"
+  fail "本地 worker 未响应 (http://127.0.0.1:$PORT)"
 fi
 
 # ── 2. Sync status ──────────────────────────────────────────────────
 echo ""
 echo "${BOLD}2. 同步状态${RESET}"
-SYNC=$(curl -s -m 5 "http://127.0.0.1:$HOST/api/sync/status" 2>/dev/null || echo '{}')
+SYNC=$(curl -s -m 5 "http://127.0.0.1:$PORT/api/sync/status" 2>/dev/null || echo '{}')
 LAG=$(echo "$SYNC" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.lag?.total ?? '?')}catch(e){console.log('?')}})" 2>/dev/null || echo "?")
 FAILURES=$(echo "$SYNC" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.consecutive_failures ?? '?')}catch(e){console.log('?')}})" 2>/dev/null || echo "?")
 
@@ -125,7 +132,7 @@ if [[ "$ROLE" == "server" ]]; then
   echo "  这是 ${GREEN}服务端${RESET}。客户端接入命令："
   echo ""
   if [[ -n "$TOKEN" ]]; then
-    printf "  ${DIM}./install-claude-mem -i claude --role client --upstream http://<IP>:%s --label <用户名> --token %s${RESET}\n" "$HOST" "$TOKEN"
+    printf "  ${DIM}./install-claude-mem -i claude --role client --upstream http://<IP>:%s --label <用户名> --token %s${RESET}\n" "$PORT" "$TOKEN"
   fi
   if [[ -f "SERVER-INFO.md" ]]; then
     printf "  ${DIM}详见: %s${RESET}\n" "$(pwd)/SERVER-INFO.md"
