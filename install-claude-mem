@@ -759,14 +759,18 @@ get_lan_ip() {
 }
 
 generate_server_info_md() {
+  # This function MUST NOT cause the script to exit (set -e is active).
+  # All commands are guarded so the user always sees token + URL even
+  # when optional steps (IP detection, file write) fail.
   local token="$1"
   local port
-  port="$(get_worker_port)"
+  port="$(get_worker_port)" || true
   local ip
-  ip="$(get_lan_ip)"
+  ip="$(get_lan_ip)" || true
 
   local file="$SCRIPT_DIR/SERVER-INFO.md"
-  cat > "$file" <<SERVEREOF
+  # Best-effort: write the info file. Failure is non-fatal.
+  cat > "$file" 2>/dev/null <<SERVEREOF
 # claude-mem Server Info
 
 > 生成时间：$(date '+%Y-%m-%d %H:%M:%S')
@@ -807,13 +811,23 @@ curl -s -H "Authorization: Bearer ${token}" "http://${ip}:${port}/api/sync/statu
 - 建议将此文件移出共享目录或加密存储
 SERVEREOF
 
-  ok "SERVER-INFO.md generated at $file"
+  if [[ -s "$file" ]]; then
+    ok "SERVER-INFO.md generated at $file"
+  else
+    warn "Could not write SERVER-INFO.md (check directory permissions)"
+  fi
+
+  # Token and URL are ALWAYS printed, regardless of file write success.
   echo ""
-  printf "  ${BOLD}🔑 Access Token:${RESET} ${GREEN}%s${RESET}\n" "$token"
-  printf "  ${BOLD}🌐 Server URL:  ${RESET}%s\n" "http://${ip}:${port}"
+  echo "  ┌─────────────────────────────────────────────┐"
+  printf "  │  🔑 Access Token:  %-25s │\n" "$token"
+  printf "  │  🌐 Server URL:    %-25s │\n" "http://${ip}:${port}"
+  echo "  └─────────────────────────────────────────────┘"
   echo ""
-  printf "  ${DIM}将此信息发给每个需要接入的员工。${RESET}\n"
-  printf "  ${DIM}客户端安装命令已写入 %s${RESET}\n" "$file"
+  printf "  ${DIM}将以上信息发给每个需要接入的员工。${RESET}\n"
+  if [[ -s "$file" ]]; then
+    printf "  ${DIM}完整信息已写入 %s${RESET}\n" "$file"
+  fi
 }
 
 # ── Main ────────────────────────────────────────────────────────────

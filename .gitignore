@@ -51,3 +51,4 @@ logs/run_evaluation/
 docker/install-test/
 .aitask.md
 .pid
+SERVER-INFO.md
