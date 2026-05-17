@@ -745,16 +745,39 @@ EOF
 
 # ── Server info generator ───────────────────────────────────────────
 get_lan_ip() {
-  if command -v ipconfig &>/dev/null; then
-    local ip
-    ip="$(ipconfig getifaddr en0 2>/dev/null)"
-    if [[ -n "$ip" ]]; then echo "$ip"; return; fi
+  # Collect all IPv4 addresses from every interface, then pick the best
+  # one: 192.168.x.x preferred, then 10.x.x.x, then 172.16-31.x.x,
+  # then any other non-loopback. "YOUR-SERVER-IP" only if nothing found.
+  local all_ips=""
+
+  if command -v ifconfig &>/dev/null; then
+    all_ips="$(ifconfig 2>/dev/null | grep -oE 'inet (addr:)?[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | awk '{print $NF}')"
+  elif command -v ip &>/dev/null; then
+    all_ips="$(ip -4 addr show 2>/dev/null | grep -oE 'inet [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | awk '{print $2}' | cut -d/ -f1)"
   fi
-  if command -v hostname &>/dev/null; then
-    local ip
-    ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
-    if [[ -n "$ip" ]]; then echo "$ip"; return; fi
+
+  if [[ -z "$all_ips" ]]; then
+    echo "YOUR-SERVER-IP"
+    return
   fi
+
+  # Prefer 192.168.x.x
+  local pick
+  pick="$(echo "$all_ips" | grep -m1 '^192\.168\.')"
+  if [[ -n "$pick" ]]; then echo "$pick"; return; fi
+
+  # Then 10.x.x.x
+  pick="$(echo "$all_ips" | grep -m1 '^10\.')"
+  if [[ -n "$pick" ]]; then echo "$pick"; return; fi
+
+  # Then 172.[16-31].x.x
+  pick="$(echo "$all_ips" | grep -m1 '^172\.')"
+  if [[ -n "$pick" ]]; then echo "$pick"; return; fi
+
+  # Any non-loopback
+  pick="$(echo "$all_ips" | grep -v '^127\.' | head -1)"
+  if [[ -n "$pick" ]]; then echo "$pick"; return; fi
+
   echo "YOUR-SERVER-IP"
 }
 
