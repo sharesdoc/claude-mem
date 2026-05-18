@@ -446,20 +446,43 @@ do_stop_worker() {
     return
   fi
 
+  # Try graceful stop via worker script with a 5s timeout.
+  # If the worker hangs or the script is missing, fall through to PID kill.
   if [[ -f "$WORKER_SCRIPT" ]]; then
-    info "Stopping worker via bun..."
-    bun "$WORKER_SCRIPT" stop >/dev/null 2>&1 || true
+    info "Stopping worker via bun (timeout 5s)..."
+    bun "$WORKER_SCRIPT" stop >/dev/null 2>&1 &
+    local stop_pid=$!
+    # Wait up to 5s, then kill the stop subprocess
+    local waited=0
+    while [[ $waited -lt 5 ]]; do
+      if ! kill -0 "$stop_pid" 2>/dev/null; then break; fi
+      sleep 1
+      waited=$((waited + 1))
+    done
+    kill "$stop_pid" 2>/dev/null || true
+    wait "$stop_pid" 2>/dev/null || true
   fi
 
-  # Belt-and-braces: kill by PID file if still alive
+  # Belt-and-braces: kill by PID file if still alive, and also try
+  # finding the worker by port when the PID file is missing / stale.
+  local pid=""
   if [[ -f "$PID_FILE" ]]; then
-    local pid
     pid=$(grep -o '"pid":[[:space:]]*[0-9]*' "$PID_FILE" 2>/dev/null | grep -o '[0-9]*$' || true)
-    if [[ -n "$pid" ]] && ps -p "$pid" >/dev/null 2>&1; then
-      kill "$pid" 2>/dev/null || true
-      sleep 1
-      ps -p "$pid" >/dev/null 2>&1 && kill -9 "$pid" 2>/dev/null || true
+  fi
+  if [[ -z "$pid" ]] || ! ps -p "$pid" >/dev/null 2>&1; then
+    # Fallback: find worker by port when PID file is missing or stale
+    local port
+    port=$(get_worker_port)
+    pid=$(lsof -ti "TCP:127.0.0.1:${port}" -sTCP:LISTEN 2>/dev/null || true)
+    if [[ -z "$pid" ]] && command -v fuser >/dev/null 2>&1; then
+      pid=$(fuser "${port}/tcp" 2>/dev/null | grep -o '[0-9]*' | head -1 || true)
     fi
+  fi
+
+  if [[ -n "$pid" ]] && ps -p "$pid" >/dev/null 2>&1; then
+    kill "$pid" 2>/dev/null || true
+    sleep 2
+    ps -p "$pid" >/dev/null 2>&1 && kill -9 "$pid" 2>/dev/null || true
   fi
 
   if check_worker_running; then
