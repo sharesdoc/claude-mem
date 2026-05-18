@@ -68,6 +68,32 @@ export class MigrationRunner {
     this.addSessionUserLabelColumn();
     this.createSyncInboxTable();
     this.addApiKeysUserLabelColumn();
+    this.ensureAdminLoginAttemptsTable();
+  }
+
+  /**
+   * v39 — Admin login rate-limiting table for server-mode viewer auth.
+   * Tracks every attempt so the rate-limiter can enforce 1/min and 10/day.
+   */
+  private ensureAdminLoginAttemptsTable(): void {
+    const applied = this.db.prepare(
+      'SELECT version FROM schema_versions WHERE version = ?'
+    ).get(39) as SchemaVersion | undefined;
+    if (applied) return;
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS admin_login_attempts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        attempted_at_epoch INTEGER NOT NULL,
+        success INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_admin_attempts_epoch ON admin_login_attempts(attempted_at_epoch)');
+
+    this.db.prepare(
+      'INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)'
+    ).run(39, new Date().toISOString());
+    logger.info('DB', 'Migration v39 applied: admin_login_attempts table');
   }
 
   /**

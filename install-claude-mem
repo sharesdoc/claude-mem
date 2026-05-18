@@ -49,7 +49,9 @@ show_help() {
   printf "  --label <NAME>         Sync identity (defaults to whoami in client mode)\n"
   printf "  --api-key <KEY>        Cloud-mode API key; flips auth_mode=apikey\n"
   printf "  --token <TOKEN>        LAN shared access token (simpler than apiKey)\n"
-  printf "  --reset-token          Force regenerate access token on reinstall\n\n"
+  printf "  --reset-token          Force regenerate access token on reinstall\n"
+  printf "  --admin-password <PW>  Set admin password for server-mode viewer auth\n"
+  printf "                         (SHA1 hashed; also unlocks locked account)\n\n"
   printf "${BOLD}Data preservation:${RESET}\n"
   printf "  ${DIM}-i / -u / -r never touch %s — DB, archives, chroma, logs all survive.${RESET}\n" "$DATA_DIR"
   printf "  ${DIM}-d explicitly deletes %s after a typed YES confirmation.${RESET}\n\n" "$DATA_DIR"
@@ -782,6 +784,53 @@ EOF
   fi
 }
 
+# ── Admin password ───────────────────────────────────────────────────
+apply_admin_password() {
+  local password="${1:-}"
+  if [[ -z "$password" ]]; then return 0; fi
+
+  local file="$DATA_DIR/settings.json"
+  mkdir -p "$DATA_DIR"
+  if [[ ! -f "$file" ]]; then
+    printf '{"env":{}}\n' > "$file"
+  fi
+
+  local hash
+  hash="$(node -e "console.log(require('crypto').createHash('sha1').update(process.argv[1]).digest('hex'))" "$password" 2>/dev/null)" || true
+  if [[ -z "$hash" ]]; then
+    hash="$(printf '%s' "$password" | openssl sha1 2>/dev/null | awk '{print $NF}')" || true
+  fi
+  if [[ -z "$hash" ]]; then
+    fail "Could not hash admin password (need node or openssl)"
+    return 1
+  fi
+
+  step "Setting admin password"
+
+  node - <<ENDNODE
+const fs = require('fs');
+const path = '$file';
+let raw = {};
+try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
+// Support both flat and nested settings formats
+const settings = raw.env && typeof raw.env === 'object' ? raw.env : raw;
+settings.CLAUDE_MEM_ADMIN_PASSWORD = '$hash';
+delete settings.CLAUDE_MEM_ADMIN_LOCKED;
+if (raw.env && typeof raw.env === 'object') raw.env = settings;
+else Object.assign(raw, settings);
+fs.writeFileSync(path, JSON.stringify(raw, null, 2) + '\\n');
+console.log(' ✓ admin password set (SHA1: $hash)');
+ENDNODE
+
+  # Clear login attempts to reset rate limit
+  local db="$DATA_DIR/claude-mem.db"
+  if [[ -f "$db" ]]; then
+    sqlite3 "$db" "DELETE FROM admin_login_attempts;" 2>/dev/null || true
+  fi
+
+  ok "Admin password updated & account unlocked"
+}
+
 # ── Server info generator ───────────────────────────────────────────
 get_lan_ip() {
   # Collect all IPv4 addresses from every interface, then pick the best
@@ -913,6 +962,7 @@ main() {
   local sync_api_key=""
   local sync_token=""
   local reset_token=""
+  local admin_password=""
 
   # T-26: pull sync flags out of the argv first so the existing
   # action/target positional logic stays unchanged.
@@ -930,11 +980,13 @@ main() {
       --token) sync_token="${2:-}"; shift 2 ;;
       --token=*) sync_token="${1#--token=}"; shift ;;
       --reset-token) reset_token="1"; shift ;;
+      --admin-password) admin_password="${2:-}"; shift 2 ;;
+      --admin-password=*) admin_password="${1#--admin-password=}"; shift ;;
       *) args+=("$1"); shift ;;
     esac
   done
 
-  set -- "${args[@]}"
+  set -- "${args[@]:-}"
   action="${1:-}"
   target="${2:-}"
 
@@ -990,6 +1042,12 @@ try {
     fi
   fi
 
+  # Standalone --admin-password (no install action needed)
+  if [[ -z "$action" && -n "$admin_password" ]]; then
+    apply_admin_password "$admin_password"
+    return
+  fi
+
   # No args → help
   if [[ -z "$action" ]]; then
     show_help
@@ -1006,9 +1064,9 @@ try {
         exit 1
       fi
       case "$target" in
-        claude) do_install_claude; apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+        claude) do_install_claude; apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
-        codex)  do_install_codex;  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+        codex)  do_install_codex;  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac
@@ -1030,9 +1088,9 @@ try {
         exit 1
       fi
       case "$target" in
-        claude) do_uninstall_claude; do_install_claude; apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+        claude) do_uninstall_claude; do_install_claude; apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
-        codex)  do_uninstall_codex;  do_install_codex;  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+        codex)  do_uninstall_codex;  do_install_codex;  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac

@@ -15,6 +15,8 @@ import { useLocale } from './hooks/useLocale';
 import { useRole } from './hooks/useRole';
 import { useUsers } from './hooks/useUsers';
 import { useSyncStatus } from './hooks/useSyncStatus';
+import { useAuth } from './hooks/useAuth';
+import { LoginPage } from './components/LoginPage';
 import { Observation, Summary, UserPrompt } from './types';
 import { mergeAndDeduplicateByProject } from './utils/data';
 
@@ -65,6 +67,7 @@ export function App() {
   const { preference, setThemePreference } = useTheme();
   const { t } = useLocale();
   const role = useRole();
+  const auth = useAuth();
   const { users } = useUsers(role.role === 'server' && role.ready);
   // Always include the current user in the picker — even before any sync
   // data arrives, the server operator needs to be able to filter their
@@ -238,6 +241,23 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [observations.length]);
 
+  // Server-mode auth gate
+  const isServer = role.role === 'server' && role.ready;
+  if (isServer && auth.isLoading) {
+    return <div className="login-page"><div className="login-card" style={{ textAlign: 'center' }}><p style={{ color: 'var(--fg-muted, #8b949e)' }}>Loading...</p></div></div>;
+  }
+  if (isServer && !auth.isAuthenticated) {
+    return (
+      <LoginPage
+        onLogin={auth.login}
+        isLoading={auth.isLoading}
+        error={auth.error}
+        attemptsRemaining={auth.attemptsRemaining}
+        retryAfterSec={auth.retryAfterSec}
+      />
+    );
+  }
+
   return (
     <>
       <div className="app-shell">
@@ -277,6 +297,7 @@ export function App() {
               setStoredWelcomeDismissed(false);
               setWelcomeDismissed(false);
             }}
+            onLogout={isServer ? auth.logout : undefined}
           />
           <Feed
             observations={allObservations}

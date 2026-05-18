@@ -99,6 +99,7 @@ import { resolveUserLabel } from '../shared/user-label.js';
 import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
 import { ChromaRoutes } from './worker/http/routes/ChromaRoutes.js';
 import { AdminRoutes } from './worker/http/routes/AdminRoutes.js';
+import { AuthRoutes } from './worker/http/routes/AuthRoutes.js';
 
 import { CorpusStore } from './worker/knowledge/CorpusStore.js';
 import { CorpusBuilder } from './worker/knowledge/CorpusBuilder.js';
@@ -323,6 +324,8 @@ export class WorkerService implements WorkerRef {
     // of returning a misleading single-user list.
     if (resolveBindAddress().role === 'server') {
       this.server.registerRoutes(new UsersRoutes(this.dbManager));
+      // T-41: Auth routes for server-mode viewer login
+      this.server.registerRoutes(new AuthRoutes(this.dbManager));
       // T-09: /api/sync/ingest — server-only ingest endpoint.
       const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
       this.server.registerRoutes(new SyncRoutes(this.dbManager, {
