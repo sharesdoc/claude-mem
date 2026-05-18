@@ -74,8 +74,14 @@ export function useSSE() {
     try {
       const r = await fetch('/api/projects/stats');
       if (!r.ok) return;
-      const body = (await r.json()) as { projects?: Record<string, ProjectStat> };
+      const body = (await r.json()) as {
+        projects?: Record<string, ProjectStat>;
+        projectUsers?: Record<string, string | null>;
+      };
       if (body.projects) setProjectStats(body.projects);
+      // Also refresh user mapping so UNKNOWN groups disappear without
+      // waiting for a full page reload.
+      if (body.projectUsers) setProjectUsers(body.projectUsers);
     } catch {
       // Network blip or worker not ready — fall back to incremental SSE
       // accumulation (still wrong-but-not-broken).

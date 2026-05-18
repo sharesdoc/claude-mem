@@ -537,7 +537,8 @@ export class DataRoutes extends BaseRouteHandler {
       if (row.latest > s.latest) s.latest = row.latest;
     }
 
-    res.json({ projects: stats });
+    const projectUsers = this.dbManager.getSessionStore().getProjectCatalog().projectUsers;
+    res.json({ projects: stats, projectUsers });
   });
 
   private handleGetProcessingStatus = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
