@@ -44,7 +44,10 @@ export function useAuth() {
       headers: { Authorization: `Bearer ${token}` },
       signal: controller.signal,
     })
-      .then(r => r.json())
+      .then(async r => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((body: { authenticated: boolean }) => {
         if (!controller.signal.aborted) {
           setState({
@@ -58,6 +61,7 @@ export function useAuth() {
       })
       .catch(() => {
         if (!controller.signal.aborted) {
+          localStorage.removeItem(TOKEN_KEY);
           setState(prev => ({ ...prev, isLoading: false }));
         }
       });
@@ -71,70 +75,75 @@ export function useAuth() {
   const login = useCallback(async (password: string): Promise<boolean> => {
     setState(prev => ({ ...prev, isLoading: true, error: null, retryAfterSec: null }));
 
+    let r: Response;
     try {
-      const r = await fetch('/api/admin/login', {
+      r = await fetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username: 'admin', password }),
       });
-
-      const body = await r.json() as {
-        token?: string;
-        error?: string;
-        reason?: string;
-        attempts_remaining?: number;
-        retry_after_sec?: number;
-      };
-
-      if (r.ok && body.token) {
-        localStorage.setItem(TOKEN_KEY, body.token);
-        setState({
-          isAuthenticated: true,
-          isLoading: false,
-          error: null,
-          attemptsRemaining: null,
-          retryAfterSec: null,
-        });
-        return true;
-      }
-
-      // Handle rate limiting
-      if (r.status === 429) {
-        const waitSec = body.retry_after_sec ?? 60;
-        setState(prev => ({
-          ...prev,
-          isLoading: false,
-          error: body.reason ?? 'rate limited',
-          attemptsRemaining: null,
-          retryAfterSec: waitSec,
-        }));
-
-        // Auto-clear cooldown
-        clearCooldown();
-        cooldownRef.current = setTimeout(() => {
-          setState(prev => prev.retryAfterSec === waitSec ? { ...prev, retryAfterSec: null, error: null } : prev);
-        }, waitSec * 1000);
-
-        return false;
-      }
-
-      // Bad credentials or locked
-      setState(prev => ({
-        ...prev,
-        isLoading: false,
-        error: body.reason ?? body.error ?? 'login failed',
-        attemptsRemaining: body.attempts_remaining ?? null,
-      }));
-
-      return false;
     } catch {
       setState(prev => ({
         ...prev,
         isLoading: false,
-        error: 'network error',
+        error: 'Cannot reach server — is the worker running?',
       }));
       return false;
     }
+
+    // Parse JSON safely — non-JSON responses (e.g. HTML 404) shouldn't crash.
+    let body: { token?: string; error?: string; reason?: string; attempts_remaining?: number; retry_after_sec?: number };
+    try {
+      body = await r.json();
+    } catch {
+      setState(prev => ({
+        ...prev,
+        isLoading: false,
+        error: `Server returned unexpected response (HTTP ${r.status}). Check that the worker is running in server mode.`,
+      }));
+      return false;
+    }
+
+    if (r.ok && body.token) {
+      localStorage.setItem(TOKEN_KEY, body.token);
+      setState({
+        isAuthenticated: true,
+        isLoading: false,
+        error: null,
+        attemptsRemaining: null,
+        retryAfterSec: null,
+      });
+      return true;
+    }
+
+    // Handle rate limiting
+    if (r.status === 429) {
+      const waitSec = body.retry_after_sec ?? 60;
+      setState(prev => ({
+        ...prev,
+        isLoading: false,
+        error: body.reason ?? 'rate limited',
+        attemptsRemaining: null,
+        retryAfterSec: waitSec,
+      }));
+
+      clearCooldown();
+      cooldownRef.current = setTimeout(() => {
+        setState(prev => prev.retryAfterSec === waitSec ? { ...prev, retryAfterSec: null, error: null } : prev);
+      }, waitSec * 1000);
+
+      return false;
+    }
+
+    // Bad credentials or locked
+    setState(prev => ({
+      ...prev,
+      isLoading: false,
+      error: body.reason ?? body.error ?? 'login failed',
+      attemptsRemaining: body.attempts_remaining ?? null,
+    }));
+
+    return false;
   }, []);
 
   const logout = useCallback(async () => {

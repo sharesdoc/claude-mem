@@ -30,6 +30,7 @@ fail() { printf "  ${RED}✗${RESET} %s\n" "$1"; }
 warn() { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
 info() { printf "  ${BLUE}→${RESET} %s\n" "$1"; }
 step() { printf "\n${BOLD}%s${RESET}\n" "$1"; }
+dbg()  { [[ -n "${DEBUG:-}" ]] && printf "  ${DIM}[debug]${RESET} %s\n" "$1" || true; }
 
 # ── Help ────────────────────────────────────────────────────────────
 show_help() {
@@ -51,7 +52,8 @@ show_help() {
   printf "  --token <TOKEN>        LAN shared access token (simpler than apiKey)\n"
   printf "  --reset-token          Force regenerate access token on reinstall\n"
   printf "  --admin-password <PW>  Set admin password for server-mode viewer auth\n"
-  printf "                         (SHA1 hashed; also unlocks locked account)\n\n"
+  printf "                         (SHA1 hashed; also unlocks locked account)\n"
+  printf "  --debug                Print verbose diagnostics (set -x)\n\n"
   printf "${BOLD}Data preservation:${RESET}\n"
   printf "  ${DIM}-i / -u / -r never touch %s — DB, archives, chroma, logs all survive.${RESET}\n" "$DATA_DIR"
   printf "  ${DIM}-d explicitly deletes %s after a typed YES confirmation.${RESET}\n\n" "$DATA_DIR"
@@ -122,10 +124,12 @@ check_plugin_enabled() {
 }
 
 get_worker_port() {
+  dbg "get_worker_port: PID_FILE=$PID_FILE, settings=$DATA_DIR/settings.json"
   if [[ -f "$PID_FILE" ]]; then
     local port
     port=$(grep -o '"port":[[:space:]]*[0-9]*' "$PID_FILE" 2>/dev/null | grep -o '[0-9]*$' || true)
     if [[ -n "$port" ]]; then
+      dbg "get_worker_port: found port $port in PID file"
       echo "$port"
       return
     fi
@@ -134,16 +138,20 @@ get_worker_port() {
     local sport
     sport=$(grep -o '"CLAUDE_MEM_WORKER_PORT":[[:space:]]*"[0-9]*"' "$DATA_DIR/settings.json" 2>/dev/null | grep -o '[0-9]*$' || true)
     if [[ -n "$sport" ]]; then
+      dbg "get_worker_port: found port $sport in settings.json"
       echo "$sport"
       return
     fi
   fi
-  echo "$(( 37700 + $(id -u) % 100 ))"
+  local default_port="$(( 37700 + $(id -u) % 100 ))"
+  dbg "get_worker_port: using default port $default_port"
+  echo "$default_port"
 }
 
 check_worker_running() {
   local port
   port=$(get_worker_port)
+  dbg "check_worker_running: curl -sf http://127.0.0.1:${port}/api/health --connect-timeout 2"
   curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 2 2>/dev/null
 }
 
@@ -441,48 +449,78 @@ do_start_worker() {
 
 do_stop_worker() {
   step "Stopping worker..."
-  if ! check_worker_running && [[ ! -f "$PID_FILE" ]]; then
+  dbg "do_stop_worker: WORKER_SCRIPT=$WORKER_SCRIPT PID_FILE=$PID_FILE DATA_DIR=$DATA_DIR"
+
+  local running
+  if check_worker_running; then
+    running=1
+    dbg "do_stop_worker: worker IS running (health check ok)"
+  else
+    running=0
+    dbg "do_stop_worker: worker is NOT running"
+  fi
+
+  if [[ "$running" -eq 0 ]] && [[ ! -f "$PID_FILE" ]]; then
+    dbg "do_stop_worker: no PID file and not running — nothing to do"
     ok "Worker not running"
     return
   fi
 
   # Try graceful stop via worker script with a 5s timeout.
-  # If the worker hangs or the script is missing, fall through to PID kill.
   if [[ -f "$WORKER_SCRIPT" ]]; then
-    info "Stopping worker via bun (timeout 5s)..."
-    bun "$WORKER_SCRIPT" stop >/dev/null 2>&1 &
-    local stop_pid=$!
-    # Wait up to 5s, then kill the stop subprocess
-    local waited=0
-    while [[ $waited -lt 5 ]]; do
-      if ! kill -0 "$stop_pid" 2>/dev/null; then break; fi
-      sleep 1
-      waited=$((waited + 1))
-    done
-    kill "$stop_pid" 2>/dev/null || true
-    wait "$stop_pid" 2>/dev/null || true
+    if command -v bun >/dev/null 2>&1; then
+      info "Stopping worker via bun (timeout 5s)..."
+      dbg "do_stop_worker: running: bun $WORKER_SCRIPT stop"
+      bun "$WORKER_SCRIPT" stop >/dev/null 2>&1 &
+      local stop_pid=$!
+      dbg "do_stop_worker: bun stop pid=$stop_pid"
+      local waited=0
+      while [[ $waited -lt 5 ]]; do
+        if ! kill -0 "$stop_pid" 2>/dev/null; then
+          dbg "do_stop_worker: bun stop exited after ${waited}s"
+          break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+      done
+      if kill -0 "$stop_pid" 2>/dev/null; then
+        dbg "do_stop_worker: killing hung bun stop (pid=$stop_pid)"
+        kill "$stop_pid" 2>/dev/null || true
+      fi
+      wait "$stop_pid" 2>/dev/null || true
+    else
+      dbg "do_stop_worker: bun not found, skipping graceful stop"
+    fi
+  else
+    dbg "do_stop_worker: WORKER_SCRIPT not found at $WORKER_SCRIPT"
   fi
 
-  # Belt-and-braces: kill by PID file if still alive, and also try
-  # finding the worker by port when the PID file is missing / stale.
+  # Belt-and-braces: kill by PID file if still alive.
   local pid=""
   if [[ -f "$PID_FILE" ]]; then
     pid=$(grep -o '"pid":[[:space:]]*[0-9]*' "$PID_FILE" 2>/dev/null | grep -o '[0-9]*$' || true)
+    dbg "do_stop_worker: PID file pid=$pid"
   fi
   if [[ -z "$pid" ]] || ! ps -p "$pid" >/dev/null 2>&1; then
     # Fallback: find worker by port when PID file is missing or stale
     local port
     port=$(get_worker_port)
+    dbg "do_stop_worker: trying to find worker on port $port"
     pid=$(lsof -ti "TCP:127.0.0.1:${port}" -sTCP:LISTEN 2>/dev/null || true)
     if [[ -z "$pid" ]] && command -v fuser >/dev/null 2>&1; then
       pid=$(fuser "${port}/tcp" 2>/dev/null | grep -o '[0-9]*' | head -1 || true)
     fi
+    dbg "do_stop_worker: port-based pid=$pid"
   fi
 
   if [[ -n "$pid" ]] && ps -p "$pid" >/dev/null 2>&1; then
+    dbg "do_stop_worker: killing pid=$pid"
     kill "$pid" 2>/dev/null || true
     sleep 2
-    ps -p "$pid" >/dev/null 2>&1 && kill -9 "$pid" 2>/dev/null || true
+    if ps -p "$pid" >/dev/null 2>&1; then
+      dbg "do_stop_worker: force-killing pid=$pid"
+      kill -9 "$pid" 2>/dev/null || true
+    fi
   fi
 
   if check_worker_running; then
@@ -986,6 +1024,7 @@ main() {
   local sync_token=""
   local reset_token=""
   local admin_password=""
+  local debug_mode=""
 
   # T-26: pull sync flags out of the argv first so the existing
   # action/target positional logic stays unchanged.
@@ -1005,6 +1044,7 @@ main() {
       --reset-token) reset_token="1"; shift ;;
       --admin-password) admin_password="${2:-}"; shift 2 ;;
       --admin-password=*) admin_password="${1#--admin-password=}"; shift ;;
+      --debug) debug_mode="1"; DEBUG="1"; shift ;;
       *) args+=("$1"); shift ;;
     esac
   done
@@ -1012,6 +1052,13 @@ main() {
   set -- "${args[@]:-}"
   action="${1:-}"
   target="${2:-}"
+
+  # Enable trace mode after all local vars are declared.
+  if [[ -n "$debug_mode" ]]; then
+    export DEBUG="1"
+    set -x
+    dbg "Debug mode enabled"
+  fi
 
   # If sync flags were passed without an action, default to -i so a single
   # `--role client --upstream … --label …` invocation is enough.
