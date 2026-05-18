@@ -280,13 +280,28 @@ export function ProjectSidebar({
     latest: number;          // max(latest) — drives group sort order
   }
   const projectGroups = useMemo<ProjectGroup[]>(() => {
+    // Build project→user_label from live SSE data (observations/summaries/
+    // prompts carry user_label on every row). This is the most up-to-date
+    // source and does not depend on React batched state ordering.
+    const liveUsers = new Map<string, string>();
+    for (const o of observations) {
+      if (o.user_label) liveUsers.set(o.project, o.user_label);
+    }
+    for (const s of summaries) {
+      if (s.user_label) liveUsers.set(s.project, s.user_label);
+    }
+    for (const p of prompts) {
+      if (p.user_label) liveUsers.set(p.project, p.user_label);
+    }
+
     // User resolution priority:
-    //   1. server-authoritative `projectUsers[project]` (user_label from
-    //      sdk_sessions — same field the SyncAgent sends upstream)
-    //   2. legacy path-based extraction (handles older rows synced before
-    //      the server learned to expose user_label)
-    //   3. empty string → renders as "unknown" group label
+    //   1. live SSE data (observations/summaries/prompts with user_label)
+    //   2. server-authoritative projectUsers map (from initial_load / API)
+    //   3. legacy path-based extraction
+    //   4. empty string → "unknown" group
     const resolveUser = (project: string): string => {
+      const live = liveUsers.get(project);
+      if (live) return live;
       const fromServer = projectUsers?.[project];
       if (fromServer && fromServer.trim()) return fromServer.trim();
       return parseProjectId(project)?.username ?? '';
@@ -310,7 +325,7 @@ export function ProjectSidebar({
       if (a.latest !== b.latest) return b.latest - a.latest;
       return a.user.localeCompare(b.user);
     });
-  }, [sortedProjects, stats, projectUsers]);
+  }, [sortedProjects, stats, projectUsers, observations, summaries, prompts]);
 
   const groupingEnabled = projectGroups.length > 1;
 
