@@ -1065,11 +1065,11 @@ show_info() {
     local raw_size
     raw_size=$(wc -c < "$db_path" 2>/dev/null || echo 0)
     if [[ "$raw_size" -gt 1073741824 ]]; then
-      db_size="$(echo "scale=1; $raw_size/1073741824" | bc 2>/dev/null || echo '?') GB"
+      db_size="$(( (raw_size + 53687091) / 1073741824 )) GB"
     elif [[ "$raw_size" -gt 1048576 ]]; then
-      db_size="$(echo "scale=1; $raw_size/1048576" | bc 2>/dev/null || echo '?') MB"
+      db_size="$(( (raw_size + 52428) / 1048576 )) MB"
     else
-      db_size="$(echo "scale=1; $raw_size/1024" | bc 2>/dev/null || echo '?') KB"
+      db_size="$(( (raw_size + 51) / 1024 )) KB"
     fi
     db_obs=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM observations;" 2>/dev/null || echo 'N/A')
     db_first=$(sqlite3 "$db_path" "SELECT MIN(created_at) FROM observations;" 2>/dev/null || echo 'N/A')
@@ -1077,11 +1077,9 @@ show_info() {
 
   local uptime="N/A"
   if [[ "$running" == "yes" ]]; then
-    local health
-    health=$(curl -sf "http://127.0.0.1:${port}/api/health" 2>/dev/null || echo '{}')
     local up_sec
-    up_sec=$(echo "$health" | node -e "process.stdin.on('data',d=>{try{console.log(JSON.parse(d).uptime||'')}catch{}})" 2>/dev/null || echo '')
-    if [[ -n "$up_sec" ]]; then
+    up_sec=$(curl -sf "http://127.0.0.1:${port}/api/health" 2>/dev/null | node -e "const d=require('fs').readFileSync('/dev/stdin','utf-8');try{console.log(JSON.parse(d).uptime||'')}catch(e){}" 2>/dev/null || echo '')
+    if [[ -n "$up_sec" && "$up_sec" =~ ^[0-9]+$ ]]; then
       local d h m s
       s=$up_sec
       d=$((s/86400)); s=$((s%86400))
