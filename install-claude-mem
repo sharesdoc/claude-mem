@@ -75,6 +75,58 @@ show_help() {
 }
 
 # ── Dependencies ─────────────────────────────────────────────────────
+# Bun release naming: bun-<darwin|linux|windows>-<x64|aarch64>.zip
+# (different from tree-sitter, which uses macos/arm64).
+_detect_bun_archive() {
+  local bun_os bun_arch
+  case "$(uname -s)" in
+    Darwin) bun_os="darwin" ;;
+    Linux)  bun_os="linux"  ;;
+    MINGW*|MSYS*|CYGWIN*) bun_os="windows" ;;
+    *) return 1 ;;
+  esac
+  case "$(uname -m)" in
+    x86_64|amd64) bun_arch="x64" ;;
+    arm64|aarch64) bun_arch="aarch64" ;;
+    *) return 1 ;;
+  esac
+  echo "$SCRIPT_DIR/download/bun-${bun_os}-${bun_arch}.zip"
+}
+
+# Install bun from a local zip in ./download. Mirrors the user-provided
+# download/install-bun reference: unzip → copy to ~/.bun/bin → chmod +x →
+# strip macOS quarantine attr → export PATH. Returns 0 on success.
+_install_bun_from_local() {
+  local zip="$1"
+  if [[ ! -f "$zip" ]]; then return 1; fi
+  if ! command -v unzip &>/dev/null; then
+    warn "unzip not found — cannot use local $zip"
+    return 1
+  fi
+  info "Using local bun archive: $zip"
+  local tmp; tmp="$(mktemp -d)"
+  if ! unzip -q "$zip" -d "$tmp"; then
+    fail "Failed to extract $zip"
+    rm -rf "$tmp"
+    return 1
+  fi
+  local bun_bin; bun_bin="$(find "$tmp" -type f -name bun | head -1)"
+  if [[ -z "$bun_bin" ]]; then
+    fail "bun binary not found inside $zip"
+    rm -rf "$tmp"
+    return 1
+  fi
+  mkdir -p "$HOME/.bun/bin"
+  cp "$bun_bin" "$HOME/.bun/bin/bun"
+  chmod +x "$HOME/.bun/bin/bun"
+  # macOS Gatekeeper quarantine prevents execution of binaries copied from
+  # downloaded zips; strip it silently (no-op on non-macOS).
+  xattr -d com.apple.quarantine "$HOME/.bun/bin/bun" 2>/dev/null || true
+  rm -rf "$tmp"
+  export PATH="$HOME/.bun/bin:$PATH"
+  return 0
+}
+
 ensure_bun() {
   if command -v bun &>/dev/null; then return 0; fi
 
@@ -87,6 +139,20 @@ ensure_bun() {
       return 0
     fi
   done
+
+  # Prefer local archive — avoids network entirely on hosts behind a proxy
+  # or offline. Falls through to the bun.sh installer when no matching
+  # download/bun-<os>-<arch>.zip exists.
+  local local_zip; local_zip="$(_detect_bun_archive || true)"
+  if [[ -n "$local_zip" && -f "$local_zip" ]]; then
+    if _install_bun_from_local "$local_zip" && command -v bun &>/dev/null; then
+      ok "bun installed from local archive ($(bun --version))"
+      return 0
+    fi
+    warn "Local archive install failed — falling back to network installer"
+  elif [[ -n "$local_zip" ]]; then
+    dbg "No local bun archive at $local_zip — will use network installer"
+  fi
 
   info "Downloading and installing bun..."
   if command -v curl &>/dev/null; then
