@@ -71,9 +71,18 @@ export function useSSE() {
         projects?: Record<string, ProjectStat>;
         projectUsers?: Record<string, string | null>;
       };
-      if (body.projects) setProjectStats(body.projects);
-      // Also refresh user mapping so UNKNOWN groups disappear without
-      // waiting for a full page reload.
+      if (body.projects) {
+        setProjectStats(body.projects);
+        // Populate project list from API so the sidebar never appears
+        // empty on refresh — SSE initial_load may arrive later.
+        const apiProjects = Object.keys(body.projects);
+        if (apiProjects.length > 0) {
+          setProjects(prev => {
+            const merged = new Set([...prev, ...apiProjects]);
+            return merged.size === prev.length ? prev : [...merged];
+          });
+        }
+      }
       if (body.projectUsers) setProjectUsers(body.projectUsers);
     } catch {
       // Network blip or worker not ready — fall back to incremental SSE

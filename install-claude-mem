@@ -53,7 +53,8 @@ show_help() {
   printf "  --reset-token          Force regenerate access token on reinstall\n"
   printf "  --admin-password <PW>  Set admin password for server-mode viewer auth\n"
   printf "                         (SHA1 hashed; also unlocks locked account)\n"
-  printf "  --debug                Print verbose diagnostics (set -x)\n\n"
+  printf "  --debug                Print verbose diagnostics (set -x)\n"
+  printf "  --info                 Show configuration summary (mode, port, token, DB, etc.)\n\n"
   printf "${BOLD}Data preservation:${RESET}\n"
   printf "  ${DIM}-i / -u / -r never touch %s — DB, archives, chroma, logs all survive.${RESET}\n" "$DATA_DIR"
   printf "  ${DIM}-d explicitly deletes %s after a typed YES confirmation.${RESET}\n\n" "$DATA_DIR"
@@ -1013,6 +1014,124 @@ SERVEREOF
   fi
 }
 
+# ── Info ────────────────────────────────────────────────────────────
+show_info() {
+  printf "\n${BOLD}${BLUE}claude-mem — Configuration${RESET}\n\n"
+
+  local settings_file="$DATA_DIR/settings.json"
+  local role="client"
+  local label=""
+  local upstream=""
+  local token=""
+  local has_admin_pw="no"
+
+  if [[ -f "$settings_file" ]]; then
+    node -e "
+      const s = JSON.parse(require('fs').readFileSync('$settings_file','utf-8'));
+      const e = s.env || s;
+      console.log(JSON.stringify({
+        role: (e.CLAUDE_MEM_NODE_ROLE || 'client').trim(),
+        label: (e.CLAUDE_MEM_USER_LABEL || '').trim(),
+        upstream: (e.CLAUDE_MEM_SYNC_UPSTREAM_URL || '').trim(),
+        token: (e.CLAUDE_MEM_SYNC_ACCESS_TOKEN || e.CLAUDE_MEM_SERVER_ACCESS_TOKEN || '').trim(),
+        admin_pw: !!(e.CLAUDE_MEM_ADMIN_PASSWORD),
+      }));
+    " 2>/dev/null
+  fi > "$DATA_DIR/.info-tmp.json"
+
+  if [[ -s "$DATA_DIR/.info-tmp.json" ]]; then
+    role=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$DATA_DIR/.info-tmp.json','utf-8')).role)" 2>/dev/null || echo client)
+    label=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$DATA_DIR/.info-tmp.json','utf-8')).label)" 2>/dev/null || echo '')
+    upstream=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$DATA_DIR/.info-tmp.json','utf-8')).upstream)" 2>/dev/null || echo '')
+    token=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$DATA_DIR/.info-tmp.json','utf-8')).token)" 2>/dev/null || echo '')
+    has_admin_pw=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$DATA_DIR/.info-tmp.json','utf-8')).admin_pw?'yes':'no')" 2>/dev/null || echo no)
+  fi
+  rm -f "$DATA_DIR/.info-tmp.json"
+
+  local port
+  port=$(get_worker_port)
+
+  local running="no"
+  check_worker_running && running="yes"
+
+  local version="unknown"
+  [[ -f "$SCRIPT_DIR/package.json" ]] && version=$(node -p "require('$SCRIPT_DIR/package.json').version" 2>/dev/null || echo unknown)
+
+  local db_path="$DATA_DIR/claude-mem.db"
+  local db_size="N/A"
+  local db_obs="N/A"
+  local db_first="N/A"
+  if [[ -f "$db_path" ]] && command -v sqlite3 >/dev/null 2>&1; then
+    local raw_size
+    raw_size=$(wc -c < "$db_path" 2>/dev/null || echo 0)
+    if [[ "$raw_size" -gt 1073741824 ]]; then
+      db_size="$(echo "scale=1; $raw_size/1073741824" | bc 2>/dev/null || echo '?') GB"
+    elif [[ "$raw_size" -gt 1048576 ]]; then
+      db_size="$(echo "scale=1; $raw_size/1048576" | bc 2>/dev/null || echo '?') MB"
+    else
+      db_size="$(echo "scale=1; $raw_size/1024" | bc 2>/dev/null || echo '?') KB"
+    fi
+    db_obs=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM observations;" 2>/dev/null || echo 'N/A')
+    db_first=$(sqlite3 "$db_path" "SELECT MIN(created_at) FROM observations;" 2>/dev/null || echo 'N/A')
+  fi
+
+  local uptime="N/A"
+  if [[ "$running" == "yes" ]]; then
+    local health
+    health=$(curl -sf "http://127.0.0.1:${port}/api/health" 2>/dev/null || echo '{}')
+    local up_sec
+    up_sec=$(echo "$health" | node -e "process.stdin.on('data',d=>{try{console.log(JSON.parse(d).uptime||'')}catch{}})" 2>/dev/null || echo '')
+    if [[ -n "$up_sec" ]]; then
+      local d h m s
+      s=$up_sec
+      d=$((s/86400)); s=$((s%86400))
+      h=$((s/3600));  s=$((s%3600))
+      m=$((s/60));    s=$((s%60))
+      uptime="${d}d ${h}h ${m}m ${s}s"
+    fi
+  fi
+
+  local token_display="(not set)"
+  if [[ -n "$token" ]]; then
+    token_display="${token:0:8}...${token: -4}"
+  fi
+
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Role"        "$role"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Label"       "${label:-(none)}"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Worker port"  "$port"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Worker"       "${running} (port ${port})"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Uptime"       "$uptime"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Version"      "$version"
+
+  if [[ "$role" == "server" ]]; then
+    local ip
+    ip=$(get_lan_ip 2>/dev/null || echo 'unknown')
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Server URL"   "http://${ip}:${port}"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Access token"  "$token_display"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Admin password" "$has_admin_pw"
+  fi
+
+  if [[ "$role" == "client" ]]; then
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Upstream"     "${upstream:-(not set)}"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Token"        "$token_display"
+  fi
+
+  printf "  ${BOLD}%-20s${RESET} %s\n"   "Data dir"    "$DATA_DIR"
+  printf "  ${BOLD}%-20s${RESET} %s\n"   "DB size"     "$db_size"
+  printf "  ${BOLD}%-20s${RESET} %s\n"   "Observations" "$db_obs"
+  printf "  ${BOLD}%-20s${RESET} %s\n"   "First obs"   "$db_first"
+
+  if [[ "$role" == "client" && "$running" == "yes" ]]; then
+    local sync_status
+    sync_status=$(curl -sf "http://127.0.0.1:${port}/api/sync/status" 2>/dev/null || echo '{}')
+    local lag_total lag_sessions lag_obs lag_sum lag_prom
+    lag_total=$(echo "$sync_status" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.lag?.total??'?')}catch{}})" 2>/dev/null || echo '?')
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Sync lag"     "$lag_total items"
+  fi
+
+  printf "\n"
+}
+
 # ── Main ────────────────────────────────────────────────────────────
 main() {
   local action=""
@@ -1045,6 +1164,7 @@ main() {
       --admin-password) admin_password="${2:-}"; shift 2 ;;
       --admin-password=*) admin_password="${1#--admin-password=}"; shift ;;
       --debug) debug_mode="1"; DEBUG="1"; shift ;;
+      --info) show_info; return ;;
       *) args+=("$1"); shift ;;
     esac
   done
