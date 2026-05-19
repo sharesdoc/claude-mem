@@ -893,23 +893,6 @@ ENDNODE
   ok "Admin password updated & account unlocked"
 }
 
-# ── Worker reload after settings change ─────────────────────────────
-# The worker reads CLAUDE_MEM_NODE_ROLE once at boot and registers
-# server-only routes (AuthRoutes/UsersRoutes/SyncRoutes) conditionally.
-# Since do_install_*  starts the worker BEFORE apply_sync_settings /
-# apply_admin_password write to settings.json, the freshly-started
-# worker is stuck in client mode and /api/admin/login returns 404.
-# Call this after any settings mutation that affects worker behavior.
-reload_worker_after_settings() {
-  local role="${1:-}" upstream="${2:-}" label="${3:-}" api_key="${4:-}" token="${5:-}" admin_pw="${6:-}"
-  if [[ -z "$role$upstream$label$api_key$token$admin_pw" ]]; then
-    return 0
-  fi
-  step "Reloading worker to apply new settings"
-  do_stop_worker
-  do_start_worker
-}
-
 # ── Server info generator ───────────────────────────────────────────
 get_lan_ip() {
   # Collect all IPv4 addresses from every interface, then pick the best
@@ -1278,11 +1261,11 @@ try {
         exit 1
       fi
       case "$target" in
-        claude) do_install_claude; apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
-                reload_worker_after_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token" "$admin_password"
+        claude) apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
+                do_install_claude
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
-        codex)  do_install_codex;  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
-                reload_worker_after_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token" "$admin_password"
+        codex)  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
+                do_install_codex
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac
@@ -1304,11 +1287,13 @@ try {
         exit 1
       fi
       case "$target" in
-        claude) do_uninstall_claude; do_install_claude; apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
-                reload_worker_after_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token" "$admin_password"
+        claude) do_uninstall_claude
+                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
+                do_install_claude
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
-        codex)  do_uninstall_codex;  do_install_codex;  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
-                reload_worker_after_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token" "$admin_password"
+        codex)  do_uninstall_codex
+                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
+                do_install_codex
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac
