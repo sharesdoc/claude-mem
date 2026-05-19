@@ -284,13 +284,13 @@ export function ProjectSidebar({
     // lowercase so "Johnson" and "johnson" merge into one group.
     const liveUsers = new Map<string, string>();
     for (const o of observations) {
-      if (o.user_label) liveUsers.set(o.project, o.user_label.toLowerCase());
+      if (o.user_label) liveUsers.set(o.project, o.user_label.toUpperCase());
     }
     for (const s of summaries) {
-      if (s.user_label) liveUsers.set(s.project, s.user_label.toLowerCase());
+      if (s.user_label) liveUsers.set(s.project, s.user_label.toUpperCase());
     }
     for (const p of prompts) {
-      if (p.user_label) liveUsers.set(p.project, p.user_label.toLowerCase());
+      if (p.user_label) liveUsers.set(p.project, p.user_label.toUpperCase());
     }
 
     // User resolution priority (all paths normalised to lowercase):
@@ -302,8 +302,8 @@ export function ProjectSidebar({
       const live = liveUsers.get(project);
       if (live) return live;
       const fromServer = projectUsers?.[project];
-      if (fromServer && fromServer.trim()) return fromServer.trim().toLowerCase();
-      return (parseProjectId(project)?.username ?? '').toLowerCase();
+      if (fromServer && fromServer.trim()) return fromServer.trim().toUpperCase();
+      return (parseProjectId(project)?.username ?? '').toUpperCase();
     };
     const byUser = new Map<string, ProjectGroup>();
     for (const project of sortedProjects) {
