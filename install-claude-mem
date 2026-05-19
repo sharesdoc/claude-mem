@@ -1112,6 +1112,15 @@ try {
     fi
   fi
 
+  # Server mode: default admin password to the access token when not
+  # explicitly overridden. This way the same credential secures both
+  # sync and the viewer login without the operator needing to remember
+  # a second secret.
+  if [[ "$sync_role" == "server" && -z "$admin_password" && -n "$sync_token" ]]; then
+    admin_password="$sync_token"
+    dbg "Defaulting admin password to access token"
+  fi
+
   # Standalone --admin-password (no install action needed)
   if [[ -z "$action" && -n "$admin_password" ]]; then
     apply_admin_password "$admin_password"
