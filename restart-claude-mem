@@ -18,6 +18,27 @@ MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/thedotmack"
 WORKER_SCRIPT="$MARKETPLACE_DIR/plugin/scripts/worker-service.cjs"
 PID_FILE="$DATA_DIR/worker.pid"
 
+# ── Help ───────────────────────────────────────────────────────────────
+show_help() {
+  printf "${BOLD}claude-mem restart${RESET} — stop and restart the local worker.\n\n"
+  printf "${BOLD}Usage:${RESET}\n"
+  printf "  ./restart-claude-mem            Restart worker (preserves config & data)\n"
+  printf "  ./restart-claude-mem -h|--help  Show this help message\n\n"
+  printf "${BOLD}When to use:${RESET}\n"
+  printf "  After editing ${DIM}%s/settings.json${RESET}\n" "$DATA_DIR"
+  printf "  (role / token / CORS / bind host etc.) so the worker re-reads them.\n"
+  printf "  Settings and database are never touched by this script.\n\n"
+  printf "${BOLD}Environment:${RESET}\n"
+  printf "  ${DIM}CLAUDE_MEM_DATA_DIR${RESET}  Override data dir (default: ~/.claude-mem)\n\n"
+}
+
+# ── Parse args ─────────────────────────────────────────────────────────
+case "${1:-}" in
+  -h|--help) show_help; exit 0 ;;
+  '') ;;
+  *) fail "Unknown argument: $1"; printf "\n"; show_help; exit 1 ;;
+esac
+
 # ── Locate worker script ───────────────────────────────────────────────
 if [[ ! -f "$WORKER_SCRIPT" ]]; then
   # Try versioned cache
