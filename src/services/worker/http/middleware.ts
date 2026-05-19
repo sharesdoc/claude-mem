@@ -71,8 +71,17 @@ function isPrivateOrigin(origin: string): boolean {
 // password + sync access token) is the real security boundary; CORS is
 // only defense-in-depth, so widening the allowlist to RFC1918 origins is
 // safe and unblocks the deployed-server login flow.
-export function createCorsMiddleware(opts: { role?: 'client' | 'server' } = {}): RequestHandler {
+export function createCorsMiddleware(opts: {
+  role?: 'client' | 'server';
+  allowedOrigins?: string[];
+} = {}): RequestHandler {
   const role = opts.role ?? 'client';
+  // Normalize once; tolerant to trailing slashes and case in the host part.
+  const allowList = new Set(
+    (opts.allowedOrigins ?? [])
+      .map(o => o.trim().replace(/\/+$/, '').toLowerCase())
+      .filter(Boolean),
+  );
   return cors({
     origin: (origin, callback) => {
       if (!origin ||
@@ -85,7 +94,16 @@ export function createCorsMiddleware(opts: { role?: 'client' | 'server' } = {}):
         callback(null, true);
         return;
       }
-      callback(new Error('CORS not allowed'));
+      if (role === 'server' && allowList.has(origin.toLowerCase())) {
+        callback(null, true);
+        return;
+      }
+      // Silently disallow — return (null, false) so the cors lib omits the
+      // Access-Control-Allow-Origin header instead of calling next(err).
+      // Without an errorHandler in the worker's express stack, throwing
+      // here surfaces as an HTML 500 page that the viewer can't JSON-parse.
+      logger.warn('HTTP', 'CORS origin not allowed', { origin, role });
+      callback(null, false);
     },
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],

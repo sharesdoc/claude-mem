@@ -231,6 +231,8 @@ export class WorkerService implements WorkerRef {
       onRestart: () => this.shutdown(),
       workerPath: __filename,
       role: resolveBindAddress().role,
+      allowedOrigins: (SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_SERVER_ALLOWED_ORIGINS ?? '')
+        .split(',').map(s => s.trim()).filter(Boolean),
       getAiStatus: () => {
         let provider = 'claude';
         if (isOpenRouterSelected() && isOpenRouterAvailable()) provider = 'openrouter';

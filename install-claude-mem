@@ -53,6 +53,9 @@ show_help() {
   printf "  --reset-token          Force regenerate access token on reinstall\n"
   printf "  --admin-password <PW>  Set admin password for server-mode viewer auth\n"
   printf "                         (SHA1 hashed; also unlocks locked account)\n"
+  printf "  --allowed-origins CSV  (server) Comma-separated public origins allowed by CORS,\n"
+  printf "                         e.g. 'https://mem.acme.com'. Required when the viewer is\n"
+  printf "                         served via frpc/nginx on a public HTTPS domain.\n"
   printf "  --debug                Print verbose diagnostics (set -x)\n"
   printf "  --info                 Show configuration summary (mode, port, token, DB, etc.)\n\n"
   printf "${BOLD}Data preservation:${RESET}\n"
@@ -799,12 +802,19 @@ apply_sync_settings() {
   local _token_js;    _token_js="$(_js "$token")"
 
   step "Applying sync settings"
+  # Worker canonicalizes settings.json to FLAT (no env wrapper) on load.
+  # If we write nested env here, the worker's auto-migration silently
+  # drops any pre-existing top-level keys. So normalise to flat up-front.
   node - <<EOF
 const fs = require('fs');
 const path = '$file';
 let raw = {};
 try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
-const env = raw.env && typeof raw.env === 'object' ? raw.env : (raw.env = {});
+let flat = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+if (flat.env && typeof flat.env === 'object') {
+  flat = { ...flat, ...flat.env };
+  delete flat.env;
+}
 
 const role = ${_role_js};
 const upstream = ${_upstream_js};
@@ -813,28 +823,27 @@ const apiKey = ${_apikey_js};
 const token = ${_token_js};
 
 if (role) {
-  env.CLAUDE_MEM_NODE_ROLE = role;
+  flat.CLAUDE_MEM_NODE_ROLE = role;
   if (role === 'server') {
-    if (!env.CLAUDE_MEM_SERVER_BIND_HOST) env.CLAUDE_MEM_SERVER_BIND_HOST = '0.0.0.0';
-    if (!env.CLAUDE_MEM_SERVER_TRUSTED_PROXIES) env.CLAUDE_MEM_SERVER_TRUSTED_PROXIES = '127.0.0.1/32,::1/128,192.168.0.0/24';
+    if (!flat.CLAUDE_MEM_SERVER_BIND_HOST) flat.CLAUDE_MEM_SERVER_BIND_HOST = '0.0.0.0';
+    if (!flat.CLAUDE_MEM_SERVER_TRUSTED_PROXIES) flat.CLAUDE_MEM_SERVER_TRUSTED_PROXIES = '127.0.0.1/32,::1/128,192.168.0.0/24';
   }
 }
 if (upstream) {
-  env.CLAUDE_MEM_SYNC_UPSTREAM_URL = upstream;
-  if (!env.CLAUDE_MEM_SYNC_ENABLED) env.CLAUDE_MEM_SYNC_ENABLED = 'true';
+  flat.CLAUDE_MEM_SYNC_UPSTREAM_URL = upstream;
+  if (!flat.CLAUDE_MEM_SYNC_ENABLED) flat.CLAUDE_MEM_SYNC_ENABLED = 'true';
 }
-if (label) env.CLAUDE_MEM_USER_LABEL = label;
+if (label) flat.CLAUDE_MEM_USER_LABEL = label;
 if (apiKey) {
-  env.CLAUDE_MEM_SYNC_API_KEY = apiKey;
-  env.CLAUDE_MEM_SYNC_AUTH_MODE = 'apikey';
+  flat.CLAUDE_MEM_SYNC_API_KEY = apiKey;
+  flat.CLAUDE_MEM_SYNC_AUTH_MODE = 'apikey';
 }
 if (token) {
-  env.CLAUDE_MEM_SYNC_ACCESS_TOKEN = token;
-  env.CLAUDE_MEM_SERVER_ACCESS_TOKEN = token;
+  flat.CLAUDE_MEM_SYNC_ACCESS_TOKEN = token;
+  flat.CLAUDE_MEM_SERVER_ACCESS_TOKEN = token;
 }
 
-raw.env = env;
-fs.writeFileSync(path, JSON.stringify(raw, null, 2) + '\n');
+fs.writeFileSync(path, JSON.stringify(flat, null, 2) + '\n');
 console.log(' ✓ settings.json updated');
 EOF
 
@@ -844,6 +853,48 @@ EOF
   if [[ "$role" == "client" && -z "$upstream" ]]; then
     warn "client mode without --upstream: SyncAgent will not start until you set CLAUDE_MEM_SYNC_UPSTREAM_URL"
   fi
+}
+
+# Write CLAUDE_MEM_SERVER_ALLOWED_ORIGINS (csv) into settings.json so the
+# CORS middleware lets public-domain viewers (frpc/nginx reverse-proxied)
+# through. Empty arg = no-op.
+apply_allowed_origins() {
+  local origins="${1:-}"
+  [[ -z "$origins" ]] && return 0
+  local file="$DATA_DIR/settings.json"
+  mkdir -p "$DATA_DIR"
+  [[ -f "$file" ]] || printf '{}\n' > "$file"
+
+  step "Applying allowed CORS origins"
+  node - <<EOF
+const fs = require('fs');
+const path = '$file';
+let raw = {};
+try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
+let flat = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+if (flat.env && typeof flat.env === 'object') {
+  flat = { ...flat, ...flat.env };
+  delete flat.env;
+}
+flat.CLAUDE_MEM_SERVER_ALLOWED_ORIGINS = '$origins';
+fs.writeFileSync(path, JSON.stringify(flat, null, 2) + '\n');
+console.log(' ✓ allowed origins set:', '$origins');
+EOF
+}
+
+# Print a clear warning when -i wrote new settings but the worker
+# was already running, so the user knows to restart manually.
+# Args: $1=worker-was-running-before-install ("1" or "")
+#       $2=settings-flags-were-passed       ("1" or "")
+warn_worker_needs_restart() {
+  local was_running="${1:-}"
+  local had_changes="${2:-}"
+  [[ "$was_running" == "1" && "$had_changes" == "1" ]] || return 0
+  printf "\n${YELLOW}${BOLD}⚠ Settings updated but worker is still running with the OLD config.${RESET}\n"
+  printf "  ${YELLOW}Login / role / admin-password changes will NOT take effect until restart.${RESET}\n"
+  printf "  ${BOLD}Run one of:${RESET}\n"
+  printf "    ${BOLD}./install-claude-mem -r %s${RESET}   ${DIM}(reinstall, preserves data)${RESET}\n" "${3:-claude}"
+  printf "    ${BOLD}./restart-claude-mem${RESET}             ${DIM}(just restart worker)${RESET}\n\n"
 }
 
 # ── Admin password ───────────────────────────────────────────────────
@@ -869,18 +920,21 @@ apply_admin_password() {
 
   step "Setting admin password"
 
+  # Always write flat to match the worker's canonical schema (see comment
+   # in apply_sync_settings).
   node - <<ENDNODE
 const fs = require('fs');
 const path = '$file';
 let raw = {};
 try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
-// Support both flat and nested settings formats
-const settings = raw.env && typeof raw.env === 'object' ? raw.env : raw;
-settings.CLAUDE_MEM_ADMIN_PASSWORD = '$hash';
-delete settings.CLAUDE_MEM_ADMIN_LOCKED;
-if (raw.env && typeof raw.env === 'object') raw.env = settings;
-else Object.assign(raw, settings);
-fs.writeFileSync(path, JSON.stringify(raw, null, 2) + '\\n');
+let flat = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+if (flat.env && typeof flat.env === 'object') {
+  flat = { ...flat, ...flat.env };
+  delete flat.env;
+}
+flat.CLAUDE_MEM_ADMIN_PASSWORD = '$hash';
+delete flat.CLAUDE_MEM_ADMIN_LOCKED;
+fs.writeFileSync(path, JSON.stringify(flat, null, 2) + '\\n');
 console.log(' ✓ admin password set (SHA1: $hash)');
 ENDNODE
 
@@ -954,18 +1008,21 @@ generate_server_info_md() {
 # claude-mem Server Info
 
 > 生成时间：__TS__
-> 此文件包含客户端接入所需的关键信息，请妥善保管，不要提交到版本库。
+> 此文件描述的是 **本机作为 server** 的接入信息，供其它客户端机器使用。
+> 包含共享密钥，请妥善保管，不要提交到版本库。
 
-## 接入信息
+## 本机角色
 
 | 项目 | 值 |
 |---|---|
+| **本机角色** | `server`（已通过 `--role server` 安装） |
 | **Server API URL** | `__URL__` |
 | **Access Token** | `__TOKEN__` |
 
-## 客户端安装命令
+## 客户端机器接入命令（在其它机器上执行）
 
-在用户的电脑上执行（替换 `<用户名>` 为实际标识，如 `zhangsan`）：
+下面的 `--role client` 是给**其他要连接本 server 的机器**用的，不是本机的角色。
+替换 `<用户名>` 为实际标识（如 `zhangsan`）：
 
 ```bash
 ./install-claude-mem -i claude \
@@ -1141,6 +1198,7 @@ main() {
   local sync_token=""
   local reset_token=""
   local admin_password=""
+  local allowed_origins=""
   local debug_mode=""
 
   # T-26: pull sync flags out of the argv first so the existing
@@ -1161,6 +1219,8 @@ main() {
       --reset-token) reset_token="1"; shift ;;
       --admin-password) admin_password="${2:-}"; shift 2 ;;
       --admin-password=*) admin_password="${1#--admin-password=}"; shift ;;
+      --allowed-origins) allowed_origins="${2:-}"; shift 2 ;;
+      --allowed-origins=*) allowed_origins="${1#--allowed-origins=}"; shift ;;
       --debug) debug_mode="1"; DEBUG="1"; shift ;;
       --info) show_info; return ;;
       *) args+=("$1"); shift ;;
@@ -1192,12 +1252,13 @@ main() {
 
   # Reinstall (-r) without explicit sync flags: read existing config
   # from settings.json so the user does not need to re-specify everything.
-  if [[ "$action" == "-r" && -z "$sync_role" && -z "$sync_upstream" && -z "$sync_label" && -z "$sync_token" && -z "$sync_api_key" ]]; then
+  if [[ "$action" == "-r" && -z "$sync_role" && -z "$sync_upstream" && -z "$sync_label" && -z "$sync_token" && -z "$sync_api_key" && -z "$allowed_origins" ]]; then
     if [[ -f "$DATA_DIR/settings.json" ]]; then
       sync_role="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_NODE_ROLE||'')}catch(e){}" 2>/dev/null || true)"
       sync_upstream="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_UPSTREAM_URL||'')}catch(e){}" 2>/dev/null || true)"
       sync_label="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_USER_LABEL||'')}catch(e){}" 2>/dev/null || true)"
       sync_token="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_ACCESS_TOKEN||e.CLAUDE_MEM_SERVER_ACCESS_TOKEN||'')}catch(e){}" 2>/dev/null || true)"
+      allowed_origins="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SERVER_ALLOWED_ORIGINS||'')}catch(e){}" 2>/dev/null || true)"
       if [[ -n "$sync_role" ]]; then
         ok "Reinstalling with preserved config (role=$sync_role, label=${sync_label:-?})"
       fi
@@ -1260,13 +1321,24 @@ try {
         fail "Missing target. Use: -i claude or -i codex"
         exit 1
       fi
+      # Snapshot pre-install worker state + whether any settings flags
+      # were passed, so we can warn the user after install if their new
+      # config is sitting on disk but a stale worker is still running.
+      local _had_settings_changes=""
+      if [[ -n "$sync_role$sync_upstream$sync_label$sync_api_key$sync_token$admin_password$allowed_origins" ]]; then
+        _had_settings_changes="1"
+      fi
+      local _worker_was_running=""
+      check_worker_running && _worker_was_running="1"
       case "$target" in
-        claude) apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
+        claude) apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"
                 do_install_claude
-                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
-        codex)  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
+                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
+                warn_worker_needs_restart "$_worker_was_running" "$_had_settings_changes" "claude" ;;
+        codex)  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"
                 do_install_codex
-                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
+                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
+                warn_worker_needs_restart "$_worker_was_running" "$_had_settings_changes" "codex" ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac
       ;;
@@ -1288,11 +1360,11 @@ try {
       fi
       case "$target" in
         claude) do_uninstall_claude
-                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
+                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"
                 do_install_claude
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
         codex)  do_uninstall_codex
-                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"
+                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"
                 do_install_codex
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
