@@ -1013,6 +1013,103 @@ ENDNODE
   ok "Admin password updated & account unlocked"
 }
 
+# ── Chroma vector-search compatibility ──────────────────────────────
+# chroma-mcp pulls in onnxruntime>=1.20 via uvx. That package no longer
+# ships wheels for macOS Intel (macosx_10_16_x86_64) and only ships
+# arm64 wheels for macOS 14+. We auto-disable Chroma on hosts where the
+# install is guaranteed to fail and leave FTS5 search as the only path.
+# Globals set:
+#   CHROMA_COMPATIBLE — 1 (yes) or 0 (no)
+#   CHROMA_REASON     — human-readable explanation, used in install summary
+detect_chroma_compatibility() {
+  CHROMA_COMPATIBLE=0
+  CHROMA_REASON=""
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os" in
+    Linux)
+      CHROMA_COMPATIBLE=1
+      CHROMA_REASON="Linux ${arch} — onnxruntime ships manylinux wheels"
+      ;;
+    Darwin)
+      local ver major
+      ver="$(sw_vers -productVersion 2>/dev/null || echo 0)"
+      major="${ver%%.*}"
+      if [[ "$arch" == "arm64" && "$major" -ge 14 ]]; then
+        CHROMA_COMPATIBLE=1
+        CHROMA_REASON="macOS ${ver} arm64 — onnxruntime ships macosx_14_0_arm64 wheels"
+      elif [[ "$arch" == "arm64" ]]; then
+        CHROMA_REASON="macOS ${ver} arm64 — onnxruntime arm64 wheels require macOS 14+"
+      else
+        CHROMA_REASON="macOS ${ver} Intel (${arch}) — onnxruntime no longer publishes Intel wheels"
+      fi
+      ;;
+    *)
+      CHROMA_REASON="${os} ${arch} — Chroma compatibility unverified, defaulting off"
+      ;;
+  esac
+}
+
+# Write CLAUDE_MEM_CHROMA_ENABLED to settings.json based on detection,
+# overwriting any previous value. Always print the decision so the
+# operator sees it in the install transcript. Also exports CHROMA_CHANGED
+# (0/1) so the dispatcher can fold the change into _had_settings_changes
+# and trigger warn_worker_needs_restart when a stale worker would still
+# be using the old chroma mode in memory.
+apply_chroma_default() {
+  detect_chroma_compatibility
+  local file="$DATA_DIR/settings.json"
+  local enabled
+  if [[ "$CHROMA_COMPATIBLE" == "1" ]]; then enabled="true"; else enabled="false"; fi
+
+  # Compare against current value before writing, so we know whether a
+  # restart is needed. An unset value defaults to enabled at runtime.
+  local current=""
+  if [[ -f "$file" ]]; then
+    current="$(node -e "try{const s=require('$file');const e=s.env||s;console.log(e.CLAUDE_MEM_CHROMA_ENABLED||'')}catch(e){}" 2>/dev/null || true)"
+  fi
+  CHROMA_CHANGED="0"
+  if [[ "$current" != "$enabled" ]]; then
+    CHROMA_CHANGED="1"
+  fi
+
+  mkdir -p "$DATA_DIR"
+  if [[ ! -f "$file" ]]; then
+    printf '{"env":{}}\n' > "$file"
+  fi
+  step "Configuring Chroma vector search"
+  if [[ "$enabled" == "true" ]]; then
+    ok "Chroma enabled — ${CHROMA_REASON}"
+  else
+    warn "Chroma disabled — ${CHROMA_REASON}"
+    info "Full-text (FTS5) search remains available; only vector search is off."
+    info "Override later: set CLAUDE_MEM_CHROMA_ENABLED=true in ${file}"
+  fi
+  node - <<EOF
+const fs = require('fs');
+const path = '$file';
+let raw = {};
+try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
+const env = raw.env && typeof raw.env === 'object' ? raw.env : (raw.env = {});
+env.CLAUDE_MEM_CHROMA_ENABLED = '$enabled';
+raw.env = env;
+fs.writeFileSync(path, JSON.stringify(raw, null, 2) + '\n');
+EOF
+}
+
+# Print the final Chroma decision again at install end so it survives
+# the wall of build/sync output that follows apply_chroma_default.
+print_chroma_summary() {
+  printf "\n${BOLD}Chroma:${RESET} "
+  if [[ "${CHROMA_COMPATIBLE:-0}" == "1" ]]; then
+    printf "${GREEN}enabled${RESET}  (${DIM}%s${RESET})\n" "$CHROMA_REASON"
+  else
+    printf "${YELLOW}disabled${RESET} (${DIM}%s${RESET})\n" "$CHROMA_REASON"
+    printf "  ${DIM}FTS5 full-text search still works.${RESET}\n"
+  fi
+}
+
 # ── Server info generator ───────────────────────────────────────────
 get_lan_ip() {
   # Collect all IPv4 addresses from every interface, then pick the best
@@ -1397,13 +1494,17 @@ try {
       local _worker_was_running=""
       check_worker_running && _worker_was_running="1"
       case "$target" in
-        claude) apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"
+        claude) apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"; apply_chroma_default
+                [[ "${CHROMA_CHANGED:-0}" == "1" ]] && _had_settings_changes="1"
                 do_install_claude
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
+                print_chroma_summary
                 warn_worker_needs_restart "$_worker_was_running" "$_had_settings_changes" "claude" ;;
-        codex)  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"
+        codex)  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"; apply_chroma_default
+                [[ "${CHROMA_CHANGED:-0}" == "1" ]] && _had_settings_changes="1"
                 do_install_codex
                 [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
+                print_chroma_summary
                 warn_worker_needs_restart "$_worker_was_running" "$_had_settings_changes" "codex" ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac
@@ -1426,13 +1527,15 @@ try {
       fi
       case "$target" in
         claude) do_uninstall_claude
-                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"
+                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"; apply_chroma_default
                 do_install_claude
-                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
+                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
+                print_chroma_summary ;;
         codex)  do_uninstall_codex
-                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"
+                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"; apply_chroma_default
                 do_install_codex
-                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token" ;;
+                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
+                print_chroma_summary ;;
         *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
       esac
       ;;
