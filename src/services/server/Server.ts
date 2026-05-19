@@ -87,6 +87,7 @@ export interface ServerOptions {
   getAiStatus: () => AiStatus;
   preBodyParserRoutes?: RouteHandler[];
   getQueueHealth?: () => ObservationQueueHealth | null | Promise<ObservationQueueHealth | null>;
+  role?: 'client' | 'server';
 }
 
 export class Server {
@@ -164,7 +165,7 @@ export class Server {
   }
 
   private setupCors(): void {
-    this.app.use(createCorsMiddleware());
+    this.app.use(createCorsMiddleware({ role: this.options.role }));
   }
 
   private setupPreBodyParserRoutes(): void {

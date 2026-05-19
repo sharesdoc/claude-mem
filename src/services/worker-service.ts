@@ -230,6 +230,7 @@ export class WorkerService implements WorkerRef {
       onShutdown: () => this.shutdown(),
       onRestart: () => this.shutdown(),
       workerPath: __filename,
+      role: resolveBindAddress().role,
       getAiStatus: () => {
         let provider = 'claude';
         if (isOpenRouterSelected() && isOpenRouterAvailable()) provider = 'openrouter';

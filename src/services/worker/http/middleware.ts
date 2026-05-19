@@ -48,16 +48,44 @@ export function createMiddleware(
   return middlewares;
 }
 
-export function createCorsMiddleware(): RequestHandler {
+function isPrivateOrigin(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname;
+    if (host === 'localhost' || host === '::1') return true;
+    const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+    if (!m) return false;
+    const a = Number(m[1]);
+    const b = Number(m[2]);
+    if (a === 127) return true;                          // 127.0.0.0/8
+    if (a === 10) return true;                           // 10.0.0.0/8
+    if (a === 192 && b === 168) return true;             // 192.168.0.0/16
+    if (a === 172 && b >= 16 && b <= 31) return true;    // 172.16.0.0/12
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// In server mode the worker binds 0.0.0.0 and is meant to be reached from
+// LAN browsers (e.g. http://192.168.0.110:37701). The auth layer (admin
+// password + sync access token) is the real security boundary; CORS is
+// only defense-in-depth, so widening the allowlist to RFC1918 origins is
+// safe and unblocks the deployed-server login flow.
+export function createCorsMiddleware(opts: { role?: 'client' | 'server' } = {}): RequestHandler {
+  const role = opts.role ?? 'client';
   return cors({
     origin: (origin, callback) => {
       if (!origin ||
           origin.startsWith('http://localhost:') ||
           origin.startsWith('http://127.0.0.1:')) {
         callback(null, true);
-      } else {
-        callback(new Error('CORS not allowed'));
+        return;
       }
+      if (role === 'server' && isPrivateOrigin(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error('CORS not allowed'));
     },
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
