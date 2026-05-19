@@ -280,21 +280,20 @@ export function ProjectSidebar({
     latest: number;          // max(latest) — drives group sort order
   }
   const projectGroups = useMemo<ProjectGroup[]>(() => {
-    // Build project→user_label from live SSE data (observations/summaries/
-    // prompts carry user_label on every row). This is the most up-to-date
-    // source and does not depend on React batched state ordering.
+    // Build project→user_label from live SSE data, normalized to
+    // lowercase so "Johnson" and "johnson" merge into one group.
     const liveUsers = new Map<string, string>();
     for (const o of observations) {
-      if (o.user_label) liveUsers.set(o.project, o.user_label);
+      if (o.user_label) liveUsers.set(o.project, o.user_label.toLowerCase());
     }
     for (const s of summaries) {
-      if (s.user_label) liveUsers.set(s.project, s.user_label);
+      if (s.user_label) liveUsers.set(s.project, s.user_label.toLowerCase());
     }
     for (const p of prompts) {
-      if (p.user_label) liveUsers.set(p.project, p.user_label);
+      if (p.user_label) liveUsers.set(p.project, p.user_label.toLowerCase());
     }
 
-    // User resolution priority:
+    // User resolution priority (all paths normalised to lowercase):
     //   1. live SSE data (observations/summaries/prompts with user_label)
     //   2. server-authoritative projectUsers map (from initial_load / API)
     //   3. legacy path-based extraction
@@ -303,8 +302,8 @@ export function ProjectSidebar({
       const live = liveUsers.get(project);
       if (live) return live;
       const fromServer = projectUsers?.[project];
-      if (fromServer && fromServer.trim()) return fromServer.trim();
-      return parseProjectId(project)?.username ?? '';
+      if (fromServer && fromServer.trim()) return fromServer.trim().toLowerCase();
+      return (parseProjectId(project)?.username ?? '').toLowerCase();
     };
     const byUser = new Map<string, ProjectGroup>();
     for (const project of sortedProjects) {
