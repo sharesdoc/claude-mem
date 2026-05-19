@@ -182,7 +182,15 @@ export async function adoptMergedWorktrees(opts: {
   let db: import('bun:sqlite').Database | null = null;
   try {
     const { Database } = require('bun:sqlite') as typeof import('bun:sqlite');
-    db = new Database(dbPath);
+    try {
+      db = new Database(dbPath);
+    } catch (openErr: unknown) {
+      const e = openErr instanceof Error ? openErr : new Error(String(openErr));
+      // Re-throw with the dbPath glued in so the upstream "unable to open
+      // database file" log has actionable context (SQLite's bare message
+      // omits the path).
+      throw new Error(`adoptMergedWorktrees: failed to open ${dbPath}: ${e.message}`);
+    }
 
     interface ColumnInfo { name: string }
     const obsColumns = db
@@ -329,7 +337,12 @@ export async function adoptMergedWorktreesForAllKnownRepos(opts: {
   let db: import('bun:sqlite').Database | null = null;
   try {
     const { Database } = require('bun:sqlite') as typeof import('bun:sqlite');
-    db = new Database(dbPath, { readonly: true });
+    try {
+      db = new Database(dbPath, { readonly: true });
+    } catch (openErr: unknown) {
+      const e = openErr instanceof Error ? openErr : new Error(String(openErr));
+      throw new Error(`adoptMergedWorktreesForAllKnownRepos: failed to open ${dbPath} (readonly): ${e.message}`);
+    }
 
     const hasPending = db.prepare(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='pending_messages'"

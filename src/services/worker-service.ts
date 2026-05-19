@@ -412,24 +412,34 @@ export class WorkerService implements WorkerRef {
         logger.error('SYNC', 'SyncAgent bootstrap failed', {}, error as Error);
       }
 
-      logger.info('WORKER', 'Adopting merged worktrees (background)...');
-      adoptMergedWorktreesForAllKnownRepos({}).then(adoptions => {
-        if (adoptions) {
-          for (const adoption of adoptions) {
-            if (adoption.adoptedObservations > 0 || adoption.adoptedSummaries > 0 || adoption.chromaUpdates > 0) {
-              logger.info('SYSTEM', 'Merged worktrees adopted in background', adoption);
-            }
-            if (adoption.errors.length > 0) {
-              logger.warn('SYSTEM', 'Worktree adoption had per-branch errors', {
-                repoPath: adoption.repoPath,
-                errors: adoption.errors
-              });
+      // Defer worktree adoption until core init (migrations, pragma setup,
+      // DatabaseManager handle) is fully finished. Firing in parallel here
+      // races the main DB connection and produced spurious CANTOPEN errors
+      // on startup. .then() runs after this init function returns and
+      // resolveInitialization() is called from the caller.
+      this.initializationComplete
+        .then(() => {
+          logger.info('WORKER', 'Adopting merged worktrees (background)...');
+          return adoptMergedWorktreesForAllKnownRepos({});
+        })
+        .then(adoptions => {
+          if (adoptions) {
+            for (const adoption of adoptions) {
+              if (adoption.adoptedObservations > 0 || adoption.adoptedSummaries > 0 || adoption.chromaUpdates > 0) {
+                logger.info('SYSTEM', 'Merged worktrees adopted in background', adoption);
+              }
+              if (adoption.errors.length > 0) {
+                logger.warn('SYSTEM', 'Worktree adoption had per-branch errors', {
+                  repoPath: adoption.repoPath,
+                  errors: adoption.errors
+                });
+              }
             }
           }
-        }
-      }).catch(err => {
-        logger.error('WORKER', 'Worktree adoption failed (background)', {}, err instanceof Error ? err : new Error(String(err)));
-      });
+        })
+        .catch(err => {
+          logger.error('WORKER', 'Worktree adoption failed (background)', {}, err instanceof Error ? err : new Error(String(err)));
+        });
 
       const chromaEnabled = settings.CLAUDE_MEM_CHROMA_ENABLED !== 'false';
       if (chromaEnabled) {

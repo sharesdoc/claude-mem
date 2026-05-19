@@ -113,7 +113,11 @@ function executeCleanup(dbPath: string, effectiveDataDir: string, markerPath: st
   let backupPath: string | null = null;
   try {
     const fs = statfsSync(effectiveDataDir);
-    const free = Number(fs.bavail) * Number(fs.bsize);
+    // bun on macOS returns bsize=0 (observed in 1.x). Fall back to frsize
+    // (POSIX f_frsize) and finally a 4 KiB sane default — anything non-zero
+    // is good enough for the rough "do we have ~120 MB free" preflight.
+    const blockSize = Number(fs.bsize) || Number((fs as unknown as { frsize?: bigint | number }).frsize) || 4096;
+    const free = Number(fs.bavail) * blockSize;
     if (free < required) {
       logger.error('SYSTEM', 'Insufficient disk for v12.4.3 backup; skipping cleanup (will retry on next startup)', { dbSize, free, required });
       return;
