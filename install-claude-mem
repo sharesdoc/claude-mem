@@ -1076,7 +1076,7 @@ apply_chroma_default() {
 
   mkdir -p "$DATA_DIR"
   if [[ ! -f "$file" ]]; then
-    printf '{"env":{}}\n' > "$file"
+    printf '{}\n' > "$file"
   fi
   step "Configuring Chroma vector search"
   if [[ "$enabled" == "true" ]]; then
@@ -1086,15 +1086,22 @@ apply_chroma_default() {
     info "Full-text (FTS5) search remains available; only vector search is off."
     info "Override later: set CLAUDE_MEM_CHROMA_ENABLED=true in ${file}"
   fi
+  # Worker canonicalizes settings.json to FLAT (no env wrapper) on load.
+  # Writing nested env here would create a hybrid file whose top-level
+  # keys (server role/token/admin) get dropped by the worker migration.
+  # Match apply_sync_settings: normalise to flat before writing.
   node - <<EOF
 const fs = require('fs');
 const path = '$file';
 let raw = {};
 try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
-const env = raw.env && typeof raw.env === 'object' ? raw.env : (raw.env = {});
-env.CLAUDE_MEM_CHROMA_ENABLED = '$enabled';
-raw.env = env;
-fs.writeFileSync(path, JSON.stringify(raw, null, 2) + '\n');
+let flat = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+if (flat.env && typeof flat.env === 'object') {
+  flat = { ...flat, ...flat.env };
+  delete flat.env;
+}
+flat.CLAUDE_MEM_CHROMA_ENABLED = '$enabled';
+fs.writeFileSync(path, JSON.stringify(flat, null, 2) + '\n');
 EOF
 }
 
