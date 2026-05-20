@@ -1,213 +1,170 @@
 # Install Claude-Mem
 
-交互式安装和配置 claude-mem 的客户端/服务端双模式同步。
+交互式安装和配置 claude-mem。此 skill 必须作为仓库根目录 `./install-claude-mem` 的薄封装使用，不要重新实现安装、卸载、重装、worker 启停或配置写入逻辑。
 
-## 前置条件
+## 核心原则
 
-- 用户电脑上有 `/Users/johnson/wks/ai/plugins/claude-mem` 全套代码（已构建）
-- Bun、Node.js 已安装
-- 两台机器在同一局域网可互通（服务端 + 客户端）
+- 始终在 claude-mem 仓库根目录执行根脚本：`./install-claude-mem ...`。
+- Windows 用户需要在 Git Bash/MSYS/Cygwin 这类 bash 环境里运行；如果当前在 PowerShell，使用 `bash ./install-claude-mem ...`。
+- `-i` 安装、`-r` 重装、`-u` 卸载都保留 `~/.claude-mem` 数据；只有 `-d` 会删除数据，并需要用户明确确认。
+- 不要手工编辑 Claude marketplace、installed plugins、worker pid、settings、cache 目录来模拟安装结果。
+- 不要用 `node scripts/build-hooks.js` 替代安装脚本。根脚本会检查构建状态，并在需要时走自己的 build/sync/start 流程。
 
-## 流程
+## 阶段 0：确认目标
 
-### 阶段 0：确认安装模式
+一次只问一个问题，先确认：
 
-向用户提问（一次问一个）：
+> 你要把这台机器配置成服务端还是客户端？
 
-> 你要把这台机器配置成**服务端**还是**客户端**？
->
-> - **服务端**：这台机器接收其他用户推送的数据，在这台机器的 viewer 上看全团队数据
-> - **客户端**：用户电脑，安装后自动把本地 AI 对话数据推到服务端
+- 服务端：接收其他用户推送的数据，在这台机器的 viewer 上看团队数据。
+- 客户端：用户电脑，安装后自动把本地 AI 对话数据推到服务端。
 
-收集用户的回答，存入变量 `ROLE`（值为 `client` 或 `server`）。
+记录 `ROLE`，值只能是 `server` 或 `client`。
 
----
+## 阶段 1：收集配置
 
-### 阶段 1：收集配置信息
+### 通用
 
-根据 `ROLE` 不同，逐项询问：
+询问 user label：
 
-#### 1.1 通用项（两种模式都需要）
+> 你的标识名是什么？默认为当前 OS 用户名。
 
-**User Label**（用户标识）：
-> 你的标识名是什么？（英文，如 `zhangsan`、`boss`）
-> 这是服务端 viewer 里区分不同用户的标签。默认为你当前的 OS 用户名 `$(whoami)`。
+如果用户不填，用 `whoami`。
 
-如果用户不填，默认用 `whoami` 的输出。
-
-#### 1.2 客户端专属
+### 客户端
 
 依次询问：
 
-**Server URL**：
-> 服务端的地址是什么？（格式：`http://<IP>:<端口>`）
-> 例如 `http://192.168.1.100:37701`。端口在服务端的 `~/.claude-mem/worker.pid` 文件里可以看到。
+- Server URL：例如 `http://192.168.1.100:37701`
+- Access Token：如果服务端没有 token，允许为空
 
-**Access Token**（如果服务端配了 token）：
-> 服务端的 Access Token 是什么？（如果没有设置 token，直接回车跳过）
-> 这是服务端管理员告诉你的共享密钥。
+### 服务端
 
-#### 1.3 服务端专属
+询问 Access Token：
 
-**Access Token**（可选但强烈推荐）：
-> 设置一个 Access Token（共享密钥）。直接回车我会自动生成一个随机 token。
->
-> 这是客户端连上来时必须提供的凭证。Token 只用于 LAN 内网鉴权。
+> 设置一个 Access Token。直接回车则让安装脚本自动生成并复用/写入。
 
-如果用户自己设了 token，记下它——后面要发给其他用户。
-如果用户不填，用 `node -e "console.log(require('crypto').randomBytes(20).toString('hex'))"` 生成 40 位哈希 token。
+如果用户不填，不要自己生成 token；直接省略 `--token`，让根脚本按自身逻辑生成或复用。
 
----
+## 阶段 2：运行安装
 
-### 阶段 2：构建并安装
+先进入仓库根目录。如果不确定当前位置，使用当前 workspace 的 claude-mem 根目录，而不是硬编码某个用户路径。
 
-所有信息收集完毕后，执行安装：
-
-#### 2.1 构建
-
-首先确认代码已构建：
+服务端：
 
 ```bash
-cd /Users/johnson/wks/ai/plugins/claude-mem
-node scripts/build-hooks.js
+./install-claude-mem -i claude --role server --label "<USER_LABEL>"
 ```
 
-如果构建失败，向用户报告错误并停止。
+服务端指定 token：
 
-#### 2.2 运行安装脚本
-
-**服务端**：
 ```bash
 ./install-claude-mem -i claude --role server --label "<USER_LABEL>" --token "<ACCESS_TOKEN>"
 ```
 
-**客户端**（无 token）：
+客户端无 token：
+
 ```bash
 ./install-claude-mem -i claude --role client --upstream "<SERVER_URL>" --label "<USER_LABEL>"
 ```
 
-**客户端**（有 token）：
+客户端有 token：
+
 ```bash
 ./install-claude-mem -i claude --role client --upstream "<SERVER_URL>" --label "<USER_LABEL>" --token "<ACCESS_TOKEN>"
 ```
 
-> 上面命令中的 `<PLACEHOLDER>` 替换为阶段 1 收集的实际值。
-
-安装脚本会自动：
-- 同步插件文件到 `~/.claude/plugins/marketplaces/thedotmack/`
-- 写入 `~/.claude-mem/settings.json`（合并而非覆盖已有配置）
-- 启动 worker
-
-#### 2.3 验证安装
-
-等待安装完成后，执行以下验证：
+重装时使用同一参数形态，把 `-i` 换成 `-r`。如果是保留现有配置重装，可只执行：
 
 ```bash
-# 确认 worker 正在运行
-PORT=$(node -e "const u=require('os').userInfo();console.log(37700 + (u.uid % 100))")
-curl -s -m 3 "http://127.0.0.1:$PORT/api/admin/role"
+./install-claude-mem -r claude
 ```
 
-检查输出：
-- 服务端：`{"role":"server","userLabel":"..."}`
-- 客户端：`{"role":"client","userLabel":"..."}`
+Windows PowerShell 中执行同样命令时使用：
 
-**客户端额外验证**（确认能连通服务端）：
+```powershell
+bash ./install-claude-mem -i claude --role client --upstream "<SERVER_URL>" --label "<USER_LABEL>" --token "<ACCESS_TOKEN>"
+```
+
+## 阶段 3：验证
+
+安装完成后从 `~/.claude-mem/worker.pid` 读取端口，读不到再使用脚本默认端口算法。不要只假设 37777。
+
 ```bash
-curl -s -m 5 -H "Authorization: Bearer <ACCESS_TOKEN>" "http://<SERVER_URL>/api/sync/status"
+PORT=$(grep -o '"port":[[:space:]]*[0-9]*' ~/.claude-mem/worker.pid 2>/dev/null | grep -o '[0-9]*$' || true)
+if [ -z "$PORT" ]; then PORT=$((37700 + $(id -u) % 100)); fi
+curl -sf --connect-timeout 2 --max-time 5 "http://127.0.0.1:$PORT/api/health"
+curl -sf --connect-timeout 2 --max-time 5 "http://127.0.0.1:$PORT/api/admin/role"
 ```
 
-如果返回 401/403，说明 token 不匹配，让用户检查服务端和客户端的 token 是否一致。如果返回 JSON，说明连接成功。
+Windows PowerShell 验证：
 
----
+```powershell
+$pidJson = Get-Content "$env:USERPROFILE\.claude-mem\worker.pid" -Raw | ConvertFrom-Json
+$port = $pidJson.port
+Invoke-RestMethod -TimeoutSec 5 "http://127.0.0.1:$port/api/health"
+Invoke-RestMethod -TimeoutSec 5 "http://127.0.0.1:$port/api/admin/role"
+```
 
-### 阶段 3：安装完成提示
+期望：
 
-根据 `ROLE` 输出不同的完成信息：
+- 服务端：role 为 `server`
+- 客户端：role 为 `client`
 
-**服务端**：
+客户端额外验证服务端连通性：
 
-安装脚本已自动生成 `SERVER-INFO.md`，先读取它获取 token 和 URL：
+```bash
+curl -sf --connect-timeout 2 --max-time 5 -H "Authorization: Bearer <ACCESS_TOKEN>" "<SERVER_URL>/api/sync/status"
+```
+
+返回 401/403 通常是 token 不匹配；返回 JSON 表示连接成功。
+
+## 阶段 4：完成提示
+
+服务端安装完成后，优先读取根脚本生成的 `SERVER-INFO.md`：
+
 ```bash
 cat SERVER-INFO.md
 ```
 
-如果 SERVER-INFO.md 不在当前目录，手动获取：
+如果文件不存在，再从配置读取：
+
 ```bash
-# 获取本机 LAN IP
-ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}'
-# 获取 worker 端口
-grep -o '"port":[0-9]*' ~/.claude-mem/worker.pid | grep -o '[0-9]*'
-# 获取 token
-grep -o '"CLAUDE_MEM_SERVER_ACCESS_TOKEN":"[^"]*"' ~/.claude-mem/settings.json | cut -d'"' -f4
+PORT=$(grep -o '"port":[[:space:]]*[0-9]*' ~/.claude-mem/worker.pid | grep -o '[0-9]*$')
+TOKEN=$(node -e "const s=require(process.env.HOME+'/.claude-mem/settings.json');const e=s.env||s;console.log(e.CLAUDE_MEM_SERVER_ACCESS_TOKEN||'')")
 ```
 
-然后输出完整的接入信息（替换 `<IP>` `<PORT>` `<TOKEN>` 为实际值）：
+输出给用户：
 
-```
-✅ 服务端安装完成！
+```text
+服务端安装完成。
+Viewer: http://<SERVER_IP>:<PORT>/
+Server API URL: http://<SERVER_IP>:<PORT>
+Access Token: <TOKEN>
 
-📄 SERVER-INFO.md 已生成在 install-claude-mem 所在目录，包含全部接入信息。
-
-🔑 Access Token：<TOKEN>
-   （请妥善保存——这是客户端接入的唯一凭证）
-🌐 Server API URL：http://<IP>:<PORT>
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-📋 客户端接入信息（复制发给每个用户）
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-在用户电脑上执行（替换 <用户名>）：
-
-  ./install-claude-mem -i claude \
-    --role client \
-    --upstream http://<IP>:<PORT> \
-    --label <用户名> \
-    --token <TOKEN>
-
-或通过 AI 助手安装：在本对话中说"安装 claude-mem 客户端"，
-按提示填写 Server URL 和 Access Token 即可。
+客户端接入命令：
+./install-claude-mem -i claude --role client --upstream http://<SERVER_IP>:<PORT> --label <用户名> --token <TOKEN>
 ```
 
-如果 token 是用户自己设定的，额外提示：
-> ⚠️ 你使用的是自定义 token，请确保已安全地告知每位用户。token 泄露后任何人都能向 server 推送数据。
+客户端安装完成后输出：
 
-如果 token 是自动生成的，额外提示：
-> 💡 此 token 由系统自动生成。完整信息已写入 `SERVER-INFO.md`。如需轮换 token，直接修改 server 的 `~/.claude-mem/settings.json` 中 `CLAUDE_MEM_SERVER_ACCESS_TOKEN`，然后同步更新所有客户端。
-
-**客户端**：
+```text
+客户端安装完成。
+本机数据将自动推送到：<SERVER_URL>
+本地 viewer 地址：http://127.0.0.1:<PORT>/
+请重启 Claude Code 以加载插件。
 ```
-✅ 客户端安装完成！
-
-- 本机数据将自动推送到：<SERVER_URL>
-- 同步间隔：30 秒
-- 本地 viewer 地址：http://127.0.0.1:<端口>/
-- 下一步：重启 Claude Code 或执行 claude-mem restart 使配置生效
-```
-
----
-
-### 阶段 4：提醒用户
-
-安装完成提醒时：
-> 如果你是老板，打开浏览器访问 `http://<SERVER_IP>:<PORT>/` 即可看到全团队的 AI 工作记录。
-> 所有用户的 observation/summary/prompt 都会同步到服务端。
-> 服务端 viewer 里可以按用户筛选数据。
-
----
 
 ## 故障排查
 
-| 现象 | 可能原因 | 排查命令 |
-|---|---|---|
-| worker 启动失败 | 端口冲突 / bun 未安装 | `cat ~/.claude-mem/logs/claude-mem-$(date +%F).log \| tail -50` |
-| 客户端 401 | token 不一致 | 对比两台机器的 `grep ACCESS_TOKEN ~/.claude-mem/settings.json` |
-| 客户端连接超时 | 服务端防火墙 / IP 不可达 | 客户端 `curl -m 5 http://<SERVER_IP>:<PORT>/api/admin/role` |
-| 服务端不接收数据 | TRUSTED_PROXIES 拒绝了客户端 IP | 服务端 `tail -100 ~/.claude-mem/logs/claude-mem-$(date +%F).log \| grep trustProxies` |
-| 数据推了但在 viewer 看不到 | user_label 不一致 | 对比两台机器的 `grep USER_LABEL ~/.claude-mem/settings.json` |
+| 现象 | 处理 |
+|---|---|
+| 卡在 Stopping worker | 重新运行最新版 `./install-claude-mem -r claude`；根脚本的 health check 有总超时，Windows 会用 `netstat -ano` + `taskkill` 清理卡住的 worker |
+| worker 启动失败 | 查看 `~/.claude-mem/logs/claude-mem-$(date +%F).log` |
+| 客户端 401/403 | 对比服务端和客户端 token |
+| 客户端连接超时 | 检查服务端 IP、端口、防火墙和 `CLAUDE_MEM_SERVER_BIND_HOST` |
+| viewer 看不到数据 | 检查客户端 role、upstream、user label 和 sync status |
 
-## 设计决策
+## 行为一致性要求
 
-- **Access Token 替代 AllowList**：不再用 `CLAUDE_MEM_SERVER_ALLOWED_USERS` CSV 白名单。改用共享 Access Token——服务端设一个，所有客户端用同一个。比白名单简单，比 API Key 体系轻量，适合 LAN 场景。
-- **tokenAuth 中间件顺序**：在 `trustProxies` 之后、`requireTls` 之前执行。IP 过滤在第一层，token 在第二层。
-- **常量时间比较**：token 校验使用 `crypto.timingSafeEqual`，防止时序侧信道泄露 token 信息。
+当根目录 `install-claude-mem` 的参数、默认值、验证端点、数据保留语义或 Windows 行为变化时，同步更新本 skill。skill 只能描述和调用根脚本已经支持的行为。
