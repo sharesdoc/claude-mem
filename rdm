@@ -39,3 +39,5 @@ npm run build-and-sync
 
 # build and reinstall
 ./auto-build-all ; ./install-claude-mem -r claude
+
+# 每启动一个claude就会启动一个 /.claude/plugins/cache/thedotmack/claude-mem/13.2.0//scripts/mcp-server.cjs
