@@ -1,43 +1,42 @@
 from 37d24944af5f4afaa0de2b0bd0034bb432f2b714 of https://github.com/thedotmack/claude-mem.git
 修复只按项目文件夹名存储信息的问题（避免同名文件夹冲突）
 
-# install claude-mem for claude:
-./auto-build-all
-./install-claude-mem -i claude
-  首次使用还需要在 Claude Code 内启用一次
+# 部署 claude-mem有三种模式
+	# 首次使用还需要在 Claude Code 内启用一次插件，在 Claude Code 会话里执行一次：
+		/plugin install claude-mem
 
-  如果之前没启用过插件，在 Claude Code 会话里执行一次：
+	1. 纯个人本地
+		./auto-build-all
+		./install-claude-mem -i claude
+	2. 本地服务模式（允许客户端对接）
+		./auto-build-all
+		./install-claude-mem -i claude --role server --token 3b3a4a7debefd1e56988095673764a22d54f48cb --admin-password 3b3a4a7debefd1e56988095673764a22d54f48cb
+		# --token and --admin-password 可以不指定，会自动生成给你
+	3. 本地客户端（会自动同步消息给服务端）
+		./auto-build-all
+		./install-claude-mem -i claude --role client --upstream http://192.168.0.110:37701 --token 3b3a4a7debefd1e56988095673764a22d54f48cb
+		# --token 必须指定对方给你的token
 
-  /plugin install claude-mem
-
-  之后每次改完代码，只跑 npm run build-and-sync 就能让 Claude Code 用上新版本（重启 Claude Code 会话以重新加载 hooks）。
+# 三种模式下的重新部署是一样的命令
+	./auto-build-all; 
+	./install-claude-mem -r claude
+	# 会自动使用之前部署时的配置进行重新部署
+	
+# 每启动一个claude就会启动一个 /.claude/plugins/cache/thedotmack/claude-mem/13.2.0//scripts/mcp-server.cjs
+# 如果修改了 mcp-server.cjs，那么需要重启 claude 来应用新的 mcp-server.cjs
 
 
 # build
 npm install --ignore-scripts esbuild
 npm run build
-
 # 如果是开发迭代，用一条命令搞定构建+同步+重启 worker：
 npm run build-and-sync
-
 # or if bun not in PATH:
 export PATH="$HOME/.bun/bin:$PATH" && npm run build-and-sync
-
-
-
-如何 重启 worker
-
+# 如何 重启 worker
 npm run build-and-sync
+	一条命令：build → 同步到 marketplace → 重启 worker。完成后访问 http://localhost:37701/ 直接看新效果。
+	仅重启不重新构建：bun plugin/scripts/worker-service.cjs restart
 
-  一条命令：build → 同步到 marketplace → 重启 worker。完成后访问 http://localhost:37701/ 直接看新效果。
 
-  ▎ 仅重启不重新构建：bun plugin/scripts/worker-service.cjs restart
 
-./auto-build-all
-./install-claude-mem -i claude --role server --token 3b3a4a7debefd1e56988095673764a22d54f48cb --admin-password 3b3a4a7debefd1e56988095673764a22d54f48cb
-./install-claude-mem -i claude --role client --upstream http://192.168.0.110:37701 --token 3b3a4a7debefd1e56988095673764a22d54f48cb
-
-# build and reinstall
-./auto-build-all ; ./install-claude-mem -r claude
-
-# 每启动一个claude就会启动一个 /.claude/plugins/cache/thedotmack/claude-mem/13.2.0//scripts/mcp-server.cjs
