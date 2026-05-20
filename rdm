@@ -33,6 +33,6 @@ npm run build-and-sync
 
   ▎ 仅重启不重新构建：bun plugin/scripts/worker-service.cjs restart
 
-
+./install-claude-mem -i claude --role server --token 3b3a4a7debefd1e56988095673764a22d54f48cb --admin-password 3b3a4a7debefd1e56988095673764a22d54f48cb
 # build and reinstall
 ./auto-build-all ; ./install-claude-mem -r claude

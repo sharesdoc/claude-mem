@@ -252,7 +252,14 @@ export class SettingsDefaultsManager {
 
       let flatSettings = settings;
       if (settings.env && typeof settings.env === 'object') {
-        flatSettings = settings.env;
+        // Merge top-level keys with the nested env block instead of
+        // discarding the top level. A previous version replaced the whole
+        // file with ONLY settings.env, which silently wiped any flat-format
+        // keys (e.g. server role / token / admin password) that coexisted
+        // with an env block — a hybrid file produced when a nested writer
+        // ran against a flat settings.json. env wins on key conflicts.
+        const { env, ...topLevel } = settings;
+        flatSettings = { ...topLevel, ...env };
 
         try {
           writeFileSync(settingsPath, JSON.stringify(flatSettings, null, 2), 'utf-8');
