@@ -238,7 +238,20 @@ export class SyncRoutes extends BaseRouteHandler {
          custom_title, started_at, started_at_epoch, completed_at, completed_at_epoch,
          status, user_name, user_label)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(content_session_id) DO NOTHING
+      ON CONFLICT(content_session_id) DO UPDATE SET
+        memory_session_id = COALESCE(excluded.memory_session_id, sdk_sessions.memory_session_id),
+        project = COALESCE(NULLIF(excluded.project, ''), sdk_sessions.project),
+        platform_source = COALESCE(NULLIF(excluded.platform_source, ''), sdk_sessions.platform_source),
+        user_prompt = COALESCE(excluded.user_prompt, sdk_sessions.user_prompt),
+        custom_title = COALESCE(excluded.custom_title, sdk_sessions.custom_title),
+        completed_at = COALESCE(excluded.completed_at, sdk_sessions.completed_at),
+        completed_at_epoch = COALESCE(excluded.completed_at_epoch, sdk_sessions.completed_at_epoch),
+        status = CASE
+          WHEN sdk_sessions.status = 'completed' THEN sdk_sessions.status
+          ELSE excluded.status
+        END,
+        user_name = COALESCE(excluded.user_name, sdk_sessions.user_name),
+        user_label = COALESCE(excluded.user_label, sdk_sessions.user_label)
     `);
     const upsertObs = db.prepare(`
       INSERT INTO observations
@@ -263,10 +276,6 @@ export class SyncRoutes extends BaseRouteHandler {
     const tx = db.transaction((p: SyncIngestPayload) => {
       for (const s of p.sessions) {
         const sourceUid = s.content_session_id;
-        if (inboxHas.get(p.user_label, 'sdk_sessions', sourceUid)) {
-          applied.sessions.skipped++;
-          continue;
-        }
         upsertSession.run(
           s.content_session_id,
           s.memory_session_id ?? null,
@@ -282,6 +291,10 @@ export class SyncRoutes extends BaseRouteHandler {
           s.user_name ?? null,
           s.user_label ?? p.user_label,
         );
+        if (inboxHas.get(p.user_label, 'sdk_sessions', sourceUid)) {
+          applied.sessions.skipped++;
+          continue;
+        }
         recordInbox.run(p.user_label, 'sdk_sessions', sourceUid, now, s.id);
         applied.sessions.inserted++;
       }

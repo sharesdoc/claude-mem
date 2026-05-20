@@ -1375,14 +1375,15 @@ show_info() {
   if [[ "$role" == "server" ]]; then
     local ip
     ip=$(get_lan_ip 2>/dev/null || echo 'unknown')
-    printf "  ${BOLD}%-20s${RESET} %s\n" "Server URL"   "http://${ip}:${port}"
-    printf "  ${BOLD}%-20s${RESET} %s\n" "Access token"  "$token_display"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Server URL"     "http://${ip}:${port}"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Access token"   "${token:-(not set)}"
     printf "  ${BOLD}%-20s${RESET} %s\n" "Admin password" "$has_admin_pw"
   fi
 
   if [[ "$role" == "client" ]]; then
-    printf "  ${BOLD}%-20s${RESET} %s\n" "Upstream"     "${upstream:-(not set)}"
-    printf "  ${BOLD}%-20s${RESET} %s\n" "Token"        "$token_display"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Sync server URL" "${upstream:-(not set)}"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Sync token"      "${token:-(not set)}"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Token preview"   "$token_display"
   fi
 
   printf "  ${BOLD}%-20s${RESET} %s\n"   "Data dir"    "$DATA_DIR"
@@ -1392,10 +1393,16 @@ show_info() {
 
   if [[ "$role" == "client" && "$running" == "yes" ]]; then
     local sync_status
-    sync_status=$(curl -sf "http://127.0.0.1:${port}/api/sync/status" 2>/dev/null || echo '{}')
-    local lag_total lag_sessions lag_obs lag_sum lag_prom
+    sync_status=$(curl -sf --connect-timeout 2 --max-time 3 "http://127.0.0.1:${port}/api/sync/status" 2>/dev/null || echo '{}')
+    local lag_total last_error failures
     lag_total=$(echo "$sync_status" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.lag?.total??'?')}catch{}})" 2>/dev/null || echo '?')
+    failures=$(echo "$sync_status" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.consecutive_failures??0)}catch{}})" 2>/dev/null || echo '0')
+    last_error=$(echo "$sync_status" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.last_error||'')}catch{}})" 2>/dev/null || echo '')
     printf "  ${BOLD}%-20s${RESET} %s\n" "Sync lag"     "$lag_total items"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Sync failures" "$failures"
+    if [[ -n "$last_error" ]]; then
+      printf "  ${BOLD}%-20s${RESET} %s\n" "Last sync error" "$last_error"
+    fi
   fi
 
   printf "\n"

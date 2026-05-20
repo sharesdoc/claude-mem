@@ -132,6 +132,79 @@ describe('POST /api/sync/ingest', () => {
     }
   });
 
+  it('updates an already-synced session when the memory_session_id arrives later', async () => {
+    const db = buildDb();
+    const { url, close } = await spinUp(db);
+    try {
+      const initial = basePayload({
+        sessions: [{
+          id: 1,
+          content_session_id: 'c-late-memory',
+          memory_session_id: null,
+          project: 'p',
+          platform_source: 'claude',
+          user_prompt: null,
+          custom_title: null,
+          started_at: '2026',
+          started_at_epoch: 1000,
+          completed_at: null,
+          completed_at_epoch: null,
+          status: 'active',
+          user_name: 'alice',
+          user_label: 'alice',
+        }],
+      });
+
+      const first = await fetch(`${url}/api/sync/ingest`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(initial),
+      });
+      expect(first.status).toBe(200);
+
+      const initialSession = initial.sessions[0] as Record<string, unknown>;
+      const followup = basePayload({
+        sessions: [{
+          ...initialSession,
+          id: 2,
+          memory_session_id: 'm-late-memory',
+        }],
+        summaries: [{
+          id: 1,
+          memory_session_id: 'm-late-memory',
+          project: 'p',
+          request: 'summarize later',
+          investigated: null,
+          learned: null,
+          completed: null,
+          next_steps: null,
+          files_read: null,
+          files_edited: null,
+          notes: null,
+          prompt_number: 1,
+          created_at: '2026',
+          created_at_epoch: 2000,
+        }],
+      });
+
+      const second = await fetch(`${url}/api/sync/ingest`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(followup),
+      });
+      expect(second.status).toBe(200);
+      const json = await second.json();
+      expect(json.applied.sessions.skipped).toBe(1);
+      expect(json.applied.summaries.inserted).toBe(1);
+
+      const session = db.prepare("SELECT memory_session_id FROM sdk_sessions WHERE content_session_id = 'c-late-memory'")
+        .get() as { memory_session_id: string };
+      expect(session.memory_session_id).toBe('m-late-memory');
+    } finally {
+      await close();
+    }
+  });
+
   it('rejects payload over CLAUDE_MEM_SERVER_INGEST_MAX_BATCH with 413', async () => {
     const db = buildDb();
     const { url, close } = await spinUp(db, { CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: '2' });

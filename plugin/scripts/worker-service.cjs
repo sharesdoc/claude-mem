@@ -11514,7 +11514,20 @@ ${s.formatTableHeader()}`,f=d.map((m,h)=>s.formatObservationIndex(m,h));n.json({
          custom_title, started_at, started_at_epoch, completed_at, completed_at_epoch,
          status, user_name, user_label)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(content_session_id) DO NOTHING
+      ON CONFLICT(content_session_id) DO UPDATE SET
+        memory_session_id = COALESCE(excluded.memory_session_id, sdk_sessions.memory_session_id),
+        project = COALESCE(NULLIF(excluded.project, ''), sdk_sessions.project),
+        platform_source = COALESCE(NULLIF(excluded.platform_source, ''), sdk_sessions.platform_source),
+        user_prompt = COALESCE(excluded.user_prompt, sdk_sessions.user_prompt),
+        custom_title = COALESCE(excluded.custom_title, sdk_sessions.custom_title),
+        completed_at = COALESCE(excluded.completed_at, sdk_sessions.completed_at),
+        completed_at_epoch = COALESCE(excluded.completed_at_epoch, sdk_sessions.completed_at_epoch),
+        status = CASE
+          WHEN sdk_sessions.status = 'completed' THEN sdk_sessions.status
+          ELSE excluded.status
+        END,
+        user_name = COALESCE(excluded.user_name, sdk_sessions.user_name),
+        user_label = COALESCE(excluded.user_label, sdk_sessions.user_label)
     `),d=n.prepare(`
       INSERT INTO observations
         (memory_session_id, project, text, type, title, subtitle, facts, narrative,
@@ -11530,7 +11543,7 @@ ${s.formatTableHeader()}`,f=d.map((m,h)=>s.formatObservationIndex(m,h));n.json({
       INSERT INTO user_prompts
         (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch)
       VALUES (?, ?, ?, ?, ?)
-    `),m=Date.now();n.transaction(y=>{for(let b of y.sessions){let v=b.content_session_id;if(l.get(y.user_label,"sdk_sessions",v)){i.sessions.skipped++;continue}u.run(b.content_session_id,b.memory_session_id??null,b.project,b.platform_source,b.user_prompt??null,b.custom_title??null,b.started_at,b.started_at_epoch,b.completed_at??null,b.completed_at_epoch??null,b.status,b.user_name??null,b.user_label??y.user_label),c.run(y.user_label,"sdk_sessions",v,m,b.id),i.sessions.inserted++}for(let b of y.observations){let v=`${b.memory_session_id}:${b.content_hash??`${b.id}-${b.created_at_epoch}`}`;if(l.get(y.user_label,"observations",v)){i.observations.skipped++;continue}d.run(b.memory_session_id,b.project,b.text??null,b.type,b.title??null,b.subtitle??null,b.facts??null,b.narrative??null,b.concepts??null,b.files_read??null,b.files_modified??null,b.prompt_number??null,b.created_at,b.created_at_epoch,b.content_hash??null),c.run(y.user_label,"observations",v,m,b.id),i.observations.inserted++,s.push(b)}for(let b of y.summaries){let v=`${b.memory_session_id}:${b.prompt_number??b.created_at_epoch}`;if(l.get(y.user_label,"session_summaries",v)){i.summaries.skipped++;continue}p.run(b.memory_session_id,b.project,b.request??null,b.investigated??null,b.learned??null,b.completed??null,b.next_steps??null,b.files_read??null,b.files_edited??null,b.notes??null,b.prompt_number??null,b.created_at,b.created_at_epoch),c.run(y.user_label,"session_summaries",v,m,b.id),i.summaries.inserted++,o.push(b)}for(let b of y.prompts){let v=`${b.content_session_id}:${b.prompt_number}`;if(l.get(y.user_label,"user_prompts",v)){i.prompts.skipped++;continue}f.run(b.content_session_id,b.prompt_number,b.prompt_text,b.created_at,b.created_at_epoch),c.run(y.user_label,"user_prompts",v,m,b.id),i.prompts.inserted++,a.push(b)}})(r);let g=this.computeWatermark(r.user_label);return{applied:i,nextWatermark:g,inserted:{observations:s,summaries:o,prompts:a}}}computeWatermark(r){let i=this.dbManager.getConnection().prepare(`
+    `),m=Date.now();n.transaction(y=>{for(let b of y.sessions){let v=b.content_session_id;if(u.run(b.content_session_id,b.memory_session_id??null,b.project,b.platform_source,b.user_prompt??null,b.custom_title??null,b.started_at,b.started_at_epoch,b.completed_at??null,b.completed_at_epoch??null,b.status,b.user_name??null,b.user_label??y.user_label),l.get(y.user_label,"sdk_sessions",v)){i.sessions.skipped++;continue}c.run(y.user_label,"sdk_sessions",v,m,b.id),i.sessions.inserted++}for(let b of y.observations){let v=`${b.memory_session_id}:${b.content_hash??`${b.id}-${b.created_at_epoch}`}`;if(l.get(y.user_label,"observations",v)){i.observations.skipped++;continue}d.run(b.memory_session_id,b.project,b.text??null,b.type,b.title??null,b.subtitle??null,b.facts??null,b.narrative??null,b.concepts??null,b.files_read??null,b.files_modified??null,b.prompt_number??null,b.created_at,b.created_at_epoch,b.content_hash??null),c.run(y.user_label,"observations",v,m,b.id),i.observations.inserted++,s.push(b)}for(let b of y.summaries){let v=`${b.memory_session_id}:${b.prompt_number??b.created_at_epoch}`;if(l.get(y.user_label,"session_summaries",v)){i.summaries.skipped++;continue}p.run(b.memory_session_id,b.project,b.request??null,b.investigated??null,b.learned??null,b.completed??null,b.next_steps??null,b.files_read??null,b.files_edited??null,b.notes??null,b.prompt_number??null,b.created_at,b.created_at_epoch),c.run(y.user_label,"session_summaries",v,m,b.id),i.summaries.inserted++,o.push(b)}for(let b of y.prompts){let v=`${b.content_session_id}:${b.prompt_number}`;if(l.get(y.user_label,"user_prompts",v)){i.prompts.skipped++;continue}f.run(b.content_session_id,b.prompt_number,b.prompt_text,b.created_at,b.created_at_epoch),c.run(y.user_label,"user_prompts",v,m,b.id),i.prompts.inserted++,a.push(b)}})(r);let g=this.computeWatermark(r.user_label);return{applied:i,nextWatermark:g,inserted:{observations:s,summaries:o,prompts:a}}}computeWatermark(r){let i=this.dbManager.getConnection().prepare(`
       SELECT source_table, MAX(applied_row_id) AS max_id
       FROM sync_inbox
       WHERE user_label = ?
