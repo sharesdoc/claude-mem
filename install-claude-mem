@@ -221,8 +221,54 @@ get_worker_port() {
 check_worker_running() {
   local port
   port=$(get_worker_port)
-  dbg "check_worker_running: curl -sf http://127.0.0.1:${port}/api/health --connect-timeout 2"
-  curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 2 2>/dev/null
+  dbg "check_worker_running: curl -sf http://127.0.0.1:${port}/api/health --connect-timeout 2 --max-time 3"
+  curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 2 --max-time 3 2>/dev/null
+}
+
+is_windows_shell() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+find_pid_listening_on_port() {
+  local port="$1"
+  local pid=""
+
+  if is_windows_shell; then
+    # Git Bash/MSYS normally lacks lsof/fuser. netstat -ano is available on
+    # Windows and prints the owning PID as the last column.
+    pid=$(netstat -ano 2>/dev/null | awk -v p=":$port" '
+      $0 ~ p && $0 ~ /LISTENING/ { print $NF; exit }
+    ' || true)
+  else
+    if command -v lsof >/dev/null 2>&1; then
+      pid=$(lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | head -1 || true)
+    fi
+    if [[ -z "$pid" ]] && command -v fuser >/dev/null 2>&1; then
+      pid=$(fuser "${port}/tcp" 2>/dev/null | grep -o '[0-9]*' | head -1 || true)
+    fi
+  fi
+
+  echo "$pid"
+}
+
+terminate_worker_pid() {
+  local pid="$1"
+  if [[ -z "$pid" ]]; then return 0; fi
+
+  if is_windows_shell && command -v taskkill >/dev/null 2>&1; then
+    taskkill //PID "$pid" //T //F >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  kill "$pid" 2>/dev/null || true
+  sleep 2
+  if ps -p "$pid" >/dev/null 2>&1; then
+    dbg "terminate_worker_pid: force-killing pid=$pid"
+    kill -9 "$pid" 2>/dev/null || true
+  fi
 }
 
 check_codex_cli() {
@@ -244,11 +290,13 @@ check_codex_plugin() {
 case "$(uname -s)" in
   Darwin) TS_OS="macos" ;;
   Linux)  TS_OS="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) TS_OS="windows" ;;
   *) TS_OS="" ;;
 esac
 case "$(uname -m)" in
   x86_64|amd64) TS_ARCH="x64" ;;
   arm64|aarch64) TS_ARCH="arm64" ;;
+  i386|i686) TS_ARCH="x86" ;;
   *) TS_ARCH="" ;;
 esac
 LOCAL_TS_BINARY_GZ="$SCRIPT_DIR/download/tree-sitter-${TS_OS}-${TS_ARCH}.gz"
@@ -334,13 +382,17 @@ restore_pkgjson() {
 inject_treesitter_binary() {
   local target_node_modules="$1"
   local ts_dir="$target_node_modules/tree-sitter-cli"
+  local ts_exe="tree-sitter"
+  if is_windows_shell; then
+    ts_exe="tree-sitter.exe"
+  fi
   if [[ ! -d "$ts_dir" ]]; then
     warn "tree-sitter-cli not in $target_node_modules — skip injection"
     return
   fi
-  gunzip -c "$LOCAL_TS_BINARY_GZ" > "$ts_dir/tree-sitter"
-  chmod +x "$ts_dir/tree-sitter"
-  ok "Injected tree-sitter binary: $ts_dir/tree-sitter"
+  gunzip -c "$LOCAL_TS_BINARY_GZ" > "$ts_dir/$ts_exe"
+  chmod +x "$ts_dir/$ts_exe"
+  ok "Injected tree-sitter binary: $ts_dir/$ts_exe"
 }
 
 # Restore package.json files even if the script aborts mid-sync.
@@ -505,7 +557,7 @@ do_start_worker() {
 
   local retries=0
   while [[ $retries -lt 10 ]]; do
-    if curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 1 2>/dev/null; then
+    if curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 1 --max-time 2 2>/dev/null; then
       ok "Worker started on port ${port}"
       return
     fi
@@ -571,26 +623,18 @@ do_stop_worker() {
     pid=$(grep -o '"pid":[[:space:]]*[0-9]*' "$PID_FILE" 2>/dev/null | grep -o '[0-9]*$' || true)
     dbg "do_stop_worker: PID file pid=$pid"
   fi
-  if [[ -z "$pid" ]] || ! ps -p "$pid" >/dev/null 2>&1; then
+  if [[ -z "$pid" ]] || { ! is_windows_shell && ! ps -p "$pid" >/dev/null 2>&1; }; then
     # Fallback: find worker by port when PID file is missing or stale
     local port
     port=$(get_worker_port)
     dbg "do_stop_worker: trying to find worker on port $port"
-    pid=$(lsof -ti "TCP:127.0.0.1:${port}" -sTCP:LISTEN 2>/dev/null || true)
-    if [[ -z "$pid" ]] && command -v fuser >/dev/null 2>&1; then
-      pid=$(fuser "${port}/tcp" 2>/dev/null | grep -o '[0-9]*' | head -1 || true)
-    fi
+    pid=$(find_pid_listening_on_port "$port")
     dbg "do_stop_worker: port-based pid=$pid"
   fi
 
-  if [[ -n "$pid" ]] && ps -p "$pid" >/dev/null 2>&1; then
+  if [[ -n "$pid" ]] && { is_windows_shell || ps -p "$pid" >/dev/null 2>&1; }; then
     dbg "do_stop_worker: killing pid=$pid"
-    kill "$pid" 2>/dev/null || true
-    sleep 2
-    if ps -p "$pid" >/dev/null 2>&1; then
-      dbg "do_stop_worker: force-killing pid=$pid"
-      kill -9 "$pid" 2>/dev/null || true
-    fi
+    terminate_worker_pid "$pid"
   fi
 
   if check_worker_running; then
@@ -1298,7 +1342,7 @@ show_info() {
   local uptime="N/A"
   if [[ "$running" == "yes" ]]; then
     local up_sec
-    up_sec=$(curl -sf "http://127.0.0.1:${port}/api/health" 2>/dev/null | node -e "const d=require('fs').readFileSync('/dev/stdin','utf-8');try{console.log(JSON.parse(d).uptime||'')}catch(e){}" 2>/dev/null || echo '')
+    up_sec=$(curl -sf --connect-timeout 2 --max-time 3 "http://127.0.0.1:${port}/api/health" 2>/dev/null | node -e "const d=require('fs').readFileSync('/dev/stdin','utf-8');try{console.log(JSON.parse(d).uptime||'')}catch(e){}" 2>/dev/null || echo '')
     if [[ -n "$up_sec" && "$up_sec" =~ ^[0-9]+$ ]]; then
       local d h m s
       s=$up_sec
