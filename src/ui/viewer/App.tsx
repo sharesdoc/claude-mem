@@ -288,6 +288,7 @@ export function App() {
             dateFilter={dateFilter}
             onDateFilterChange={setDateFilter}
             showUserSelector={role.role === 'server'}
+            deployment={role.deployment}
             users={pickerUsers}
             userLabelFilter={userLabelFilter}
             onUserLabelFilterChange={setUserLabelFilter}

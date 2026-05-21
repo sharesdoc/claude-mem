@@ -29,6 +29,8 @@ interface HeaderProps {
   onDateFilterChange: (next: string | null) => void;
   /** Server-mode-only user picker. */
   showUserSelector: boolean;
+  /** Deployment role for the logo title (client/server installs vs local-only). */
+  deployment: 'client' | 'server' | 'standalone';
   users: UserRow[];
   userLabelFilter: string | null;
   onUserLabelFilterChange: (next: string | null) => void;
@@ -54,6 +56,7 @@ export function Header({
   dateFilter,
   onDateFilterChange,
   showUserSelector,
+  deployment,
   users,
   userLabelFilter,
   onUserLabelFilterChange,
@@ -64,6 +67,14 @@ export function Header({
 }: HeaderProps) {
   useSpinningFavicon(isProcessing);
   const { locale, setLocale, t } = useLocale();
+
+  // Brand the title by how the node was installed: explicit --role client/
+  // server installs identify themselves; a plain local-only install keeps
+  // the generic year branding.
+  const logoText =
+    deployment === 'client' ? 'Claude-Mem Client' :
+    deployment === 'server' ? 'Claude-Mem Server' :
+    'Claude-Mem 2026';
 
   return (
     <div className="header">
@@ -77,7 +88,7 @@ export function Header({
               </div>
             )}
           </div>
-          <span className="logo-text">Claude-Mem 2026</span>
+          <span className="logo-text">{logoText}</span>
         </h1>
       </div>
       <div className="status">

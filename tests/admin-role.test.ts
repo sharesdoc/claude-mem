@@ -94,3 +94,65 @@ describe('GET /api/admin/role', () => {
     }
   });
 });
+
+/**
+ * `deployment` is a display-only refinement of `role`. It reflects what the
+ * operator explicitly chose at install time via `install-claude-mem --role`
+ * (which writes CLAUDE_MEM_NODE_ROLE to settings.json). When neither client
+ * nor server was specified the key is absent, so a plain local-only install
+ * reports 'standalone' — the viewer header then shows generic branding
+ * instead of "Claude-Mem Client". Read raw so SettingsDefaultsManager's
+ * default-merge ('client') can't mask the unconfigured state.
+ */
+describe('GET /api/admin/role — deployment field', () => {
+  it('reports standalone when CLAUDE_MEM_NODE_ROLE is absent (local-only install)', async () => {
+    writeFileSync(join(tmpRoot, 'settings.json'), JSON.stringify({ env: { CLAUDE_MEM_USER_LABEL: 'johnson' } }));
+    const { url, close } = await spinUpServer(join(tmpRoot, 'settings.json'));
+    try {
+      const body = await fetch(`${url}/api/admin/role`).then(r => r.json());
+      expect(body.role).toBe('client');
+      expect(body.deployment).toBe('standalone');
+    } finally {
+      await close();
+    }
+  });
+
+  it('reports client when explicitly installed with --role client', async () => {
+    writeFileSync(join(tmpRoot, 'settings.json'), JSON.stringify({
+      env: { CLAUDE_MEM_NODE_ROLE: 'client', CLAUDE_MEM_USER_LABEL: 'johnson' },
+    }));
+    const { url, close } = await spinUpServer(join(tmpRoot, 'settings.json'));
+    try {
+      const body = await fetch(`${url}/api/admin/role`).then(r => r.json());
+      expect(body.deployment).toBe('client');
+    } finally {
+      await close();
+    }
+  });
+
+  it('reports server when explicitly installed with --role server', async () => {
+    writeFileSync(join(tmpRoot, 'settings.json'), JSON.stringify({
+      env: { CLAUDE_MEM_NODE_ROLE: 'server', CLAUDE_MEM_USER_LABEL: 'boss' },
+    }));
+    const { url, close } = await spinUpServer(join(tmpRoot, 'settings.json'));
+    try {
+      const body = await fetch(`${url}/api/admin/role`).then(r => r.json());
+      expect(body.deployment).toBe('server');
+    } finally {
+      await close();
+    }
+  });
+
+  it('reports standalone for unknown role values', async () => {
+    writeFileSync(join(tmpRoot, 'settings.json'), JSON.stringify({
+      env: { CLAUDE_MEM_NODE_ROLE: 'edge-cluster-overlord', CLAUDE_MEM_USER_LABEL: 'x' },
+    }));
+    const { url, close } = await spinUpServer(join(tmpRoot, 'settings.json'));
+    try {
+      const body = await fetch(`${url}/api/admin/role`).then(r => r.json());
+      expect(body.deployment).toBe('standalone');
+    } finally {
+      await close();
+    }
+  });
+});

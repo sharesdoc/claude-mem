@@ -13,11 +13,19 @@ import { authFetch } from '../utils/api';
  */
 export interface RoleInfo {
   role: 'client' | 'server';
+  /**
+   * Display-only refinement of `role`: 'client'/'server' only when the
+   * operator explicitly installed with `--role`, otherwise 'standalone'
+   * (local-only use). Gates the header branding, not the multi-user UI.
+   */
+  deployment: 'client' | 'server' | 'standalone';
   userLabel: string | null;
   ready: boolean;
 }
 
-const DEFAULT: RoleInfo = { role: 'client', userLabel: null, ready: false };
+// Default to 'standalone' so the header shows generic branding until the
+// role fetch resolves (and on error) instead of flashing "Client".
+const DEFAULT: RoleInfo = { role: 'client', deployment: 'standalone', userLabel: null, ready: false };
 
 export function useRole(): RoleInfo {
   const [info, setInfo] = useState<RoleInfo>(DEFAULT);
@@ -26,10 +34,12 @@ export function useRole(): RoleInfo {
     let cancelled = false;
     authFetch('/api/admin/role')
       .then(r => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((body: { role?: string; userLabel?: string | null }) => {
+      .then((body: { role?: string; deployment?: string; userLabel?: string | null }) => {
         if (cancelled) return;
         const role: 'client' | 'server' = body.role === 'server' ? 'server' : 'client';
-        setInfo({ role, userLabel: body.userLabel ?? null, ready: true });
+        const deployment: 'client' | 'server' | 'standalone' =
+          body.deployment === 'server' ? 'server' : body.deployment === 'client' ? 'client' : 'standalone';
+        setInfo({ role, deployment, userLabel: body.userLabel ?? null, ready: true });
       })
       .catch(() => {
         if (cancelled) return;
