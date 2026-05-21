@@ -18,9 +18,10 @@ from 37d24944af5f4afaa0de2b0bd0034bb432f2b714 of https://github.com/thedotmack/c
 		# --token 必须指定对方给你的token
 
 # 三种模式下的重新部署是一样的命令
-	./auto-build-all; 
-	./install-claude-mem -r claude
+./auto-build-all; ./install-claude-mem -r claude
 	# 会自动使用之前部署时的配置进行重新部署
+# 三种模式的彻底删除命令
+./install-claude-mem -d claude
 	
 # 每启动一个claude就会启动一个 /.claude/plugins/cache/thedotmack/claude-mem/13.2.0//scripts/mcp-server.cjs
 # 如果修改了 mcp-server.cjs，那么需要重启 claude 来应用新的 mcp-server.cjs
