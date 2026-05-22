@@ -236,6 +236,16 @@ export function App() {
     }
   }, [pruneByProjects, currentFilter]);
 
+  /**
+   * Single-prompt delete (PromptCard delete button). The live SSE state is
+   * pruned by the `prompt_deleted` broadcast in useSSE; here we only need to
+   * drop the row from the locally paginated buffer so it disappears
+   * immediately on the originating client without waiting for a refetch.
+   */
+  const handlePromptDeleted = useCallback((id: number) => {
+    setPaginatedPrompts((prev) => prev.filter((p) => p.id !== id));
+  }, []);
+
   useEffect(() => {
     refreshStats();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -305,6 +315,7 @@ export function App() {
             summaries={allSummaries}
             prompts={allPrompts}
             onLoadMore={handleLoadMore}
+            onPromptDeleted={handlePromptDeleted}
             isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
             hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore}
           />

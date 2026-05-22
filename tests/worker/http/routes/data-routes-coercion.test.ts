@@ -80,7 +80,9 @@ describe('DataRoutes Type Coercion', () => {
       {} as any, // sessionManager
       {} as any, // sseBroadcaster
       {} as any, // workerService
-      Date.now()
+      Date.now(),
+      {} as any, // adminSessions
+      false // requireAdminForWrites
     );
   });
 

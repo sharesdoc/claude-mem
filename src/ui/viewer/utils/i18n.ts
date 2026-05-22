@@ -94,6 +94,7 @@ export const translations: Record<Locale, Dict> = {
     'prompt.copy': 'Copy prompt',
     'prompt.copied': 'Copied',
     'prompt.copiedMsg': 'Prompt is copied!',
+    'prompt.delete': 'Delete prompt',
 
     'welcome.title': 'Welcome to claude-mem',
     'welcome.tagline': 'Persistent memory for Claude Code.',
@@ -229,6 +230,7 @@ export const translations: Record<Locale, Dict> = {
     'prompt.copy': '复制提示词',
     'prompt.copied': '已复制',
     'prompt.copiedMsg': '提示词已复制！',
+    'prompt.delete': '删除提示词',
 
     'welcome.title': '欢迎使用 claude-mem',
     'welcome.tagline': 'Claude Code 的持久化记忆系统。',

@@ -1,19 +1,38 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { UserPrompt } from '../types';
 import { formatDate } from '../utils/formatters';
+import { authFetch } from '../utils/api';
 import { useLocale } from '../hooks/useLocale';
 
 interface PromptCardProps {
   prompt: UserPrompt;
+  /** Called with the prompt id after it is deleted from the database. */
+  onDeleted?: (id: number) => void;
 }
 
 const COPIED_DURATION_MS = 2000;
 
-export function PromptCard({ prompt }: PromptCardProps) {
+export function PromptCard({ prompt, onDeleted }: PromptCardProps) {
   const { t } = useLocale();
   const [copied, setCopied] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const date = formatDate(prompt.created_at_epoch);
+
+  const handleDelete = async () => {
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      const res = await authFetch(`/api/prompt/${prompt.id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // SSE prunes live state for all clients; this callback drops the row
+      // from the paginated buffer on the originating client.
+      onDeleted?.(prompt.id);
+    } catch (err) {
+      console.warn('Failed to delete prompt:', err);
+      setDeleting(false);
+    }
+  };
 
   useEffect(() => {
     return () => {
@@ -55,6 +74,21 @@ export function PromptCard({ prompt }: PromptCardProps) {
           </span>
           <span className="card-project">{prompt.project}</span>
         </div>
+        <button
+          type="button"
+          className="prompt-delete-btn"
+          onClick={handleDelete}
+          disabled={deleting}
+          title={t('prompt.delete')}
+          aria-label={t('prompt.delete')}
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="3 6 5 6 21 6"></polyline>
+            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+            <line x1="10" y1="11" x2="10" y2="17"></line>
+            <line x1="14" y1="11" x2="14" y2="17"></line>
+          </svg>
+        </button>
       </div>
       <div className="card-content">
         {prompt.prompt_text}

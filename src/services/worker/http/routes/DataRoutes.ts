@@ -14,6 +14,7 @@ import { SessionManager } from '../../SessionManager.js';
 import { SSEBroadcaster } from '../../SSEBroadcaster.js';
 import type { WorkerService } from '../../../worker-service.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
+import { AdminSessionStore, extractBearerToken } from '../AdminSessionStore.js';
 import { validateBody } from '../middleware/validateBody.js';
 import { normalizePlatformSource } from '../../../../shared/platform-source.js';
 import { getObservationsByFilePath } from '../../../sqlite/observations/get.js';
@@ -89,9 +90,32 @@ export class DataRoutes extends BaseRouteHandler {
     private sessionManager: SessionManager,
     private sseBroadcaster: SSEBroadcaster,
     private workerService: WorkerService,
-    private startTime: number
+    private startTime: number,
+    /**
+     * Shared admin-session registry used to authorize destructive writes.
+     * Paired with `requireAdminForWrites`: when that flag is true (server
+     * mode) the caller must present a valid admin bearer token; in client /
+     * standalone mode the flag is false and the gate is skipped entirely.
+     */
+    private adminSessions: AdminSessionStore,
+    private requireAdminForWrites: boolean
   ) {
     super();
+  }
+
+  /**
+   * Authorize a destructive write. In server mode the request must carry a
+   * valid admin session token (single-admin system → a live token == "the
+   * admin"); a 401 is written and false returned otherwise. In client /
+   * standalone mode there is no admin login, so writes are always allowed.
+   *
+   * @returns true if the handler may proceed, false if a 401 was sent.
+   */
+  private authorizeWrite(req: Request, res: Response): boolean {
+    if (!this.requireAdminForWrites) return true;
+    if (this.adminSessions.verify(extractBearerToken(req))) return true;
+    this.unauthorized(res, 'Admin login required');
+    return false;
   }
 
   setupRoutes(app: express.Application): void {
@@ -105,6 +129,7 @@ export class DataRoutes extends BaseRouteHandler {
     app.get('/api/session/:id', this.handleGetSessionById.bind(this));
     app.post('/api/sdk-sessions/batch', validateBody(sdkSessionsBatchSchema), this.handleGetSdkSessionsByIds.bind(this));
     app.get('/api/prompt/:id', this.handleGetPromptById.bind(this));
+    app.delete('/api/prompt/:id', this.handleDeletePromptById.bind(this));
 
     app.get('/api/stats', this.handleGetStats.bind(this));
     app.get('/api/projects', this.handleGetProjects.bind(this));
@@ -140,6 +165,8 @@ export class DataRoutes extends BaseRouteHandler {
    *     a session that started during the request still gets a clean skip.
    */
   private handleDeleteProjects = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
+    if (!this.authorizeWrite(req, res)) return;
+
     const { projects } = req.body as z.infer<typeof deleteProjectsSchema>;
     const requested = Array.from(new Set(projects));
 
@@ -341,6 +368,35 @@ export class DataRoutes extends BaseRouteHandler {
     }
 
     res.json(prompts[0]);
+  });
+
+  /**
+   * Permanently delete a single user prompt by id. Used by the viewer's
+   * per-card delete button. On success we broadcast a `prompt_deleted` SSE
+   * event so every connected client (including the originator) prunes the row
+   * from its live feed without a manual refresh.
+   *
+   * Request:  DELETE /api/prompt/:id
+   * Response: { deleted: true, id } | 404 if no such prompt.
+   */
+  private handleDeletePromptById = this.wrapHandler((req: Request, res: Response): void => {
+    if (!this.authorizeWrite(req, res)) return;
+
+    const id = this.parseIntParam(req, res, 'id');
+    if (id === null) return;
+
+    const store = this.dbManager.getSessionStore();
+    const deleted = store.deletePromptById(id);
+
+    if (!deleted) {
+      this.notFound(res, `Prompt #${id} not found`);
+      return;
+    }
+
+    this.sseBroadcaster.broadcast({ type: 'prompt_deleted', id });
+
+    logger.info('SESSION', 'Prompt deleted via /api/prompt/:id', { id });
+    res.json({ deleted: true, id });
   });
 
   private handleGetStats = this.wrapHandler((req: Request, res: Response): void => {

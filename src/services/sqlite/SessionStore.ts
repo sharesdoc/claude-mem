@@ -2758,6 +2758,23 @@ export class SessionStore {
     return counts;
   }
 
+  /**
+   * Permanently delete a single user prompt by its row id. The
+   * user_prompts_ad AFTER DELETE trigger keeps the FTS5 index in sync, so no
+   * extra cleanup is needed here.
+   *
+   * @param id - user_prompts.id of the row to remove.
+   * @returns true if a row was deleted, false if no row matched the id.
+   */
+  deletePromptById(id: number): boolean {
+    const result = this.db.prepare('DELETE FROM user_prompts WHERE id = ?').run(id);
+    const deleted = result.changes > 0;
+    if (deleted) {
+      logger.info('SESSION', 'User prompt deleted', { id });
+    }
+    return deleted;
+  }
+
   importSdkSession(session: {
     content_session_id: string;
     memory_session_id: string;

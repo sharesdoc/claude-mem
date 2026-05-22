@@ -1,18 +1,13 @@
 import express, { Request, Response } from 'express';
-import { createHash, randomBytes } from 'crypto';
+import { createHash } from 'crypto';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
+import { AdminSessionStore, extractBearerToken } from '../AdminSessionStore.js';
 import { logger } from '../../../../utils/logger.js';
 import type { DatabaseManager } from '../../DatabaseManager.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 
-interface SessionEntry {
-  createdAt: number;
-  expiresAt: number;
-}
-
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const DAY_START = () => {
   const d = new Date();
   d.setHours(0, 0, 0, 0);
@@ -59,9 +54,10 @@ function deleteSetting(key: string): void {
 }
 
 export class AuthRoutes extends BaseRouteHandler {
-  private readonly sessions = new Map<string, SessionEntry>();
-
-  constructor(private readonly dbManager: DatabaseManager) {
+  constructor(
+    private readonly dbManager: DatabaseManager,
+    private readonly sessions: AdminSessionStore,
+  ) {
     super();
   }
 
@@ -154,51 +150,20 @@ export class AuthRoutes extends BaseRouteHandler {
     // Success
     db.prepare('INSERT INTO admin_login_attempts (attempted_at_epoch, success) VALUES (?, 1)').run(now);
 
-    const token = randomBytes(32).toString('hex');
-    this.sessions.set(token, {
-      createdAt: now,
-      expiresAt: now + SESSION_TTL_MS,
-    });
-
-    // Clean expired sessions
-    for (const [k, v] of this.sessions) {
-      if (v.expiresAt < now) this.sessions.delete(k);
-    }
+    const { token, expiresAt } = this.sessions.create(now);
 
     logger.info('SYSTEM', 'Admin login successful');
-    res.json({ token, expires_at: now + SESSION_TTL_MS });
+    res.json({ token, expires_at: expiresAt });
   });
 
   private handleLogout = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    const token = this.extractToken(req);
-    if (token) {
-      this.sessions.delete(token);
-    }
+    this.sessions.destroy(extractBearerToken(req));
     res.json({ success: true });
   });
 
   private handleStatus = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    const token = this.extractToken(req);
-    if (!token || !this.sessions.has(token)) {
-      res.json({ authenticated: false });
-      return;
-    }
-    const session = this.sessions.get(token)!;
-    if (session.expiresAt < Date.now()) {
-      this.sessions.delete(token);
-      res.json({ authenticated: false });
-      return;
-    }
-    res.json({ authenticated: true });
+    res.json({ authenticated: this.sessions.verify(extractBearerToken(req)) });
   });
-
-  private extractToken(req: Request): string | null {
-    const header = req.headers.authorization;
-    if (typeof header === 'string' && header.startsWith('Bearer ')) {
-      return header.slice(7);
-    }
-    return null;
-  }
 
   private getLastAttemptEpoch(db: ReturnType<DatabaseManager['getConnection']>): number {
     const row = db.prepare(

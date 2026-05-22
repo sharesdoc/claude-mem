@@ -100,6 +100,7 @@ import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
 import { ChromaRoutes } from './worker/http/routes/ChromaRoutes.js';
 import { AdminRoutes } from './worker/http/routes/AdminRoutes.js';
 import { AuthRoutes } from './worker/http/routes/AuthRoutes.js';
+import { AdminSessionStore } from './worker/http/AdminSessionStore.js';
 
 import { CorpusStore } from './worker/knowledge/CorpusStore.js';
 import { CorpusBuilder } from './worker/knowledge/CorpusBuilder.js';
@@ -313,7 +314,14 @@ export class WorkerService implements WorkerRef {
     attachIngestGeneratorStarter((sessionDbId, source) =>
       sessionRoutes.ensureGeneratorRunning(sessionDbId, source),
     );
-    this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime));
+    // Single admin-session registry shared by AuthRoutes (mints sessions on
+    // login) and DataRoutes (verifies them before destructive writes). In
+    // server mode, destructive DataRoutes endpoints require a valid admin
+    // token; in client/standalone mode there is no login so the flag is false
+    // and those endpoints stay open (loopback-only by CORS anyway).
+    const isServerMode = resolveBindAddress().role === 'server';
+    const adminSessions = new AdminSessionStore();
+    this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime, adminSessions, isServerMode));
     this.server.registerRoutes(new SettingsRoutes(this.settingsManager));
     this.server.registerRoutes(new LogsRoutes());
     this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem'));
@@ -325,10 +333,10 @@ export class WorkerService implements WorkerRef {
     // viewer uses to render the employee selector. Skipping registration in
     // client mode means an accidentally-pointed viewer 404s loudly instead
     // of returning a misleading single-user list.
-    if (resolveBindAddress().role === 'server') {
+    if (isServerMode) {
       this.server.registerRoutes(new UsersRoutes(this.dbManager));
       // T-41: Auth routes for server-mode viewer login
-      this.server.registerRoutes(new AuthRoutes(this.dbManager));
+      this.server.registerRoutes(new AuthRoutes(this.dbManager, adminSessions));
       // T-09: /api/sync/ingest — server-only ingest endpoint.
       const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
       this.server.registerRoutes(new SyncRoutes(this.dbManager, {

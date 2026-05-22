@@ -12,11 +12,12 @@ interface FeedProps {
   summaries: Summary[];
   prompts: UserPrompt[];
   onLoadMore: () => void;
+  onPromptDeleted?: (id: number) => void;
   isLoading: boolean;
   hasMore: boolean;
 }
 
-export function Feed({ observations, summaries, prompts, onLoadMore, isLoading, hasMore }: FeedProps) {
+export function Feed({ observations, summaries, prompts, onLoadMore, onPromptDeleted, isLoading, hasMore }: FeedProps) {
   const { t } = useLocale();
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const feedRef = useRef<HTMLDivElement>(null);
@@ -71,7 +72,7 @@ export function Feed({ observations, summaries, prompts, onLoadMore, isLoading, 
           } else if (item.itemType === 'summary') {
             return <SummaryCard key={key} summary={item} />;
           } else {
-            return <PromptCard key={key} prompt={item} />;
+            return <PromptCard key={key} prompt={item} onDeleted={onPromptDeleted} />;
           }
         })}
         {items.length === 0 && !isLoading && (

@@ -981,6 +981,52 @@
       100% { transform: scale(1); }
     }
 
+    /* ── Prompt delete button (top-right of the card header) ──────── */
+    /* Sits in the empty right slot of .card-header (space-between), i.e.
+       the red-box position from the spec. Red styling signals destruction;
+       click deletes immediately with no confirmation. */
+    .prompt-delete-btn {
+      /* Match .prompt-copy-btn's 4px right inset and box-shadow so the two
+         buttons share an identical box and line up vertically (same right
+         edge) across the header and meta rows. */
+      margin-right: 4px;
+      width: 26px;
+      height: 26px;
+      padding: 0;
+      flex-shrink: 0;
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+      background: var(--color-bg-card);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+      color: #ef4444;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      opacity: 0.55;
+      transition: opacity 0.15s ease,
+                  background-color 0.15s ease,
+                  color 0.15s ease,
+                  border-color 0.15s ease,
+                  transform 0.08s ease;
+    }
+    .prompt-card:hover .prompt-delete-btn {
+      opacity: 1;
+    }
+    .prompt-delete-btn:hover {
+      background: #ef4444;
+      border-color: #ef4444;
+      color: #ffffff;
+      opacity: 1;
+    }
+    .prompt-delete-btn:active {
+      transform: scale(0.88);
+    }
+    .prompt-delete-btn:disabled {
+      cursor: default;
+      opacity: 0.4;
+    }
+
     /* ── Language (locale) toggle in header ────────────────────── */
     .locale-toggle {
       display: inline-flex;

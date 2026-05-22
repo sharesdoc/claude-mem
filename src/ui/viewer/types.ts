@@ -65,7 +65,8 @@ export interface StreamEvent {
     | 'new_summary'
     | 'new_prompt'
     | 'processing_status'
-    | 'projects_deleted';
+    | 'projects_deleted'
+    | 'prompt_deleted';
   observations?: Observation[];
   summaries?: Summary[];
   prompts?: UserPrompt[];
@@ -73,6 +74,8 @@ export interface StreamEvent {
   observation?: Observation;
   summary?: Summary;
   prompt?: UserPrompt;
+  /** prompt_deleted: row id of the removed user prompt. */
+  id?: number;
   isProcessing?: boolean;
   queueDepth?: number;
 }

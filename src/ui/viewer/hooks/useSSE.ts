@@ -199,6 +199,20 @@ export function useSSE() {
             }
             break;
 
+          case 'prompt_deleted':
+            // A prompt was deleted (viewer card delete button). Drop it from
+            // the live feed. The broadcast reaches every client including the
+            // originator, so this is the single source of truth for live-state
+            // pruning. Sidebar prompt counts self-heal via the debounced
+            // authoritative refetch below — same mechanism bumpStat relies on.
+            if (typeof data.id === 'number') {
+              const deletedId = data.id;
+              console.log('[SSE] Prompt deleted:', deletedId);
+              setPrompts(prev => prev.filter(p => p.id !== deletedId));
+              scheduleStatsRefresh();
+            }
+            break;
+
           case 'projects_deleted':
             // Server-side admin removed projects (POST /api/projects/delete).
             // Local feed state is stale for those projects until we filter it

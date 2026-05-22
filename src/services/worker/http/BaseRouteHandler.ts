@@ -38,6 +38,10 @@ export abstract class BaseRouteHandler {
     res.status(404).json({ error: message });
   }
 
+  protected unauthorized(res: Response, message: string): void {
+    res.status(401).json({ error: message });
+  }
+
   protected handleError(res: Response, error: Error, context?: string): void {
     logger.failure('WORKER', context || 'Request failed', {}, error);
     if (!res.headersSent) {

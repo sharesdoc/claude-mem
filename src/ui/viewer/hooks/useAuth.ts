@@ -8,7 +8,7 @@ interface AuthState {
   retryAfterSec: number | null;
 }
 
-const TOKEN_KEY = 'claude-mem-admin-token';
+export const TOKEN_KEY = 'claude-mem-admin-token';
 const COOLDOWN_RESET_MS = 60_000;
 
 export function useAuth() {
