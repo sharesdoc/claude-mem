@@ -90,7 +90,6 @@ describe('Plugin Distribution - Codex Marketplace', () => {
     expect(command).toContain('plugins/cache/thedotmack/claude-mem');
     expect(command).toContain('claude-mem: mcp server not found');
   });
-
 });
 
 describe('Plugin Distribution - hooks.json Integrity', () => {
