@@ -109,7 +109,7 @@ describe('Install Non-TTY Support', () => {
       );
       expect(copyRegion).toContain("'.agents'");
       expect(copyRegion).toContain("'.codex-plugin'");
-      expect(copyRegion).toContain("'.mcp.json'");
+      expect(copyRegion).not.toContain("'.mcp.json'");
     });
 
     it('validates the bundled plugin as the Codex marketplace source', () => {
@@ -119,12 +119,12 @@ describe('Install Non-TTY Support', () => {
       expect(codexInstallerSource).toContain("path.join('plugin', 'skills', 'mem-search', 'SKILL.md')");
     });
 
-    it('does not exclude MCP manifests during local marketplace sync', () => {
+    it('does not declare any sync-managed gitignore exclusions for the marketplace copy', () => {
       const gitignoreExcludeRegion = syncMarketplaceSource.slice(
         syncMarketplaceSource.indexOf('function getGitignoreExcludes'),
         syncMarketplaceSource.indexOf('const branch = getCurrentBranch'),
       );
-      expect(gitignoreExcludeRegion).toContain("'.mcp.json'");
+      expect(gitignoreExcludeRegion).toContain('syncManagedFiles = new Set()');
       expect(gitignoreExcludeRegion).toContain('syncManagedFiles.has(line)');
     });
 
