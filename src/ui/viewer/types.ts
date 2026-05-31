@@ -71,8 +71,6 @@ export interface StreamEvent {
   summaries?: Summary[];
   prompts?: UserPrompt[];
   projects?: string[];
-  /** projectId → 完整文件系统路径（由后端 getProjectPath 映射提供） */
-  projectPaths?: Record<string, string>;
   observation?: Observation;
   summary?: Summary;
   prompt?: UserPrompt;

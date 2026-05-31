@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Observation, Summary, UserPrompt } from '../types';
 import { useLocale } from '../hooks/useLocale';
 import { API_ENDPOINTS } from '../constants/api';
-import { getProjectDisplayName, parseProjectId } from '../utils/projectAlias';
+import { parseProjectId } from '../utils/projectAlias';
 
 interface ProjectSidebarProps {
   projects: string[];
@@ -23,10 +23,6 @@ interface ProjectSidebarProps {
    * shows as "0 / 0 / 0" for those first few hundred ms.
    */
   projectStats?: Record<string, ProjectStat>;
-  /**
-   * projectId → 完整文件系统路径。若缺失，降级为原始 projectId 显示。
-   */
-  projectPaths: Record<string, string>;
   /**
    * Authoritative map of project → user_label sourced from sdk_sessions.
    * Drives sidebar user-grouping; missing entries fall back to parsing the
@@ -111,7 +107,6 @@ export function ProjectSidebar({
   summaries,
   prompts,
   projectStats,
-  projectPaths,
   projectUsers,
   onProjectsDeleted,
 }: ProjectSidebarProps) {
@@ -544,7 +539,7 @@ export function ProjectSidebar({
             const isActive = currentFilter === project;
             const isSelected = selected.has(project);
             const isInUse = inUse.has(project);
-            const displayName = getProjectDisplayName(project, projectPaths);
+            const displayName = project;
 
             // Single click semantics:
             //   select-mode  → toggle the checkbox

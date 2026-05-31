@@ -12,10 +12,21 @@ export interface ParsedProjectId {
 /**
  * Extract the username segment from a hyphen-joined prefix. Recognises
  * macOS (`Users-<user>-...`) and Linux (`home-<user>-...`) layouts; returns
- * null when no canonical home root is found (Windows paths or roots like
- * `tmp`, `var`).
+ * null when no canonical home root is found.
+ *
+ * Also works on raw file-system paths (the current projectId format).
  */
 function extractUsername(prefix: string): string | null {
+  // Raw path: e.g. /Users/johnson/wks/... → split by /
+  if (prefix.startsWith('/')) {
+    const segs = prefix.split('/');
+    for (let i = 0; i < segs.length - 1; i++) {
+      const s = segs[i].toLowerCase();
+      if (s === 'users' || s === 'home') return segs[i + 1] || null;
+    }
+    return null;
+  }
+  // Old hash-based format: Users-johnson-... (hyphen-separated)
   const segments = prefix.split('-');
   for (let i = 0; i < segments.length - 1; i++) {
     const seg = segments[i].toLowerCase();
@@ -26,8 +37,24 @@ function extractUsername(prefix: string): string | null {
   return null;
 }
 
+/**
+ * Parse a projectId into its components.
+ *
+ * Backward-compatible: new-format project IDs (full paths like `/Users/johnson/...`)
+ * won't match the legacy HASH_PATTERN, so we fall back to path-aware extraction.
+ */
 export function parseProjectId(projectId: string): ParsedProjectId | null {
   if (!projectId) return null;
+
+  // New format: projectId IS the full path
+  if (projectId.startsWith('/') || /^[A-Za-z]:[\\/]/.test(projectId)) {
+    const segments = projectId.replace(/\\/g, '/').split('/').filter(Boolean);
+    const basename = segments[segments.length - 1] || projectId;
+    const username = extractUsername(projectId);
+    return { prefix: projectId, hash: '', basename, username, raw: projectId };
+  }
+
+  // Legacy format: prefix-hash
   const match = HASH_PATTERN.exec(projectId);
   if (!match) return null;
 
@@ -38,21 +65,6 @@ export function parseProjectId(projectId: string): ParsedProjectId | null {
   const username = extractUsername(prefix);
 
   return { prefix, hash, basename, username, raw: projectId };
-}
-
-/**
- * 返回项目在 UI 中的显示名。
- *
- * 优先级：
- *   1. `projectPaths[projectId]`  — 后端传来的完整文件系统路径
- *   2. projectId 本身 — 降级（旧后端 / 跨机器 session 无映射时）
- */
-export function getProjectDisplayName(
-  projectId: string,
-  projectPaths?: Record<string, string>,
-): string {
-  if (projectPaths?.[projectId]) return projectPaths[projectId];
-  return projectId;
 }
 
 export function getProjectAlias(projectId: string): string {

@@ -1,10 +1,7 @@
-import { createHash } from 'crypto';
 import { homedir } from 'os';
 import path from 'path';
 import { logger } from './logger.js';
 import { detectWorktree } from './worktree.js';
-
-const PROJECT_ID_PREFIX_MAX_LENGTH = 160;
 
 function expandTilde(p: string): string {
   if (p === '~' || p.startsWith('~/')) {
@@ -24,37 +21,11 @@ function normalizeProjectPath(p: string): string {
 }
 
 /**
- * SHA1 哈希全路径后截取前 12 位 hex 作为后缀。哈希用于消除路径冲突
- * （不同路径映射到同一个 safePrefix 时靠 hash 区分）。
- *
- * 同时把 projectId → fullPath 写入反向映射，供 viewer UI 还原全路径。
+ * projectId 即归一化后的完整文件系统路径。
+ * 旧版用 "安全前缀-SHA1前12位" 格式；现已废弃，直接以全路径作为项目标识。
  */
 function toProjectId(normalizedPath: string): string {
-  const safePrefix = normalizedPath
-    .normalize('NFKD')
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[._-]+|[._-]+$/g, '')
-    .slice(0, PROJECT_ID_PREFIX_MAX_LENGTH)
-    .replace(/[._-]+$/g, '');
-  const hash = createHash('sha1').update(normalizedPath).digest('hex').slice(0, 12);
-
-  const projectId = `${safePrefix || 'project'}-${hash}`;
-  // 反向映射：projectId → 全路径，供 viewer UI 显示完整路径
-  projectPathMap.set(projectId, normalizedPath);
-  return projectId;
-}
-
-/** projectId → 完整文件系统路径 */
-const projectPathMap = new Map<string, string>();
-
-/**
- * 从 projectId 反查当时的完整路径。
- * 仅在当前进程生命周期内调用过 toProjectId() 的路径可查；
- * 返回 null 表示未知（例如从其他机器同步来的 session）。
- */
-export function getProjectPath(projectId: string): string | null {
-  return projectPathMap.get(projectId) ?? null;
+  return normalizedPath;
 }
 
 const projectNameCache = new Map<string, string>();
