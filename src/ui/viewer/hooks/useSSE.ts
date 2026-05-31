@@ -16,6 +16,8 @@ export function useSSE() {
   const [summaries, setSummaries] = useState<Summary[]>([]);
   const [prompts, setPrompts] = useState<UserPrompt[]>([]);
   const [projects, setProjects] = useState<string[]>([]);
+  // projectId → 全路径映射（后端 getProjectPath 提供）
+  const [projectPaths, setProjectPaths] = useState<Record<string, string>>({});
   // Map of project → user_label (from sdk_sessions). Authoritative source
   // for sidebar user grouping; absent entries fall back to path parsing
   // then to "unknown" so legacy / cross-OS project IDs still group sanely.
@@ -141,6 +143,7 @@ export function useSSE() {
               projects: data.projects?.length || 0
             });
             setProjects(data.projects || []);
+            setProjectPaths(data.projectPaths ?? {});
             // Adopt the freshest user-label map; falls back to {} if the
             // server is on an older build that doesn't send projectUsers.
             setProjectUsers((data as { projectUsers?: Record<string, string | null> }).projectUsers ?? {});
@@ -224,6 +227,13 @@ export function useSSE() {
               setSummaries(prev => prev.filter(s => !removed.has(s.project)));
               setPrompts(prev => prev.filter(p => !removed.has(p.project)));
               setProjects(prev => prev.filter(p => !removed.has(p)));
+              setProjectPaths(prev => {
+                const next: Record<string, string> = {};
+                for (const [k, v] of Object.entries(prev)) {
+                  if (!removed.has(k)) next[k] = v;
+                }
+                return next;
+              });
               setProjectUsers(prev => {
                 const next: Record<string, string | null> = {};
                 for (const [k, v] of Object.entries(prev)) {
@@ -286,6 +296,7 @@ export function useSSE() {
     summaries,
     prompts,
     projects,
+    projectPaths,
     projectUsers,
     projectStats,
     isProcessing,

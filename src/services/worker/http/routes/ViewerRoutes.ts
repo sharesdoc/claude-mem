@@ -4,6 +4,7 @@ import path from 'path';
 import { readFileSync, existsSync } from 'fs';
 import { logger } from '../../../../utils/logger.js';
 import { getPackageRoot } from '../../../../shared/paths.js';
+import { getProjectPath } from '../../../../utils/project-name.js';
 import { SSEBroadcaster } from '../../SSEBroadcaster.js';
 import { DatabaseManager } from '../../DatabaseManager.js';
 import { SessionManager } from '../../SessionManager.js';
@@ -89,12 +90,19 @@ export class ViewerRoutes extends BaseRouteHandler {
     this.sseBroadcaster.addClient(res);
 
     const projectCatalog = this.dbManager.getSessionStore().getProjectCatalog();
+    // 为 viewer UI 构建 projectId → 全路径映射
+    const projectPaths: Record<string, string> = {};
+    for (const pid of projectCatalog.projects) {
+      const full = getProjectPath(pid);
+      if (full) projectPaths[pid] = full;
+    }
     this.sseBroadcaster.broadcast({
       type: 'initial_load',
       projects: projectCatalog.projects,
       sources: projectCatalog.sources,
       projectsBySource: projectCatalog.projectsBySource,
       projectUsers: projectCatalog.projectUsers,
+      projectPaths,
       timestamp: Date.now()
     });
 

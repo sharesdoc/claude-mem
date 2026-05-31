@@ -11,10 +11,13 @@ import { GitHubStarsButton } from './GitHubStarsButton';
 import { useSpinningFavicon } from '../hooks/useSpinningFavicon';
 import { useLocale } from '../hooks/useLocale';
 import type { UserRow } from '../hooks/useUsers';
+import { getProjectDisplayName } from '../utils/projectAlias';
 
 interface HeaderProps {
   isConnected: boolean;
   projects: string[];
+  /** projectId → 完整文件系统路径 */
+  projectPaths: Record<string, string>;
   currentFilter: string;
   onFilterChange: (filter: string) => void;
   isProcessing: boolean;
@@ -44,6 +47,7 @@ interface HeaderProps {
 export function Header({
   isConnected,
   projects,
+  projectPaths,
   currentFilter,
   onFilterChange,
   isProcessing,
@@ -147,9 +151,10 @@ export function Header({
           style={{ maxWidth: '360px' }}
         >
           <option value="">{t('header.allProjects')}</option>
-          {projects.map(project => (
-            <option key={project} value={project}>{project}</option>
-          ))}
+          {projects.map(project => {
+            const label = getProjectDisplayName(project, projectPaths);
+            return <option key={project} value={project} title={label}>{label}</option>;
+          })}
         </select>
         <ThemeToggle
           preference={themePreference}

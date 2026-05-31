@@ -40,10 +40,21 @@ export function parseProjectId(projectId: string): ParsedProjectId | null {
   return { prefix, hash, basename, username, raw: projectId };
 }
 
-// Alias shape: <HASH_UPPER>-<username>-<basename>
-//   - hash always 12 hex chars → fixed-width left column for visual alignment
-//   - username dropped when not extractable (uncommon path roots)
-//   - basename keeps its original casing
+/**
+ * 返回项目在 UI 中的显示名。
+ *
+ * 优先级：
+ *   1. `projectPaths[projectId]`  — 后端传来的完整文件系统路径
+ *   2. projectId 本身 — 降级（旧后端 / 跨机器 session 无映射时）
+ */
+export function getProjectDisplayName(
+  projectId: string,
+  projectPaths?: Record<string, string>,
+): string {
+  if (projectPaths?.[projectId]) return projectPaths[projectId];
+  return projectId;
+}
+
 export function getProjectAlias(projectId: string): string {
   const parsed = parseProjectId(projectId);
   if (!parsed) return projectId;

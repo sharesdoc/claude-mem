@@ -61,7 +61,7 @@ export function App() {
     }
   }, []);
 
-  const { observations, summaries, prompts, projects, projectUsers, projectStats, isProcessing, queueDepth, isConnected, pruneByProjects } = useSSE();
+  const { observations, summaries, prompts, projects, projectPaths, projectUsers, projectStats, isProcessing, queueDepth, isConnected, pruneByProjects } = useSSE();
   const { settings, saveSettings, isSaving, saveStatus } = useSettings();
   const { refreshStats } = useStats();
   const { preference, setThemePreference } = useTheme();
@@ -279,6 +279,7 @@ export function App() {
           summaries={summaries}
           prompts={prompts}
           projectStats={effectiveProjectStats}
+          projectPaths={projectPaths}
           projectUsers={projectUsers}
           onProjectsDeleted={handleProjectsDeleted}
         />
@@ -286,6 +287,7 @@ export function App() {
           <Header
             isConnected={isConnected}
             projects={effectiveProjects}
+            projectPaths={projectPaths}
             currentFilter={currentFilter}
             onFilterChange={setCurrentFilter}
             isProcessing={isProcessing}

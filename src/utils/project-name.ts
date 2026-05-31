@@ -23,6 +23,12 @@ function normalizeProjectPath(p: string): string {
   return path.resolve(expanded);
 }
 
+/**
+ * SHA1 哈希全路径后截取前 12 位 hex 作为后缀。哈希用于消除路径冲突
+ * （不同路径映射到同一个 safePrefix 时靠 hash 区分）。
+ *
+ * 同时把 projectId → fullPath 写入反向映射，供 viewer UI 还原全路径。
+ */
 function toProjectId(normalizedPath: string): string {
   const safePrefix = normalizedPath
     .normalize('NFKD')
@@ -33,7 +39,22 @@ function toProjectId(normalizedPath: string): string {
     .replace(/[._-]+$/g, '');
   const hash = createHash('sha1').update(normalizedPath).digest('hex').slice(0, 12);
 
-  return `${safePrefix || 'project'}-${hash}`;
+  const projectId = `${safePrefix || 'project'}-${hash}`;
+  // 反向映射：projectId → 全路径，供 viewer UI 显示完整路径
+  projectPathMap.set(projectId, normalizedPath);
+  return projectId;
+}
+
+/** projectId → 完整文件系统路径 */
+const projectPathMap = new Map<string, string>();
+
+/**
+ * 从 projectId 反查当时的完整路径。
+ * 仅在当前进程生命周期内调用过 toProjectId() 的路径可查；
+ * 返回 null 表示未知（例如从其他机器同步来的 session）。
+ */
+export function getProjectPath(projectId: string): string | null {
+  return projectPathMap.get(projectId) ?? null;
 }
 
 const projectNameCache = new Map<string, string>();
