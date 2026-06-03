@@ -1014,7 +1014,7 @@ async function promptClaudeModel(options: InstallOptions): Promise<void> {
 }
 
 export interface InstallOptions {
-  ide?: string;
+  ide?: string[];
   provider?: 'claude' | 'gemini' | 'openrouter';
   model?: string;
   noAutoStart?: boolean;
@@ -1068,18 +1068,20 @@ export async function runInstallCommand(options: InstallOptions = {}): Promise<v
   }
 
   let selectedIDEs: string[];
-  if (options.ide) {
-    selectedIDEs = [options.ide];
+  if (options.ide && options.ide.length > 0) {
+    selectedIDEs = options.ide;
     const allIDEs = detectInstalledIDEs();
-    const match = allIDEs.find((i) => i.id === options.ide);
-    if (match && !match.supported) {
-      log.error(`Support for ${match.label} coming soon.`);
-      process.exit(1);
-    }
-    if (!match) {
-      log.error(`Unknown IDE: ${options.ide}`);
-      log.info(`Available IDEs: ${allIDEs.map((i) => i.id).join(', ')}`);
-      process.exit(1);
+    for (const ideId of selectedIDEs) {
+      const match = allIDEs.find((i) => i.id === ideId);
+      if (match && !match.supported) {
+        log.error(`Support for ${match.label} coming soon.`);
+        process.exit(1);
+      }
+      if (!match) {
+        log.error(`Unknown IDE: ${ideId}`);
+        log.info(`Available IDEs: ${allIDEs.map((i) => i.id).join(', ')}`);
+        process.exit(1);
+      }
     }
   } else if (process.stdin.isTTY) {
     selectedIDEs = await promptForIDESelection();
