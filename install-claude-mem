@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # claude-mem installer — run from repository root
-# Usage: ./install-claude-mem -i|-u|-r|-d <claude|codex>
+# Usage: ./install-claude-mem -i|-u|-r|-d <claude|codex|both|all|claude,codex>
 #
 # Data-preservation contract:
 #   -i / -u / -r  NEVER touch $DATA_DIR (default ~/.claude-mem). Database,
@@ -42,7 +42,9 @@ show_help() {
   printf "  ./install-claude-mem -d <target>   ${RED}Destroy${RESET} (uninstall + DELETE all data)\n\n"
   printf "${BOLD}Targets:${RESET}\n"
   printf "  claude                 Claude Code\n"
-  printf "  codex                  Codex CLI\n\n"
+  printf "  codex                  Codex CLI\n"
+  printf "  both / all             Claude Code + Codex CLI\n"
+  printf "  claude,codex           Comma-separated multiple targets\n\n"
   printf "${BOLD}Options:${RESET}\n"
   printf "  -h, --help             Show this help message\n"
   printf "  --role <client|server> Configure dual-mode sync identity (T-26)\n"
@@ -67,6 +69,8 @@ show_help() {
   printf "  ./install-claude-mem -r claude     # Reinstall (keep data)\n"
   printf "  ./install-claude-mem -d claude     # Full purge incl. ~/.claude-mem\n"
   printf "  ./install-claude-mem -i codex      # Install for Codex CLI\n"
+  printf "  ./install-claude-mem -i both       # Install for Claude Code + Codex CLI\n"
+  printf "  ./install-claude-mem -i claude,codex  # Same as 'both'\n"
   printf "  ./install-claude-mem -i claude --role client --upstream https://mem.acme.com --label ZhangSan\n"
   printf "  ./install-claude-mem -i claude --role server\n"
   printf "  ./install-claude-mem -i claude --role client --upstream http://192.168.1.100:37701 --label ZhangSan --token my-shared-secret\n\n"
@@ -1409,6 +1413,29 @@ show_info() {
 }
 
 # ── Main ────────────────────────────────────────────────────────────
+
+# 将 target 参数解析为标准数组。支持：
+#   单值:    claude / codex
+#   别名:    both / all  →  claude codex
+#   逗号分隔: claude,codex  →  claude codex
+# 输出: 以换行分隔的标准 target 列表（每个为 claude 或 codex）
+resolve_targets() {
+  local raw="${1:-}"
+  local expanded=""
+  case "$raw" in
+    both|all) expanded="claude codex" ;;
+    *)        expanded="$(echo "$raw" | tr ',' ' ')" ;;
+  esac
+  local validated=""
+  for t in $expanded; do
+    case "$t" in
+      claude|codex) validated="$validated $t" ;;
+      *)  fail "Unknown target: $t"; printf "\n"; show_help; exit 1 ;;
+    esac
+  done
+  echo "$validated" | xargs
+}
+
 main() {
   local action=""
   local target=""
@@ -1450,7 +1477,8 @@ main() {
 
   set -- "${args[@]:-}"
   action="${1:-}"
-  target="${2:-}"
+  local raw_target="${2:-}"
+  local targets=()
 
   # Enable trace mode after all local vars are declared.
   if [[ -n "$debug_mode" ]]; then
@@ -1538,10 +1566,11 @@ try {
       show_help
       ;;
     -i)
-      if [[ -z "$target" ]]; then
-        fail "Missing target. Use: -i claude or -i codex"
+      if [[ -z "$raw_target" ]]; then
+        fail "Missing target. Use: -i claude, -i codex, or -i both"
         exit 1
       fi
+      targets=($(resolve_targets "$raw_target"))
       # Snapshot pre-install worker state + whether any settings flags
       # were passed, so we can warn the user after install if their new
       # config is sitting on disk but a stale worker is still running.
@@ -1551,62 +1580,76 @@ try {
       fi
       local _worker_was_running=""
       check_worker_running && _worker_was_running="1"
-      case "$target" in
-        claude) apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"; apply_chroma_default
-                [[ "${CHROMA_CHANGED:-0}" == "1" ]] && _had_settings_changes="1"
-                do_install_claude
-                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
-                print_chroma_summary
-                warn_worker_needs_restart "$_worker_was_running" "$_had_settings_changes" "claude" ;;
-        codex)  apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"; apply_chroma_default
-                [[ "${CHROMA_CHANGED:-0}" == "1" ]] && _had_settings_changes="1"
-                do_install_codex
-                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
-                print_chroma_summary
-                warn_worker_needs_restart "$_worker_was_running" "$_had_settings_changes" "codex" ;;
-        *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
-      esac
+      # 共享设置只应用一次（worker/Chroma/sync/admin）
+      apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+      apply_admin_password "$admin_password"
+      apply_allowed_origins "$allowed_origins"
+      apply_chroma_default
+      [[ "${CHROMA_CHANGED:-0}" == "1" ]] && _had_settings_changes="1"
+      # 逐个目标执行安装
+      for target in "${targets[@]}"; do
+        case "$target" in
+          claude) do_install_claude ;;
+          codex)  do_install_codex ;;
+        esac
+      done
+      [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
+      print_chroma_summary
+      warn_worker_needs_restart "$_worker_was_running" "$_had_settings_changes" "$raw_target"
       ;;
     -u)
-      if [[ -z "$target" ]]; then
-        fail "Missing target. Use: -u claude or -u codex"
+      if [[ -z "$raw_target" ]]; then
+        fail "Missing target. Use: -u claude, -u codex, or -u both"
         exit 1
       fi
-      case "$target" in
-        claude) do_uninstall_claude ;;
-        codex)  do_uninstall_codex ;;
-        *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
-      esac
+      targets=($(resolve_targets "$raw_target"))
+      for target in "${targets[@]}"; do
+        case "$target" in
+          claude) do_uninstall_claude ;;
+          codex)  do_uninstall_codex ;;
+        esac
+      done
       ;;
     -r)
-      if [[ -z "$target" ]]; then
-        fail "Missing target. Use: -r claude or -r codex"
+      if [[ -z "$raw_target" ]]; then
+        fail "Missing target. Use: -r claude, -r codex, or -r both"
         exit 1
       fi
-      case "$target" in
-        claude) do_uninstall_claude
-                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"; apply_chroma_default
-                do_install_claude
-                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
-                print_chroma_summary ;;
-        codex)  do_uninstall_codex
-                apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"; apply_admin_password "$admin_password"; apply_allowed_origins "$allowed_origins"; apply_chroma_default
-                do_install_codex
-                [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
-                print_chroma_summary ;;
-        *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
-      esac
+      targets=($(resolve_targets "$raw_target"))
+      # 先卸载所有目标
+      for target in "${targets[@]}"; do
+        case "$target" in
+          claude) do_uninstall_claude ;;
+          codex)  do_uninstall_codex ;;
+        esac
+      done
+      # 共享设置只应用一次
+      apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+      apply_admin_password "$admin_password"
+      apply_allowed_origins "$allowed_origins"
+      apply_chroma_default
+      # 逐个目标重新安装
+      for target in "${targets[@]}"; do
+        case "$target" in
+          claude) do_install_claude ;;
+          codex)  do_install_codex ;;
+        esac
+      done
+      [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
+      print_chroma_summary
       ;;
     -d)
-      if [[ -z "$target" ]]; then
-        fail "Missing target. Use: -d claude or -d codex"
+      if [[ -z "$raw_target" ]]; then
+        fail "Missing target. Use: -d claude, -d codex, or -d both"
         exit 1
       fi
-      case "$target" in
-        claude) do_destroy_claude ;;
-        codex)  do_destroy_codex ;;
-        *)      fail "Unknown target: $target"; printf "\n"; show_help; exit 1 ;;
-      esac
+      targets=($(resolve_targets "$raw_target"))
+      for target in "${targets[@]}"; do
+        case "$target" in
+          claude) do_destroy_claude ;;
+          codex)  do_destroy_codex ;;
+        esac
+      done
       ;;
     *)
       printf "${RED}Unknown option: %s${RESET}\n\n" "$action"
