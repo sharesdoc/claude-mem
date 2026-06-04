@@ -267,6 +267,13 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   }, [analytics]);
   const maxProjectPrompts = projectPrompts.length > 0 ? projectPrompts[0].count : 1;
 
+  const projectTimes = useMemo(() => {
+    return (analytics?.projectProcessingTime ?? []);
+  }, [analytics]);
+  const maxProjectTime = projectTimes.length > 0 ? projectTimes[0].totalMs : 1;
+
+  const [projectTab, setProjectTab] = useState<'prompts' | 'time'>('prompts');
+
   // Business days in the data range (excludes weekends for daily avg calcs)
   const bizDays = useMemo(() => {
     const allPts = analytics?.promptsByUserByDay ?? [];
@@ -371,23 +378,48 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
             </div>
           )}
 
-          {isAllProjects && projectPrompts.length > 0 && (
+          {isAllProjects && (projectPrompts.length > 0 || projectTimes.length > 0) && (
             <div className="stats-section">
-              <div className="stats-section-title">{t('stats.promptsByProject')}</div>
-              <div className="stats-project-bars">
-                {projectPrompts.map(row => {
-                  const pct = Math.round((row.count / maxProjectPrompts) * 100);
-                  const editor = analytics!.projectEditor?.[row.project];
-                  return (
-                    <div key={row.project} className="stats-project-row">
-                      {editor && <span className="stats-project-editor">{editor}</span>}
-                      <span className="stats-project-label" title={row.project}>{row.project}</span>
-                      <div className="stats-project-track"><div className="stats-project-fill" style={{ width: `${Math.max(pct, 1)}%` }} /></div>
-                      <span className="stats-project-count">{formatNumber(row.count)}</span>
-                    </div>
-                  );
-                })}
+              <div className="stats-section-title">
+                <span className="stats-tab-label">{t('stats.promptsByProject')}</span>
+                <span className="stats-tabs">
+                  <button type="button" className={`stats-tab${projectTab === 'prompts' ? ' is-active' : ''}`}
+                    onClick={() => setProjectTab('prompts')}>{t('stats.prompts')}</button>
+                  <button type="button" className={`stats-tab${projectTab === 'time' ? ' is-active' : ''}`}
+                    onClick={() => setProjectTab('time')}>{t('stats.totalTime')}</button>
+                </span>
               </div>
+              {projectTab === 'prompts' ? (
+                <div className="stats-project-bars">
+                  {projectPrompts.map(row => {
+                    const pct = Math.round((row.count / maxProjectPrompts) * 100);
+                    const editor = analytics!.projectEditor?.[row.project];
+                    return (
+                      <div key={row.project} className="stats-project-row">
+                        {editor && <span className="stats-project-editor">{editor}</span>}
+                        <span className="stats-project-label" title={row.project}>{row.project}</span>
+                        <div className="stats-project-track"><div className="stats-project-fill" style={{ width: `${Math.max(pct, 1)}%` }} /></div>
+                        <span className="stats-project-count">{formatNumber(row.count)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="stats-project-bars">
+                  {projectTimes.map(row => {
+                    const pct = Math.round((row.totalMs / maxProjectTime) * 100);
+                    const editor = analytics!.projectEditor?.[row.project];
+                    return (
+                      <div key={row.project} className="stats-project-row">
+                        {editor && <span className="stats-project-editor">{editor}</span>}
+                        <span className="stats-project-label" title={row.project}>{row.project}</span>
+                        <div className="stats-project-track"><div className="stats-project-fill" style={{ width: `${Math.max(pct, 1)}%` }} /></div>
+                        <span className="stats-project-count">{formatProcessingTime(row.totalMs)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
