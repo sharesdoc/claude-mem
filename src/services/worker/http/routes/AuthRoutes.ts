@@ -110,27 +110,58 @@ export class AuthRoutes extends BaseRouteHandler {
     const db = this.dbManager.getConnection();
     const now = Date.now();
 
-    // Rate limit: 1 per minute
-    const recentCount = db.prepare(
+    // ── Rate limiting: sliding windows (shortest first) ─────────────────
+    // Rules: 2/min, 10/10min, 20/hour, 20 fails/day → lockout
+
+    // 1 minute window: max 2 attempts
+    const oneMinCount = db.prepare(
       'SELECT COUNT(*) AS n FROM admin_login_attempts WHERE attempted_at_epoch > ?'
     ).get(now - 60_000) as { n: number };
-    if (recentCount.n >= 1) {
+    if (oneMinCount.n >= 2) {
       const waitSec = Math.ceil((60_000 - (now - this.getLastAttemptEpoch(db))) / 1000);
       res.status(429).json({
         error: 'rate_limited',
-        reason: '1 attempt per minute',
+        reason: 'Too many attempts — try again shortly',
         retry_after_sec: Math.max(1, waitSec),
       });
       return;
     }
 
-    // Rate limit: 10 per day
+    // 10 minute window: max 10 attempts
+    const tenMinCount = db.prepare(
+      'SELECT COUNT(*) AS n FROM admin_login_attempts WHERE attempted_at_epoch > ?'
+    ).get(now - 600_000) as { n: number };
+    if (tenMinCount.n >= 10) {
+      const waitSec = Math.ceil((600_000 - (now - this.getLastAttemptEpoch(db))) / 1000);
+      res.status(429).json({
+        error: 'rate_limited',
+        reason: 'Too many attempts — try again shortly',
+        retry_after_sec: Math.max(1, waitSec),
+      });
+      return;
+    }
+
+    // 1 hour window: max 20 attempts
+    const oneHourCount = db.prepare(
+      'SELECT COUNT(*) AS n FROM admin_login_attempts WHERE attempted_at_epoch > ?'
+    ).get(now - 3_600_000) as { n: number };
+    if (oneHourCount.n >= 20) {
+      const waitSec = Math.ceil((3_600_000 - (now - this.getLastAttemptEpoch(db))) / 1000);
+      res.status(429).json({
+        error: 'rate_limited',
+        reason: 'Too many attempts — try again later',
+        retry_after_sec: Math.max(1, waitSec),
+      });
+      return;
+    }
+
+    // Daily: 20 failed attempts → permanent lockout
     const todayFails = db.prepare(
       'SELECT COUNT(*) AS n FROM admin_login_attempts WHERE success = 0 AND attempted_at_epoch > ?'
     ).get(DAY_START()) as { n: number };
-    if (todayFails.n >= 10) {
+    if (todayFails.n >= 20) {
       saveSetting('CLAUDE_MEM_ADMIN_LOCKED', 'true');
-      logger.warn('SYSTEM', 'Admin account locked after 10 failed attempts');
+      logger.warn('SYSTEM', 'Admin account locked after 20 failed attempts');
       res.status(423).json({ error: 'locked', reason: 'account locked — reset password via CLI' });
       return;
     }
@@ -138,7 +169,7 @@ export class AuthRoutes extends BaseRouteHandler {
     // Verify password
     if (inputHash !== storedHash) {
       db.prepare('INSERT INTO admin_login_attempts (attempted_at_epoch, success) VALUES (?, 0)').run(now);
-      const remaining = 10 - todayFails.n - 1;
+      const remaining = 20 - todayFails.n - 1;
       res.status(401).json({
         error: 'bad_credentials',
         reason: 'invalid password',
