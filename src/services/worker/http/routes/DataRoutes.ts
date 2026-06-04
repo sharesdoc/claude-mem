@@ -630,16 +630,16 @@ export class DataRoutes extends BaseRouteHandler {
       ORDER BY day_bucket ASC
     `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
-    // ── prompts by project (各项目提示词总数，所有项目视图用，不按当前筛选) ──
+    // ── prompts by project (全量，所有项目视图用，不按当前筛选) ──
     const promptsByProjectRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
              COUNT(*) AS count
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
-      WHERE up.created_at_epoch >= ?
+      WHERE s.started_at_epoch IS NOT NULL
       GROUP BY project
       ORDER BY count DESC
-    `).all(sinceEpoch) as Array<{ project: string; count: number }>;
+    `).all() as Array<{ project: string; count: number }>;
 
     // ── observations by user by day ────────────────────────────────────
     const observationsByUserByDay = db.prepare(`
@@ -702,10 +702,9 @@ export class DataRoutes extends BaseRouteHandler {
              COUNT(*) AS session_count
       FROM sdk_sessions s
       WHERE s.started_at_epoch IS NOT NULL
-        AND s.started_at_epoch >= ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY user_label
-    `).all(nowEpoch, sinceEpoch, project || null, project || null) as Array<{ user_label: string; total_ms: number; session_count: number }>;
+    `).all(nowEpoch, project || null, project || null) as Array<{ user_label: string; total_ms: number; session_count: number }>;
 
     const userProcessingTime: Record<string, { totalMs: number; sessionCount: number }> = {};
     for (const r of userProcessingTimeRows) {
@@ -719,11 +718,10 @@ export class DataRoutes extends BaseRouteHandler {
              SUM(COALESCE(s.completed_at_epoch, ?) - s.started_at_epoch) AS total_ms
       FROM sdk_sessions s
       WHERE s.started_at_epoch IS NOT NULL
-        AND s.started_at_epoch >= ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(nowEpoch, sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
+    `).all(nowEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
 
     // ── per-user project count & active days ──────────────────────────
     const userProjectRows = db.prepare(`
@@ -765,10 +763,9 @@ export class DataRoutes extends BaseRouteHandler {
              COUNT(*) AS session_count
       FROM sdk_sessions s
       WHERE s.started_at_epoch IS NOT NULL
-        AND s.started_at_epoch >= ?
       GROUP BY project
       ORDER BY total_ms DESC
-    `).all(nowEpoch, sinceEpoch) as Array<{ project: string; total_ms: number; session_count: number }>;
+    `).all(nowEpoch) as Array<{ project: string; total_ms: number; session_count: number }>;
 
     // ── format day_bucket → "YYYY-MM-DD" ───────────────────────────────
     const formatDay = (bucket: number): string => {
