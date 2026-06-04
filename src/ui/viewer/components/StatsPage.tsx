@@ -75,15 +75,17 @@ interface LineChartProps {
 }
 
 function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineChartRef, formatY, allDays, formatDayLabel: fmtDay }: LineChartProps) {
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
   if (series.length === 0) return null;
-  const globalMax = series.reduce((m, s) => Math.max(m, s.maxVal), 1);
+  const visible = series.filter(s => !hidden.has(s.user_label));
+  const globalMax = visible.reduce((m, s) => Math.max(m, s.maxVal), 1);
   const totalDays = series[0].points.length;
   const step = Math.max(1, Math.floor(allDays.length / 9));
 
   return (
     <div className="stats-chart">
       <div className="stats-chart-title">{title}</div>
-      <div className="stats-line-chart" ref={lineChartRef}>
+      <div className="stats-line-chart" ref={title.includes('Prompts') ? lineChartRef : undefined}>
         <svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`} preserveAspectRatio="xMidYMid meet">
           {[0, 0.25, 0.5, 0.75, 1].map(fr => {
             const y = svgPadding.top + plotH * (1 - fr);
@@ -108,7 +110,7 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
               </text>
             );
           })}
-          {series.map(s => {
+          {visible.map(s => {
             const pts = s.points;
             const d = pts.map((val, i) => {
               const x = svgPadding.left + (totalDays > 1 ? (i / (totalDays - 1)) * plotW : plotW / 2);
@@ -120,10 +122,12 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
         </svg>
         <div className="stats-user-legend">
           {series.map(s => (
-            <span key={s.user_label} className="stats-user-legend-item">
+            <label key={s.user_label} className="stats-user-legend-item" style={{ cursor: 'pointer' }}>
+              <input type="checkbox" className="stats-legend-checkbox" checked={!hidden.has(s.user_label)}
+                onChange={() => setHidden(prev => { const n = new Set(prev); if (n.has(s.user_label)) n.delete(s.user_label); else n.add(s.user_label); return n; })} />
               <span className="stats-user-legend-swatch" style={{ background: s.color }} />
               {s.user_label}
-            </span>
+            </label>
           ))}
         </div>
       </div>
