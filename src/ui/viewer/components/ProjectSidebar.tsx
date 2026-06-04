@@ -629,8 +629,6 @@ export function ProjectSidebar({
                   className={`project-sidebar-group-header${isExpanded ? ' is-expanded' : ''}${userLabelFilter === group.user ? ' is-filtered' : ''}`}
                   onClick={() => {
                     if (statsMode) {
-                      // In stats mode, clicking the group header filters by this user.
-                      // Toggle off if already active; do NOT collapse the project list.
                       onUserLabelFilter(userLabelFilter === group.user ? null : group.user);
                     } else {
                       toggleUser(group.user);
@@ -646,17 +644,17 @@ export function ProjectSidebar({
                   {userLabelFilter === group.user && statsMode && (
                     <span className="project-sidebar-filter-indicator" aria-label={t('sidebar.filterActive')}>◆</span>
                   )}
-                </button>
-                <button
-                  type="button"
-                  className="project-sidebar-group-stats-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onStatsForUser(group.user);
-                  }}
-                  title={t('sidebar.statsForUser')}
-                >
-                  {t('header.stats')}
+                  <span
+                    className="project-sidebar-group-stats-btn"
+                    style={{ display: 'inline-flex', alignItems: 'center' }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onStatsForUser(group.user);
+                    }}
+                    title={t('sidebar.statsForUser')}
+                  >
+                    {t('header.stats')}
+                  </span>
                 </button>
                 {isExpanded && group.projects.map((p) => renderProjectRow(p, true))}
               </div>
