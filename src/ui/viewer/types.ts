@@ -155,6 +155,10 @@ export interface AnalyticsResponse {
   totalObservations: number;
   totalSessions: number;
   uniqueUsers: string[];
-  /** 每用户 AI 使用总时长 (ms), key = user_label */
-  userDurations: Record<string, number>;
+  /** 每用户 AI 处理请求的总时间（ms）与会话数。key = user_label */
+  userProcessingTime: Record<string, { totalMs: number; sessionCount: number }>;
+  /** 每用户的项目数和活跃天数。key = user_label */
+  userProjectMeta: Record<string, { projectCount: number; activeDays: number }>;
+  /** 各项目的 AI 处理时间排名（已排序，仅全局视图有效）。 */
+  projectProcessingTime: Array<{ project: string; totalMs: number; sessionCount: number }>;
 }

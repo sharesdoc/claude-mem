@@ -30,7 +30,7 @@ function formatDayLabel(day: string): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
-function formatDuration(ms: number): string {
+function formatProcessingTime(ms: number): string {
   if (ms <= 0) return '-';
   const mins = ms / 60000;
   if (mins < 60) return `${Math.round(mins)}m`;
@@ -38,6 +38,12 @@ function formatDuration(ms: number): string {
   const m = Math.round(mins % 60);
   if (m === 0) return `${h}h`;
   return `${h}h${m}m`;
+}
+
+function formatDailyAvg(ms: number, days: number): string {
+  if (ms <= 0 || days <= 0) return '-';
+  const avgMin = ms / days / 60000;
+  return `${Math.round(avgMin)}m/d`;
 }
 
 export function StatsPage({ currentFilter }: StatsPageProps) {
@@ -130,13 +136,30 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
   }, [analytics]);
 
   // ── User summary table data ─────────────────────────────────────────
+  // Sorted by daily average AI processing time (desc) — users who spend
+  // more of their day working with AI rank higher.
   const userSummary = useMemo(() => {
     if (!analytics) return [];
     const users = analytics.uniqueUsers;
     if (users.length === 0) return [];
-    const map = new Map<string, { prompts: number; obs: number; summaries: number; durationMs: number }>();
-    const durations = analytics.userDurations ?? {};
-    for (const u of users) map.set(u, { prompts: 0, obs: 0, summaries: 0, durationMs: durations[u] ?? 0 });
+    const ptData = analytics.userProcessingTime ?? {};
+    const meta = analytics.userProjectMeta ?? {};
+    const map = new Map<string, {
+      prompts: number; obs: number; summaries: number;
+      processingMs: number; sessionCount: number;
+      projectCount: number; activeDays: number;
+    }>();
+    for (const u of users) {
+      const t = ptData[u];
+      const m = meta[u];
+      map.set(u, {
+        prompts: 0, obs: 0, summaries: 0,
+        processingMs: t?.totalMs ?? 0,
+        sessionCount: t?.sessionCount ?? 0,
+        projectCount: m?.projectCount ?? 0,
+        activeDays: m?.activeDays ?? 0,
+      });
+    }
     for (const pt of analytics.promptsByUserByDay) {
       const r = map.get(pt.user_label);
       if (r) r.prompts += pt.count;
@@ -151,7 +174,12 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
     }
     return Array.from(map.entries())
       .map(([user, counts]) => ({ user_label: user, ...counts }))
-      .sort((a, b) => b.prompts - a.prompts);
+      .sort((a, b) => {
+        // Sort by daily average processing time (desc)
+        const aAvg = a.activeDays > 0 ? a.processingMs / a.activeDays : 0;
+        const bAvg = b.activeDays > 0 ? b.processingMs / b.activeDays : 0;
+        return bAvg - aAvg;
+      });
   }, [analytics]);
 
   // ── 各项目提示词总数（降序，所有项目视图用）─────────────────────────
@@ -352,20 +380,26 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
                   <thead>
                     <tr>
                       <th>{t('stats.user')}</th>
+                      <th className="stats-num-col">{t('stats.projects')}</th>
                       <th className="stats-num-col">{t('stats.prompts')}</th>
+                      <th className="stats-num-col">{t('stats.dailyAvgPrompts')}</th>
                       <th className="stats-num-col">{t('stats.observations')}</th>
                       <th className="stats-num-col">{t('stats.summaries')}</th>
-                      <th className="stats-num-col">{t('stats.duration')}</th>
+                      <th className="stats-num-col">{t('stats.dailyAvgTime')}</th>
+                      <th className="stats-num-col">{t('stats.totalTime')}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {userSummary.map(row => (
                       <tr key={row.user_label}>
                         <td>{row.user_label}</td>
+                        <td className="stats-num-col">{row.projectCount}</td>
                         <td className="stats-num-col">{formatNumber(row.prompts)}</td>
+                        <td className="stats-num-col">{formatNumber(Math.round(row.prompts / Math.max(row.activeDays, 1)))}</td>
                         <td className="stats-num-col">{formatNumber(row.obs)}</td>
                         <td className="stats-num-col">{formatNumber(row.summaries)}</td>
-                        <td className="stats-num-col">{formatDuration(row.durationMs)}</td>
+                        <td className="stats-num-col">{formatDailyAvg(row.processingMs, row.activeDays)}</td>
+                        <td className="stats-num-col">{formatProcessingTime(row.processingMs)}</td>
                       </tr>
                     ))}
                   </tbody>
