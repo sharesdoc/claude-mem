@@ -337,6 +337,15 @@ export function ProjectSidebar({
 
   const groupingEnabled = projectGroups.length > 0;
 
+  // Auto-expand all groups when entering stats mode, collapse when leaving.
+  useEffect(() => {
+    if (statsMode && projectGroups.length > 0) {
+      setExpandedUsers(new Set(projectGroups.map(g => g.user)));
+    } else if (!statsMode) {
+      setExpandedUsers(new Set());
+    }
+  }, [statsMode, projectGroups]);
+
   const toggleUser = useCallback((user: string) => {
     setExpandedUsers((prev) => {
       const next = new Set(prev);
@@ -616,11 +625,12 @@ export function ProjectSidebar({
                   type="button"
                   className={`project-sidebar-group-header${isExpanded ? ' is-expanded' : ''}${userLabelFilter === group.user ? ' is-filtered' : ''}`}
                   onClick={() => {
-                    // Always toggle expand/collapse
-                    toggleUser(group.user);
-                    // In stats mode: also filter by this user (toggle off if already active)
                     if (statsMode) {
+                      // In stats mode, clicking the group header filters by this user.
+                      // Toggle off if already active; do NOT collapse the project list.
                       onUserLabelFilter(userLabelFilter === group.user ? null : group.user);
+                    } else {
+                      toggleUser(group.user);
                     }
                   }}
                   aria-expanded={isExpanded}

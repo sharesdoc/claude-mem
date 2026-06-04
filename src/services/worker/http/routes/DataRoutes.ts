@@ -608,7 +608,10 @@ export class DataRoutes extends BaseRouteHandler {
       : undefined;
     const rawDays = req.query.days as string | undefined;
     const days = (typeof rawDays === 'string' ? parseInt(rawDays, 10) : 90) || 90;
-    const sinceEpoch = Date.now() - days * 86400000;
+    // Default: first day of current month (excludes weekends in frontend avg calc)
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const sinceEpoch = rawDays ? (Date.now() - days * 86400000) : monthStart;
     const rawUserLabel = req.query.userLabel as string | undefined;
     const userLabel = (typeof rawUserLabel === 'string' && rawUserLabel.trim().length > 0)
       ? rawUserLabel.trim()

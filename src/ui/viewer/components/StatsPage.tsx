@@ -13,7 +13,23 @@ const USER_COLORS = [
   '#0550ae', '#16c60c', '#e74856', '#8e7cbc', '#d4b888',
 ];
 
-const DEFAULT_DAYS = 30;
+// Current month (backend default), or explicit days
+const DEFAULT_DAYS = 0; // 0 → backend uses month start
+
+/** Count business days (Mon-Fri) between two date strings (inclusive). */
+function countBusinessDays(startDay: string, endDay: string): number {
+  if (!startDay || !endDay) return 0;
+  const s = new Date(startDay + 'T00:00:00');
+  const e = new Date(endDay + 'T00:00:00');
+  let count = 0;
+  const c = new Date(s);
+  while (c <= e) {
+    const dow = c.getDay();
+    if (dow !== 0 && dow !== 6) count++;
+    c.setDate(c.getDate() + 1);
+  }
+  return count;
+}
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -147,7 +163,8 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     setError(null);
     const controller = new AbortController();
     try {
-      const params = new URLSearchParams({ days: String(DEFAULT_DAYS) });
+      const params = new URLSearchParams();
+      if (DEFAULT_DAYS > 0) params.set('days', String(DEFAULT_DAYS));
       if (currentFilter) params.set('project', currentFilter);
       if (userLabelFilter) params.set('userLabel', userLabelFilter);
       const resp = await authFetch(`/api/stats/analytics?${params}`, { signal: controller.signal });
@@ -230,11 +247,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     for (const pt of analytics.promptsByUserByDay) { const r = map.get(pt.user_label); if (r) r.prompts += pt.count; }
     for (const pt of analytics.observationsByUserByDay) { const r = map.get(pt.user_label); if (r) r.obs += pt.count; }
     for (const pt of analytics.summariesByUserByDay) { const r = map.get(pt.user_label); if (r) r.summaries += pt.count; }
-    return Array.from(map.entries()).map(([user, counts]) => ({ user_label: user, ...counts })).sort((a, b) => {
-      const aAvg = a.activeDays > 0 ? a.processingMs / a.activeDays : 0;
-      const bAvg = b.activeDays > 0 ? b.processingMs / b.activeDays : 0;
-      return bAvg - aAvg;
-    });
+    return Array.from(map.entries()).map(([user, counts]) => ({ user_label: user, ...counts })).sort((a, b) => b.processingMs - a.processingMs);
   }, [analytics]);
 
   const projectPrompts = useMemo(() => {
@@ -242,6 +255,13 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     return [...rows].sort((a, b) => b.count - a.count);
   }, [analytics]);
   const maxProjectPrompts = projectPrompts.length > 0 ? projectPrompts[0].count : 1;
+
+  // Business days in the data range (excludes weekends for daily avg calcs)
+  const bizDays = useMemo(() => {
+    const allPts = analytics?.promptsByUserByDay ?? [];
+    if (allPts.length === 0) return 1;
+    return Math.max(countBusinessDays(allPts[0]?.day, allPts[allPts.length - 1]?.day), 1);
+  }, [analytics]);
 
   const svgPadding = { top: 16, right: 8, bottom: 32, left: 42 };
   const svgW = chartWidth;
@@ -327,10 +347,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                         <td>{row.user_label}</td>
                         <td className="stats-num-col">{row.projectCount}</td>
                         <td className="stats-num-col">{formatNumber(row.prompts)}</td>
-                        <td className="stats-num-col">{formatNumber(Math.round(row.prompts / Math.max(row.activeDays, 1)))}</td>
+                        <td className="stats-num-col">{formatNumber(Math.round(row.prompts / Math.max(bizDays, 1)))}</td>
                         <td className="stats-num-col">{formatNumber(row.obs)}</td>
                         <td className="stats-num-col">{formatNumber(row.summaries)}</td>
-                        <td className="stats-num-col">{formatDailyAvg(row.processingMs, row.activeDays)}</td>
+                        <td className="stats-num-col">{formatDailyAvg(row.processingMs, bizDays)}</td>
                         <td className="stats-num-col">{formatProcessingTime(row.processingMs)}</td>
                       </tr>
                     ))}
