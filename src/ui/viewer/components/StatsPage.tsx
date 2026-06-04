@@ -59,10 +59,13 @@ function formatDailyAvg(ms: number, days: number): string {
 }
 
 function buildDayRange(firstDay: string | undefined, lastDay: string | undefined): string[] {
-  if (!firstDay || !lastDay) return [];
+  if (!firstDay) return [];
+  // Extend end to today so the chart always shows up to current date
+  const today = new Date().toISOString().slice(0, 10);
+  const endDay = lastDay && lastDay < today ? today : (lastDay || today);
   const result: string[] = [];
   const c = new Date(firstDay + 'T00:00:00');
-  const e = new Date(lastDay + 'T00:00:00');
+  const e = new Date(endDay + 'T00:00:00');
   while (c <= e) {
     result.push(c.toISOString().slice(0, 10));
     c.setDate(c.getDate() + 1);

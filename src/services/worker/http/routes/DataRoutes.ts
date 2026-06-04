@@ -608,9 +608,9 @@ export class DataRoutes extends BaseRouteHandler {
       : undefined;
     const rawDays = req.query.days as string | undefined;
     const days = (typeof rawDays === 'string' ? parseInt(rawDays, 10) : 90) || 90;
-    // Default: first day of current month (excludes weekends in frontend avg calc)
+    // Default: first day of current month in UTC (aligns with UTC day buckets)
     const now = new Date();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const monthStart = Date.UTC(now.getFullYear(), now.getMonth(), 1);
     const sinceEpoch = rawDays ? (Date.now() - days * 86400000) : monthStart;
     const rawUserLabel = req.query.userLabel as string | undefined;
     const userLabel = (typeof rawUserLabel === 'string' && rawUserLabel.trim().length > 0)

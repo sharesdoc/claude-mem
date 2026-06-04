@@ -11633,7 +11633,7 @@ ${e}`,o=a7(i,s),a=`${t}.tmp`;try{(0,qu.writeFileSync)(a,o),(0,qu.renameSync)(a,t
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       WHERE s.project IS NOT NULL AND s.project != ''${S}
       GROUP BY s.project
-    `).all(...w);for(let R of A){if(!R.project)continue;let C=o(R.project);C.prompts=R.n,C.total+=R.n,R.latest>C.latest&&(C.latest=R.latest)}let x=this.dbManager.getSessionStore().getProjectCatalog().projectUsers;n.json({projects:s,projectUsers:x})});handleGetAnalytics=this.wrapHandler((r,n)=>{let i=this.dbManager.getSessionStore().db,s=r.query.project,o=typeof s=="string"&&s.trim().length>0?s.trim():void 0,a=r.query.days,c=(typeof a=="string"?parseInt(a,10):90)||90,l=new Date,u=new Date(l.getFullYear(),l.getMonth(),1).getTime(),d=a?Date.now()-c*864e5:u,p=r.query.userLabel,f=typeof p=="string"&&p.trim().length>0?p.trim():void 0,m=i.prepare(`
+    `).all(...w);for(let R of A){if(!R.project)continue;let C=o(R.project);C.prompts=R.n,C.total+=R.n,R.latest>C.latest&&(C.latest=R.latest)}let x=this.dbManager.getSessionStore().getProjectCatalog().projectUsers;n.json({projects:s,projectUsers:x})});handleGetAnalytics=this.wrapHandler((r,n)=>{let i=this.dbManager.getSessionStore().db,s=r.query.project,o=typeof s=="string"&&s.trim().length>0?s.trim():void 0,a=r.query.days,c=(typeof a=="string"?parseInt(a,10):90)||90,l=new Date,u=Date.UTC(l.getFullYear(),l.getMonth(),1),d=a?Date.now()-c*864e5:u,p=r.query.userLabel,f=typeof p=="string"&&p.trim().length>0?p.trim():void 0,m=i.prepare(`
       SELECT (up.created_at_epoch / 86400000) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
