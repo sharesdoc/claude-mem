@@ -159,16 +159,29 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
 
 export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const { t } = useLocale();
+
+  // ── Data fetching state ──────────────────────────────────────────
   const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // ── Chart layout ─────────────────────────────────────────────────
   const lineChartRef = useRef<HTMLDivElement>(null);
   const [chartWidth, setChartWidth] = useState(600);
+
+  // ── Shared checkbox state: both charts toggle the same users ─────
   const [hiddenUsers, setHiddenUsers] = useState<Set<string>>(new Set());
   const toggleHiddenUser = useCallback((user: string) => {
     setHiddenUsers(prev => { const n = new Set(prev); if (n.has(user)) n.delete(user); else n.add(user); return n; });
   }, []);
 
+  // ── Tab state for project rankings ───────────────────────────────
+  const [projectTab, setProjectTab] = useState<'prompts' | 'time'>('prompts');
+
+  /**
+   * Fetch analytics from the backend. Aborts in-flight requests when
+   * currentFilter or userLabelFilter changes to avoid stale data races.
+   */
   const loadAnalytics = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -272,9 +285,11 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   }, [analytics]);
   const maxProjectTime = projectTimes.length > 0 ? projectTimes[0].totalMs : 1;
 
-  const [projectTab, setProjectTab] = useState<'prompts' | 'time'>('prompts');
-
-  // Business days in the data range (excludes weekends for daily avg calcs)
+  /**
+   * Business days in the data range (Mon–Fri only).
+   * Used as the denominator for Avg/Day and Prompts/Day columns so
+   * weekends don't dilute the daily average.
+   */
   const bizDays = useMemo(() => {
     const allPts = analytics?.promptsByUserByDay ?? [];
     if (allPts.length === 0) return 1;

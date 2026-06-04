@@ -598,10 +598,23 @@ export class DataRoutes extends BaseRouteHandler {
     res.json({ projects: stats, projectUsers });
   });
 
+  /**
+   * GET /api/stats/analytics?project=&days=&userLabel=
+   *
+   * Returns aggregated analytics data for the stats page. Two scoping modes:
+   *   Default (no ?days=): current month only (monthStart UTC → today)
+   *   Explicit:        ?days=N gives the last N days
+   *
+   * Response sections and their time scoping:
+   *   promptsByUserByDay / dailyProcessingTimeByUser — monthly (for line charts)
+   *   userProcessingTime / userProjectMeta              — monthly (for User Summary)
+   *   promptsByProject / projectProcessingTime         — all-time (for project tabs)
+   *   totalObservations / totalSessions                 — all-time (summary cards)
+   */
   private handleGetAnalytics = this.wrapHandler((req: Request, res: Response): void => {
     const db = this.dbManager.getSessionStore().db;
 
-    // Parse query parameters
+    // ── Parse query parameters ──────────────────────────────────────
     const rawProject = req.query.project as string | undefined;
     const project = (typeof rawProject === 'string' && rawProject.trim().length > 0)
       ? rawProject.trim()
@@ -696,32 +709,36 @@ export class DataRoutes extends BaseRouteHandler {
     // Count ALL started sessions; use now() for still-active ones so every
     // project/user that has started a session contributes to processing time.
     const nowEpoch = Date.now();
+    // Monthly scope: per-user processing time feeds User Summary, must align
+    // with promptsByUserByDay (also monthly) so Avg/Day is consistent.
     const userProcessingTimeRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              SUM(COALESCE(s.completed_at_epoch, ?) - s.started_at_epoch) AS total_ms,
              COUNT(*) AS session_count
       FROM sdk_sessions s
       WHERE s.started_at_epoch IS NOT NULL
+        AND s.started_at_epoch >= ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY user_label
-    `).all(nowEpoch, project || null, project || null) as Array<{ user_label: string; total_ms: number; session_count: number }>;
+    `).all(nowEpoch, sinceEpoch, project || null, project || null) as Array<{ user_label: string; total_ms: number; session_count: number }>;
 
     const userProcessingTime: Record<string, { totalMs: number; sessionCount: number }> = {};
     for (const r of userProcessingTimeRows) {
       userProcessingTime[r.user_label] = { totalMs: r.total_ms, sessionCount: r.session_count };
     }
 
-    // ── daily processing time by user (for the daily line chart) ──────
+    // ── daily processing time by user (monthly, for the daily line chart) ──
     const dailyTimeByUser = db.prepare(`
       SELECT (s.started_at_epoch / 86400000) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              SUM(COALESCE(s.completed_at_epoch, ?) - s.started_at_epoch) AS total_ms
       FROM sdk_sessions s
       WHERE s.started_at_epoch IS NOT NULL
+        AND s.started_at_epoch >= ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(nowEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
+    `).all(nowEpoch, sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
 
     // ── per-user project count & active days ──────────────────────────
     const userProjectRows = db.prepare(`

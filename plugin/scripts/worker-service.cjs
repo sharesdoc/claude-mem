@@ -11692,18 +11692,20 @@ ${e}`,o=a7(i,s),a=`${t}.tmp`;try{(0,qu.writeFileSync)(a,o),(0,qu.renameSync)(a,t
              COUNT(*) AS session_count
       FROM sdk_sessions s
       WHERE s.started_at_epoch IS NOT NULL
+        AND s.started_at_epoch >= ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY user_label
-    `).all(S,o||null,o||null),x={};for(let W of A)x[W.user_label]={totalMs:W.total_ms,sessionCount:W.session_count};let R=i.prepare(`
+    `).all(S,d,o||null,o||null),x={};for(let W of A)x[W.user_label]={totalMs:W.total_ms,sessionCount:W.session_count};let R=i.prepare(`
       SELECT (s.started_at_epoch / 86400000) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              SUM(COALESCE(s.completed_at_epoch, ?) - s.started_at_epoch) AS total_ms
       FROM sdk_sessions s
       WHERE s.started_at_epoch IS NOT NULL
+        AND s.started_at_epoch >= ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(S,o||null,o||null),C=i.prepare(`
+    `).all(S,d,o||null,o||null),C=i.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(DISTINCT s.project) AS project_count,
              COUNT(DISTINCT (s.started_at_epoch / 86400000)) AS active_days
