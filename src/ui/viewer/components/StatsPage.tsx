@@ -147,7 +147,7 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
               <label key={s.user_label} className="stats-user-legend-item">
                 <input type="checkbox" className="stats-legend-checkbox" checked={!hiddenUsers.has(s.user_label)}
                   onChange={() => onToggleUser(s.user_label)} />
-                {s.user_label}
+                <span style={{ color: s.color, fontWeight: 500 }}>{s.user_label}</span>
               </label>
             ))}
           </div>
