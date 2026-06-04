@@ -6,6 +6,7 @@ import { LogsDrawer } from './components/LogsModal';
 import { ProjectSidebar } from './components/ProjectSidebar';
 import { ViewMode } from './components/ViewModeToggle';
 import { WelcomeCard, getStoredWelcomeDismissed, setStoredWelcomeDismissed } from './components/WelcomeCard';
+import { StatsPage } from './components/StatsPage';
 import { useSSE, ProjectStat } from './hooks/useSSE';
 import { useSettings } from './hooks/useSettings';
 import { useStats } from './hooks/useStats';
@@ -309,16 +310,22 @@ export function App() {
               setWelcomeDismissed(false);
             }}
             onLogout={isServer ? auth.logout : undefined}
+            statsMode={viewMode === 'stats'}
+            onStatsToggle={() => setViewMode(viewMode === 'stats' ? 'all' : 'stats')}
           />
-          <Feed
-            observations={allObservations}
-            summaries={allSummaries}
-            prompts={allPrompts}
-            onLoadMore={handleLoadMore}
-            onPromptDeleted={handlePromptDeleted}
-            isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
+          {viewMode === 'stats' ? (
+            <StatsPage currentFilter={currentFilter} />
+          ) : (
+            <Feed
+              observations={allObservations}
+              summaries={allSummaries}
+              prompts={allPrompts}
+              onLoadMore={handleLoadMore}
+              onPromptDeleted={handlePromptDeleted}
+              isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
             hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore}
           />
+          )}
         </div>
       </div>
 

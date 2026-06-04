@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type ViewMode = 'all' | 'prompts';
+export type ViewMode = 'all' | 'prompts' | 'stats';
 
 interface ViewModeToggleProps {
   mode: ViewMode;

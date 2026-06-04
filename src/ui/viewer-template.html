@@ -3227,6 +3227,242 @@
       margin-top: 10px;
     }
 
+    /* ── Statistics Page ────────────────────────────────────────────── */
+    .stats-page-loading,
+    .stats-page-error {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 60px 20px;
+      gap: 16px;
+      color: var(--color-text-secondary);
+    }
+
+    .stats-page-retry-btn {
+      background: var(--color-bg-card);
+      border: 1px solid var(--color-border-primary);
+      border-radius: 6px;
+      padding: 8px 20px;
+      cursor: pointer;
+      color: var(--color-text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      transition: all 0.2s ease;
+    }
+    .stats-page-retry-btn:hover {
+      background: var(--color-bg-card-hover);
+      border-color: var(--color-accent-primary);
+      color: var(--color-text-primary);
+    }
+
+    .stats-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .stats-summary-card {
+      padding: 20px;
+      background: var(--color-bg-card);
+      border: 1px solid var(--color-border-primary);
+      border-radius: 8px;
+      text-align: center;
+      transition: border-color 0.15s ease;
+    }
+    .stats-summary-card:hover {
+      border-color: var(--color-border-hover);
+    }
+
+    .stats-summary-value {
+      font-size: 28px;
+      font-weight: 600;
+      color: var(--color-text-primary);
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      line-height: 1.2;
+      margin-bottom: 6px;
+    }
+
+    .stats-summary-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--color-text-muted);
+      font-weight: 500;
+    }
+
+    .stats-section {
+      margin-bottom: 32px;
+    }
+
+    .stats-section-title {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--color-text-primary);
+      margin-bottom: 16px;
+      letter-spacing: -0.01em;
+    }
+
+    /* ── Line chart ────────────────────────────────────────────────── */
+    .stats-line-chart {
+      width: 100%;
+      margin-bottom: 8px;
+    }
+    .stats-line-chart svg {
+      display: block;
+      width: 100%;
+    }
+
+    .stats-user-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-top: 0;
+      padding: 8px 0;
+    }
+
+    .stats-user-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--color-text-secondary);
+    }
+
+    .stats-user-legend-swatch {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+
+    /* ── Bar chart ──────────────────────────────────────────────────── */
+    .stats-bar-chart {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .stats-bar-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .stats-bar-day-label {
+      width: 52px;
+      flex-shrink: 0;
+      font-size: 11px;
+      color: var(--color-text-muted);
+      text-align: right;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    }
+
+    .stats-bar-stack {
+      flex: 1;
+      height: 20px;
+      background: var(--color-bg-stat);
+      border-radius: 4px;
+      overflow: hidden;
+      display: flex;
+      gap: 1px;
+    }
+
+    .stats-bar-segment {
+      height: 100%;
+      background: var(--color-accent-primary);
+      border-radius: 4px;
+      transition: width 0.4s ease;
+      min-width: 1px;
+    }
+
+    .stats-bar-total {
+      width: 36px;
+      flex-shrink: 0;
+      font-size: 11px;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      color: var(--color-text-primary);
+      font-weight: 500;
+      text-align: right;
+    }
+
+    /* ── User summary table ─────────────────────────────────────────── */
+    .stats-user-table-wrap {
+      overflow-x: auto;
+    }
+
+    .stats-user-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .stats-user-table th {
+      padding: 10px 12px;
+      text-align: left;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--color-text-muted);
+      font-weight: 500;
+      border-bottom: 1px solid var(--color-border-primary);
+    }
+
+    .stats-user-table td {
+      padding: 8px 12px;
+      color: var(--color-text-primary);
+      border-bottom: 1px solid var(--color-border-primary);
+    }
+
+    .stats-num-col {
+      text-align: right;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stats-user-table tbody tr:hover {
+      background: var(--color-bg-card-hover);
+    }
+
+    /* ── Responsive: tablet ─────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .stats-summary-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+      }
+      .stats-summary-value {
+        font-size: 22px;
+      }
+      .stats-bar-day-label {
+        width: 44px;
+        font-size: 10px;
+      }
+      .stats-bar-total {
+        width: 30px;
+        font-size: 10px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .stats-summary-grid {
+        grid-template-columns: 1fr;
+      }
+      .stats-summary-value {
+        font-size: 20px;
+      }
+      .stats-bar-stack {
+        height: 16px;
+      }
+      .stats-bar-day-label {
+        width: 38px;
+      }
+      .stats-user-legend {
+        gap: 10px;
+      }
+    }
+
     /* Animations */
     @keyframes fadeIn {
       from {

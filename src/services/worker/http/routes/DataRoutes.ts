@@ -134,6 +134,7 @@ export class DataRoutes extends BaseRouteHandler {
     app.get('/api/stats', this.handleGetStats.bind(this));
     app.get('/api/projects', this.handleGetProjects.bind(this));
     app.get('/api/projects/stats', this.handleGetProjectStats.bind(this));
+    app.get('/api/stats/analytics', this.handleGetAnalytics.bind(this));
 
     app.get('/api/processing-status', this.handleGetProcessingStatus.bind(this));
     app.post('/api/processing', validateBody(setProcessingSchema), this.handleSetProcessing.bind(this));
@@ -595,6 +596,105 @@ export class DataRoutes extends BaseRouteHandler {
 
     const projectUsers = this.dbManager.getSessionStore().getProjectCatalog().projectUsers;
     res.json({ projects: stats, projectUsers });
+  });
+
+  private handleGetAnalytics = this.wrapHandler((req: Request, res: Response): void => {
+    const db = this.dbManager.getSessionStore().db;
+
+    // Parse query parameters
+    const rawProject = req.query.project as string | undefined;
+    const project = (typeof rawProject === 'string' && rawProject.trim().length > 0)
+      ? rawProject.trim()
+      : undefined;
+    const rawDays = req.query.days as string | undefined;
+    const days = (typeof rawDays === 'string' ? parseInt(rawDays, 10) : 90) || 90;
+    const sinceEpoch = Date.now() - days * 86400000;
+
+    // ── prompts by user by day ────────────────────────────────────────
+    const promptsByUserByDay = db.prepare(`
+      SELECT (up.created_at_epoch / 86400000) AS day_bucket,
+             COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
+             COUNT(*) AS count
+      FROM user_prompts up
+      JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+      WHERE up.created_at_epoch >= ?
+        AND (? IS NULL OR s.project = ?)
+      GROUP BY day_bucket, user_label
+      ORDER BY day_bucket ASC
+    `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+
+    // ── observations by user by day ────────────────────────────────────
+    const observationsByUserByDay = db.prepare(`
+      SELECT (o.created_at_epoch / 86400000) AS day_bucket,
+             COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
+             COUNT(*) AS count
+      FROM observations o
+      LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
+      WHERE o.created_at_epoch >= ?
+        AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
+      GROUP BY day_bucket, user_label
+      ORDER BY day_bucket ASC
+    `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+
+    // ── summaries by user by day ───────────────────────────────────────
+    const summariesByUserByDay = db.prepare(`
+      SELECT (ss.created_at_epoch / 86400000) AS day_bucket,
+             COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
+             COUNT(*) AS count
+      FROM session_summaries ss
+      LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
+      WHERE ss.created_at_epoch >= ?
+        AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?)
+      GROUP BY day_bucket, user_label
+      ORDER BY day_bucket ASC
+    `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+
+    // ── global totals ──────────────────────────────────────────────────
+    const totalObs = db.prepare(`
+      SELECT COALESCE(SUM(discovery_tokens), 0) AS totalDiscoveryTokens,
+             COUNT(*) AS totalObservations
+      FROM observations
+      WHERE (? IS NULL OR COALESCE(NULLIF(merged_into_project, ''), project) = ?)
+    `).get(project || null, project || null) as { totalDiscoveryTokens: number; totalObservations: number };
+
+    const totalSessionsRow = db.prepare(`
+      SELECT COUNT(*) AS totalSessions
+      FROM sdk_sessions
+      WHERE (? IS NULL OR project = ?)
+    `).get(project || null, project || null) as { totalSessions: number };
+
+    // ── unique users ───────────────────────────────────────────────────
+    const uniqueUsersRows = db.prepare(`
+      SELECT DISTINCT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label
+      FROM sdk_sessions s
+      WHERE s.user_label IS NOT NULL AND s.user_label != ''
+        AND (? IS NULL OR s.project = ?)
+      ORDER BY user_label
+    `).all(project || null, project || null) as Array<{ user_label: string }>;
+
+    const uniqueUsers = uniqueUsersRows.map(r => r.user_label);
+
+    // ── format day_bucket → "YYYY-MM-DD" ───────────────────────────────
+    const formatDay = (bucket: number): string => {
+      const d = new Date(bucket * 86400000);
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    const formatPoints = (rows: Array<{ day_bucket: number; user_label: string; count: number }>) =>
+      rows.map(r => ({ day: formatDay(r.day_bucket), user_label: r.user_label, count: r.count }));
+
+    res.json({
+      promptsByUserByDay: formatPoints(promptsByUserByDay),
+      observationsByUserByDay: formatPoints(observationsByUserByDay),
+      summariesByUserByDay: formatPoints(summariesByUserByDay),
+      totalDiscoveryTokens: totalObs.totalDiscoveryTokens,
+      totalObservations: totalObs.totalObservations,
+      totalSessions: totalSessionsRow.totalSessions,
+      uniqueUsers,
+    });
   });
 
   private handleGetProcessingStatus = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {

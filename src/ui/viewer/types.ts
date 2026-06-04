@@ -133,3 +133,19 @@ export interface Stats {
   worker?: WorkerStats;
   database?: DatabaseStats;
 }
+
+export interface AnalyticsPoint {
+  day: string;
+  user_label: string;
+  count: number;
+}
+
+export interface AnalyticsResponse {
+  promptsByUserByDay: AnalyticsPoint[];
+  observationsByUserByDay: AnalyticsPoint[];
+  summariesByUserByDay: AnalyticsPoint[];
+  totalDiscoveryTokens: number;
+  totalObservations: number;
+  totalSessions: number;
+  uniqueUsers: string[];
+}
