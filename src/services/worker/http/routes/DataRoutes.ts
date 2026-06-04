@@ -789,15 +789,24 @@ export class DataRoutes extends BaseRouteHandler {
     const formatTimePoints = (rows: Array<{ day_bucket: number; user_label: string; total_ms: number }>) =>
       rows.map(r => ({ day: formatDay(r.day_bucket), user_label: r.user_label, totalMs: r.total_ms }));
 
-    // Apply userLabel filter in JS (cleaner than adding to every SQL query)
+    // Apply userLabel filter in JS (cleaner than adding to every SQL query).
+    // Case-insensitive: sidebar shows uppercased labels, DB may store lowercase.
     const filterByLabel = <T extends { user_label: string }>(arr: T[]): T[] =>
-      userLabel ? arr.filter(r => r.user_label === userLabel) : arr;
+      userLabel ? arr.filter(r => r.user_label.toLowerCase() === userLabel.toLowerCase()) : arr;
 
-    const filteredUsers = userLabel ? [userLabel] : uniqueUsers;
+    // Use original-case user label from DB so downstream map lookups match.
+    const resolveUserKey = (label: string): string => {
+      const lc = label.toLowerCase();
+      const match = uniqueUsers.find(u => u.toLowerCase() === lc);
+      return match ?? label;
+    };
+    const filteredUsers = userLabel ? [resolveUserKey(userLabel)] : uniqueUsers;
     const filterUserMap = <T>(map: Record<string, T>): Record<string, T> => {
       if (!userLabel) return map;
-      const v = map[userLabel];
-      return v ? { [userLabel]: v } : {};
+      // Try exact match first, then case-insensitive
+      if (map[userLabel]) return { [userLabel]: map[userLabel] };
+      const key = Object.keys(map).find(k => k.toLowerCase() === userLabel.toLowerCase());
+      return key ? { [key]: map[key] } : {};
     };
 
     res.json({

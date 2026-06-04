@@ -286,11 +286,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       <div className="feed-content">
         <div className="stats-page">
 
-          {!isAllProjects && (
-            <div className="stats-project-name">
-              {t('stats.singleProject')}: {currentFilter}
-            </div>
-          )}
+          <div className="stats-project-name">
+            {isAllProjects ? t('stats.allProjects') : `${t('stats.singleProject')}: ${currentFilter}`}
+          </div>
 
           <div className="stats-summary-grid">
             <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalObservations)}</div><div className="stats-summary-label">{t('stats.totalObservations')}</div></div>
