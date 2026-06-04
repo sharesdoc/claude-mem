@@ -140,10 +140,17 @@ export interface AnalyticsPoint {
   count: number;
 }
 
+export interface ProjectPromptCount {
+  project: string;
+  count: number;
+}
+
 export interface AnalyticsResponse {
   promptsByUserByDay: AnalyticsPoint[];
   observationsByUserByDay: AnalyticsPoint[];
   summariesByUserByDay: AnalyticsPoint[];
+  /** 各项目用户输入提示词总数，按 count 降序（所有项目视图用）。 */
+  promptsByProject: ProjectPromptCount[];
   totalDiscoveryTokens: number;
   totalObservations: number;
   totalSessions: number;

@@ -3422,8 +3422,68 @@
       font-variant-numeric: tabular-nums;
     }
 
+    /* 表头数字列也要右对齐：否则 .stats-user-table th 的 left 优先级更高，
+       导致表头左对齐、数据右对齐而错位。 */
+    .stats-user-table th.stats-num-col {
+      text-align: right;
+    }
+
     .stats-user-table tbody tr:hover {
       background: var(--color-bg-card-hover);
+    }
+
+    /* ── 各项目提示词进度条 ─────────────────────────────────────────── */
+    .stats-project-bars {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .stats-project-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .stats-project-label {
+      width: 240px;
+      flex-shrink: 0;
+      font-size: 12px;
+      color: var(--color-text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      /* 路径过长时省略左侧、保留右侧（项目名）；plaintext 保证路径本身仍按
+         正常 LTR 顺序显示，仅省略号落在左侧。 */
+      direction: rtl;
+      unicode-bidi: plaintext;
+    }
+
+    .stats-project-track {
+      flex: 1;
+      height: 20px;
+      background: var(--color-bg-stat);
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    .stats-project-fill {
+      height: 100%;
+      background: var(--color-accent-primary);
+      border-radius: 4px;
+      transition: width 0.4s ease;
+      min-width: 2px;
+    }
+
+    .stats-project-count {
+      width: 48px;
+      flex-shrink: 0;
+      text-align: right;
+      font-size: 12px;
+      font-weight: 500;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-variant-numeric: tabular-nums;
+      color: var(--color-text-primary);
     }
 
     /* ── Responsive: tablet ─────────────────────────────────────────── */

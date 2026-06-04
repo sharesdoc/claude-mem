@@ -623,6 +623,17 @@ export class DataRoutes extends BaseRouteHandler {
       ORDER BY day_bucket ASC
     `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
+    // ── prompts by project (各项目提示词总数，所有项目视图用，不按当前筛选) ──
+    const promptsByProjectRows = db.prepare(`
+      SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
+             COUNT(*) AS count
+      FROM user_prompts up
+      JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+      WHERE up.created_at_epoch >= ?
+      GROUP BY project
+      ORDER BY count DESC
+    `).all(sinceEpoch) as Array<{ project: string; count: number }>;
+
     // ── observations by user by day ────────────────────────────────────
     const observationsByUserByDay = db.prepare(`
       SELECT (o.created_at_epoch / 86400000) AS day_bucket,
@@ -690,6 +701,7 @@ export class DataRoutes extends BaseRouteHandler {
       promptsByUserByDay: formatPoints(promptsByUserByDay),
       observationsByUserByDay: formatPoints(observationsByUserByDay),
       summariesByUserByDay: formatPoints(summariesByUserByDay),
+      promptsByProject: promptsByProjectRows,
       totalDiscoveryTokens: totalObs.totalDiscoveryTokens,
       totalObservations: totalObs.totalObservations,
       totalSessions: totalSessionsRow.totalSessions,

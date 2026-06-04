@@ -143,6 +143,14 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
       .sort((a, b) => b.prompts - a.prompts);
   }, [analytics]);
 
+  // ── 各项目提示词总数（降序，所有项目视图用）─────────────────────────
+  const projectPrompts = useMemo(() => {
+    const rows = analytics?.promptsByProject ?? [];
+    // 后端已降序，前端再排一次以防万一
+    return [...rows].sort((a, b) => b.count - a.count);
+  }, [analytics]);
+  const maxProjectPrompts = projectPrompts.length > 0 ? projectPrompts[0].count : 1;
+
   // ── SVG line chart dimensions ───────────────────────────────────────
   const svgPadding = { top: 16, right: 16, bottom: 40, left: 48 };
   const svgW = chartWidth;
@@ -300,34 +308,25 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
             </div>
           )}
 
-          {/* ── Single Project: per-user daily bar charts ──────────── */}
+          {/* ── 单项目：每日柱状图（汇总所有用户，不分用户）──────────── */}
           {!isAllProjects && (
             <>
               {analytics.observationsByUserByDay.length > 0 && (
                 <div className="stats-section">
-                  <div className="stats-section-title">{t('stats.dailyObsByUser')}</div>
-                  <UserDailyBarChart
-                    data={analytics.observationsByUserByDay}
-                    users={analytics.uniqueUsers}
-                  />
+                  <div className="stats-section-title">{t('stats.dailyObs')}</div>
+                  <UserDailyBarChart data={analytics.observationsByUserByDay} aggregate />
                 </div>
               )}
               {analytics.promptsByUserByDay.length > 0 && (
                 <div className="stats-section">
-                  <div className="stats-section-title">{t('stats.dailyPromptsByUser')}</div>
-                  <UserDailyBarChart
-                    data={analytics.promptsByUserByDay}
-                    users={analytics.uniqueUsers}
-                  />
+                  <div className="stats-section-title">{t('stats.dailyPrompts')}</div>
+                  <UserDailyBarChart data={analytics.promptsByUserByDay} aggregate />
                 </div>
               )}
               {analytics.summariesByUserByDay.length > 0 && (
                 <div className="stats-section">
-                  <div className="stats-section-title">{t('stats.dailySummariesByUser')}</div>
-                  <UserDailyBarChart
-                    data={analytics.summariesByUserByDay}
-                    users={analytics.uniqueUsers}
-                  />
+                  <div className="stats-section-title">{t('stats.dailySummaries')}</div>
+                  <UserDailyBarChart data={analytics.summariesByUserByDay} aggregate />
                 </div>
               )}
             </>
@@ -362,19 +361,48 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
             </div>
           )}
 
+          {/* ── 各项目提示词总数（进度条，降序，仅所有项目视图）──────── */}
+          {isAllProjects && projectPrompts.length > 0 && (
+            <div className="stats-section">
+              <div className="stats-section-title">{t('stats.promptsByProject')}</div>
+              <div className="stats-project-bars">
+                {projectPrompts.map(row => {
+                  const pct = Math.round((row.count / maxProjectPrompts) * 100);
+                  return (
+                    <div key={row.project} className="stats-project-row">
+                      <span className="stats-project-label" title={row.project}>
+                        {row.project}
+                      </span>
+                      <div className="stats-project-track">
+                        <div
+                          className="stats-project-fill"
+                          style={{ width: `${Math.max(pct, 1)}%` }}
+                        />
+                      </div>
+                      <span className="stats-project-count">{formatNumber(row.count)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
         </div>
       </div>
     </div>
   );
 }
 
-/* ── UserDailyBarChart: horizontal bars showing daily counts per user ── */
+/* ── UserDailyBarChart: 每日横向柱状图 ──────────────────────────────
+   aggregate=true（单项目视图）：汇总所有用户为一条总量柱，不分用户。
+   aggregate=false（默认）：按用户分段堆叠（需传 users）。 */
 interface BarChartProps {
   data: Array<{ day: string; user_label: string; count: number }>;
-  users: string[];
+  users?: string[];
+  aggregate?: boolean;
 }
 
-function UserDailyBarChart({ data, users }: BarChartProps) {
+function UserDailyBarChart({ data, users = [], aggregate = false }: BarChartProps) {
 
   // Build day→{user→count}
   const byDay = new Map<string, Record<string, number>>();
@@ -389,35 +417,47 @@ function UserDailyBarChart({ data, users }: BarChartProps) {
 
   // Show last 30 days at most
   const displayDays = sortedDays.slice(-30);
-  const maxCount = Math.max(1, ...displayDays.flatMap(d => Object.values(byDay.get(d) ?? {})));
+  const dayTotal = (day: string) =>
+    Object.values(byDay.get(day) ?? {}).reduce((a, b) => a + b, 0);
+  const maxCount = aggregate
+    ? Math.max(1, ...displayDays.map(dayTotal))
+    : Math.max(1, ...displayDays.flatMap(d => Object.values(byDay.get(d) ?? {})));
 
   return (
     <div className="stats-bar-chart">
       {displayDays.map(day => {
         const rec = byDay.get(day) ?? {};
+        const total = dayTotal(day);
         return (
           <div key={day} className="stats-bar-row">
             <span className="stats-bar-day-label">{formatDayLabel(day)}</span>
             <div className="stats-bar-stack">
-              {users.map(user => {
-                const count = rec[user] ?? 0;
-                if (count === 0) return null;
-                const pct = Math.round((count / maxCount) * 100);
-                return (
+              {aggregate ? (
+                // 汇总：一条总量柱（所有用户合计）
+                total > 0 && (
                   <div
-                    key={user}
                     className="stats-bar-segment"
-                    style={{
-                      width: `${Math.max(pct, 1)}%`,
-                    }}
-                    title={`${user}: ${count}`}
+                    style={{ width: `${Math.max(Math.round((total / maxCount) * 100), 1)}%` }}
+                    title={`${total}`}
                   />
-                );
-              })}
+                )
+              ) : (
+                users.map(user => {
+                  const count = rec[user] ?? 0;
+                  if (count === 0) return null;
+                  const pct = Math.round((count / maxCount) * 100);
+                  return (
+                    <div
+                      key={user}
+                      className="stats-bar-segment"
+                      style={{ width: `${Math.max(pct, 1)}%` }}
+                      title={`${user}: ${count}`}
+                    />
+                  );
+                })
+              )}
             </div>
-            <span className="stats-bar-total">
-              {Object.values(rec).reduce((a, b) => a + b, 0)}
-            </span>
+            <span className="stats-bar-total">{total}</span>
           </div>
         );
       })}
