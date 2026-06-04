@@ -693,19 +693,19 @@ export class DataRoutes extends BaseRouteHandler {
     const uniqueUsers = uniqueUsersRows.map(r => r.user_label);
 
     // ── per-user AI processing time (ms): session started_at → completed_at ──
-    // Only sessions that actually finished (completed_at > started_at) are counted.
+    // Count ALL started sessions; use now() for still-active ones so every
+    // project/user that has started a session contributes to processing time.
+    const nowEpoch = Date.now();
     const userProcessingTimeRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
-             SUM(s.completed_at_epoch - s.started_at_epoch) AS total_ms,
+             SUM(COALESCE(s.completed_at_epoch, ?) - s.started_at_epoch) AS total_ms,
              COUNT(*) AS session_count
       FROM sdk_sessions s
-      WHERE s.completed_at_epoch IS NOT NULL
-        AND s.started_at_epoch IS NOT NULL
-        AND s.completed_at_epoch > s.started_at_epoch
+      WHERE s.started_at_epoch IS NOT NULL
         AND s.started_at_epoch >= ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY user_label
-    `).all(sinceEpoch, project || null, project || null) as Array<{ user_label: string; total_ms: number; session_count: number }>;
+    `).all(nowEpoch, sinceEpoch, project || null, project || null) as Array<{ user_label: string; total_ms: number; session_count: number }>;
 
     const userProcessingTime: Record<string, { totalMs: number; sessionCount: number }> = {};
     for (const r of userProcessingTimeRows) {
@@ -716,16 +716,14 @@ export class DataRoutes extends BaseRouteHandler {
     const dailyTimeByUser = db.prepare(`
       SELECT (s.started_at_epoch / 86400000) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
-             SUM(s.completed_at_epoch - s.started_at_epoch) AS total_ms
+             SUM(COALESCE(s.completed_at_epoch, ?) - s.started_at_epoch) AS total_ms
       FROM sdk_sessions s
-      WHERE s.completed_at_epoch IS NOT NULL
-        AND s.started_at_epoch IS NOT NULL
-        AND s.completed_at_epoch > s.started_at_epoch
+      WHERE s.started_at_epoch IS NOT NULL
         AND s.started_at_epoch >= ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
+    `).all(nowEpoch, sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
 
     // ── per-user project count & active days ──────────────────────────
     const userProjectRows = db.prepare(`
@@ -763,16 +761,14 @@ export class DataRoutes extends BaseRouteHandler {
     // ── per-project processing time (all users, only for all-projects rank) ──
     const projectTimeRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
-             SUM(s.completed_at_epoch - s.started_at_epoch) AS total_ms,
+             SUM(COALESCE(s.completed_at_epoch, ?) - s.started_at_epoch) AS total_ms,
              COUNT(*) AS session_count
       FROM sdk_sessions s
-      WHERE s.completed_at_epoch IS NOT NULL
-        AND s.started_at_epoch IS NOT NULL
-        AND s.completed_at_epoch > s.started_at_epoch
+      WHERE s.started_at_epoch IS NOT NULL
         AND s.started_at_epoch >= ?
       GROUP BY project
       ORDER BY total_ms DESC
-    `).all(sinceEpoch) as Array<{ project: string; total_ms: number; session_count: number }>;
+    `).all(nowEpoch, sinceEpoch) as Array<{ project: string; total_ms: number; session_count: number }>;
 
     // ── format day_bucket → "YYYY-MM-DD" ───────────────────────────────
     const formatDay = (bucket: number): string => {
