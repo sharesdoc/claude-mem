@@ -685,6 +685,24 @@ export class DataRoutes extends BaseRouteHandler {
 
     const uniqueUsers = uniqueUsersRows.map(r => r.user_label);
 
+    // ── per-user AI usage duration (ms), sessions with completed_at only ──
+    const userDurationRows = db.prepare(`
+      SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
+             SUM(s.completed_at_epoch - s.started_at_epoch) AS total_ms
+      FROM sdk_sessions s
+      WHERE s.completed_at_epoch IS NOT NULL
+        AND s.started_at_epoch IS NOT NULL
+        AND s.completed_at_epoch > s.started_at_epoch
+        AND s.started_at_epoch >= ?
+        AND (? IS NULL OR s.project = ?)
+      GROUP BY user_label
+    `).all(sinceEpoch, project || null, project || null) as Array<{ user_label: string; total_ms: number }>;
+
+    const userDurations: Record<string, number> = {};
+    for (const r of userDurationRows) {
+      userDurations[r.user_label] = r.total_ms;
+    }
+
     // ── format day_bucket → "YYYY-MM-DD" ───────────────────────────────
     const formatDay = (bucket: number): string => {
       const d = new Date(bucket * 86400000);
@@ -706,6 +724,7 @@ export class DataRoutes extends BaseRouteHandler {
       totalObservations: totalObs.totalObservations,
       totalSessions: totalSessionsRow.totalSessions,
       uniqueUsers,
+      userDurations,
     });
   });
 

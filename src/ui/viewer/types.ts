@@ -155,4 +155,6 @@ export interface AnalyticsResponse {
   totalObservations: number;
   totalSessions: number;
   uniqueUsers: string[];
+  /** 每用户 AI 使用总时长 (ms), key = user_label */
+  userDurations: Record<string, number>;
 }

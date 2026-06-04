@@ -30,6 +30,16 @@ function formatDayLabel(day: string): string {
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
+function formatDuration(ms: number): string {
+  if (ms <= 0) return '-';
+  const mins = ms / 60000;
+  if (mins < 60) return `${Math.round(mins)}m`;
+  const h = Math.floor(mins / 60);
+  const m = Math.round(mins % 60);
+  if (m === 0) return `${h}h`;
+  return `${h}h${m}m`;
+}
+
 export function StatsPage({ currentFilter }: StatsPageProps) {
   const { t } = useLocale();
   const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
@@ -124,8 +134,9 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
     if (!analytics) return [];
     const users = analytics.uniqueUsers;
     if (users.length === 0) return [];
-    const map = new Map<string, { prompts: number; obs: number; summaries: number }>();
-    for (const u of users) map.set(u, { prompts: 0, obs: 0, summaries: 0 });
+    const map = new Map<string, { prompts: number; obs: number; summaries: number; durationMs: number }>();
+    const durations = analytics.userDurations ?? {};
+    for (const u of users) map.set(u, { prompts: 0, obs: 0, summaries: 0, durationMs: durations[u] ?? 0 });
     for (const pt of analytics.promptsByUserByDay) {
       const r = map.get(pt.user_label);
       if (r) r.prompts += pt.count;
@@ -344,6 +355,7 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
                       <th className="stats-num-col">{t('stats.prompts')}</th>
                       <th className="stats-num-col">{t('stats.observations')}</th>
                       <th className="stats-num-col">{t('stats.summaries')}</th>
+                      <th className="stats-num-col">{t('stats.duration')}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -353,6 +365,7 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
                         <td className="stats-num-col">{formatNumber(row.prompts)}</td>
                         <td className="stats-num-col">{formatNumber(row.obs)}</td>
                         <td className="stats-num-col">{formatNumber(row.summaries)}</td>
+                        <td className="stats-num-col">{formatDuration(row.durationMs)}</td>
                       </tr>
                     ))}
                   </tbody>
