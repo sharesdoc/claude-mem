@@ -279,7 +279,8 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
             <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalDiscoveryTokens)}</div><div className="stats-summary-label">{t('stats.totalTokens')}</div></div>
           </div>
 
-          {isAllProjects && userSeries.length > 0 && (
+          {/* Daily per-user line charts — works for both All Projects and single project (backend scopes by ?project=) */}
+          {userSeries.length > 0 && (
             <div className="stats-section">
               <div className="stats-charts-grid">
                 <LineChart title={t('stats.dailyPromptsByUser')} series={userSeries}
@@ -296,6 +297,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
             </div>
           )}
 
+          {/* 单项目：汇总每日柱状图（不分用户） */}
           {!isAllProjects && (
             <>
               {analytics.observationsByUserByDay.length > 0 && (<div className="stats-section"><div className="stats-section-title">{t('stats.dailyObs')}</div><UserDailyBarChart data={analytics.observationsByUserByDay} aggregate /></div>)}
