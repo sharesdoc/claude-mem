@@ -36,6 +36,10 @@ interface ProjectSidebarProps {
    * caches so the UI doesn't show ghost entries.
    */
   onProjectsDeleted: (projects: string[]) => void;
+  /** Active user-label filter (null = no user filter). */
+  userLabelFilter: string | null;
+  /** Called when user clicks a group header name to filter by that user. */
+  onUserLabelFilter: (label: string | null) => void;
 }
 
 interface ProjectStat {
@@ -109,6 +113,8 @@ export function ProjectSidebar({
   projectStats,
   projectUsers,
   onProjectsDeleted,
+  userLabelFilter,
+  onUserLabelFilter,
 }: ProjectSidebarProps) {
   const { t } = useLocale();
 
@@ -603,19 +609,33 @@ export function ProjectSidebar({
             const isExpanded = expandedUsers.has(group.user);
             return (
               <div key={`group:${group.user}`} className="project-sidebar-group">
-                <button
-                  type="button"
-                  className={`project-sidebar-group-header${isExpanded ? ' is-expanded' : ''}`}
-                  onClick={() => toggleUser(group.user)}
-                  aria-expanded={isExpanded}
-                  title={t('sidebar.userGroupTip')}
+                <div
+                  className={`project-sidebar-group-header${isExpanded ? ' is-expanded' : ''}${userLabelFilter === group.user ? ' is-filtered' : ''}`}
                 >
-                  <span className="project-sidebar-group-caret" aria-hidden="true">
-                    {isExpanded ? '▾' : '▸'}
-                  </span>
-                  <span className="project-sidebar-group-name">{label}</span>
-                  <span className="project-sidebar-group-count">{group.messageCount}</span>
-                </button>
+                  <button
+                    type="button"
+                    className="project-sidebar-group-caret-btn"
+                    onClick={() => toggleUser(group.user)}
+                    aria-expanded={isExpanded}
+                    aria-label={isExpanded ? t('sidebar.collapseGroup') : t('sidebar.expandGroup')}
+                  >
+                    <span className="project-sidebar-group-caret" aria-hidden="true">
+                      {isExpanded ? '▾' : '▸'}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    className="project-sidebar-group-filter-btn"
+                    onClick={() => onUserLabelFilter(userLabelFilter === group.user ? null : group.user)}
+                    title={userLabelFilter === group.user ? t('sidebar.clearUserFilter') : t('sidebar.filterByUser', { user: label })}
+                  >
+                    <span className="project-sidebar-group-name">{label}</span>
+                    <span className="project-sidebar-group-count">{group.messageCount}</span>
+                    {userLabelFilter === group.user && (
+                      <span className="project-sidebar-filter-indicator" aria-label={t('sidebar.filterActive')}>◆</span>
+                    )}
+                  </button>
+                </div>
                 {isExpanded && group.projects.map((p) => renderProjectRow(p, true))}
               </div>
             );

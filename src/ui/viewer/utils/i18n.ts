@@ -57,6 +57,11 @@ export const translations: Record<Locale, Dict> = {
     'sidebar.selectCheckbox': 'Select this project',
     'sidebar.userGroupTip': 'Click to expand/collapse projects for this user',
     'sidebar.unknownUser': 'unknown',
+    'sidebar.filterByUser': 'Filter by {user}',
+    'sidebar.clearUserFilter': 'Clear user filter',
+    'sidebar.filterActive': 'Filter active',
+    'sidebar.collapseGroup': 'Collapse group',
+    'sidebar.expandGroup': 'Expand group',
 
     'feed.empty': 'No items to display',
     'feed.loading': 'Loading more...',
@@ -228,6 +233,11 @@ export const translations: Record<Locale, Dict> = {
     'sidebar.selectCheckbox': '选择该项目',
     'sidebar.userGroupTip': '点击展开/收起该用户的项目',
     'sidebar.unknownUser': '未知',
+    'sidebar.filterByUser': '按 {user} 筛选',
+    'sidebar.clearUserFilter': '取消用户筛选',
+    'sidebar.filterActive': '筛选中',
+    'sidebar.collapseGroup': '收起分组',
+    'sidebar.expandGroup': '展开分组',
 
     'feed.empty': '暂无内容',
     'feed.loading': '正在加载更多……',

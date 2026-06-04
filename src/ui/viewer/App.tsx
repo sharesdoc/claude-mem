@@ -282,6 +282,8 @@ export function App() {
           projectStats={effectiveProjectStats}
           projectUsers={projectUsers}
           onProjectsDeleted={handleProjectsDeleted}
+          userLabelFilter={userLabelFilter}
+          onUserLabelFilter={setUserLabelFilter}
         />
         <div className="app-main">
           <Header
