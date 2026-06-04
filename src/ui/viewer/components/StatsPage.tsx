@@ -91,12 +91,14 @@ interface LineChartProps {
   formatY: (val: number) => string;
   allDays: string[];
   formatDayLabel: (day: string) => string;
+  hiddenUsers: Set<string>;
+  onToggleUser: (user: string) => void;
+  showLegend: boolean;
 }
 
-function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineChartRef, formatY, allDays, formatDayLabel: fmtDay }: LineChartProps) {
-  const [hidden, setHidden] = useState<Set<string>>(new Set());
+function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineChartRef, formatY, allDays, formatDayLabel: fmtDay, hiddenUsers, onToggleUser, showLegend }: LineChartProps) {
   if (series.length === 0) return null;
-  const visible = series.filter(s => !hidden.has(s.user_label));
+  const visible = series.filter(s => !hiddenUsers.has(s.user_label));
   const globalMax = visible.reduce((m, s) => Math.max(m, s.maxVal), 1);
   const totalDays = series[0].points.length;
   const step = Math.max(1, Math.floor(allDays.length / 9));
@@ -139,15 +141,17 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
             return <path key={s.user_label} d={d} fill="none" stroke={s.color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />;
           })}
         </svg>
-        <div className="stats-user-legend">
-          {series.map(s => (
-            <label key={s.user_label} className="stats-user-legend-item">
-              <input type="checkbox" className="stats-legend-checkbox" checked={!hidden.has(s.user_label)}
-                onChange={() => setHidden(prev => { const n = new Set(prev); if (n.has(s.user_label)) n.delete(s.user_label); else n.add(s.user_label); return n; })} />
-              {s.user_label}
-            </label>
-          ))}
-        </div>
+        {showLegend && (
+          <div className="stats-user-legend">
+            {series.map(s => (
+              <label key={s.user_label} className="stats-user-legend-item">
+                <input type="checkbox" className="stats-legend-checkbox" checked={!hiddenUsers.has(s.user_label)}
+                  onChange={() => onToggleUser(s.user_label)} />
+                {s.user_label}
+              </label>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -160,6 +164,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const [error, setError] = useState<string | null>(null);
   const lineChartRef = useRef<HTMLDivElement>(null);
   const [chartWidth, setChartWidth] = useState(600);
+  const [hiddenUsers, setHiddenUsers] = useState<Set<string>>(new Set());
+  const toggleHiddenUser = useCallback((user: string) => {
+    setHiddenUsers(prev => { const n = new Set(prev); if (n.has(user)) n.delete(user); else n.add(user); return n; });
+  }, []);
 
   const loadAnalytics = useCallback(async () => {
     setLoading(true);
@@ -308,12 +316,14 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                   svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
                   lineChartRef={lineChartRef} formatY={v => String(v)}
                   allDays={buildDayRange(analytics!.promptsByUserByDay[0]?.day, analytics!.promptsByUserByDay[analytics!.promptsByUserByDay.length - 1]?.day)}
-                  formatDayLabel={formatDayLabel} />
+                  formatDayLabel={formatDayLabel}
+                  hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={true} />
                 <LineChart title={t('stats.dailyProcessingTime')} series={userTimeSeries}
                   svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
                   formatY={v => { if (v < 60000) return `${Math.round(v/1000)}s`; if (v < 3600000) return `${Math.round(v/60000)}m`; return `${(v/3600000).toFixed(1)}h`; }}
                   allDays={userTimeSeries.length > 0 ? buildDayRange(analytics!.dailyProcessingTimeByUser?.[0]?.day, analytics!.dailyProcessingTimeByUser?.[analytics!.dailyProcessingTimeByUser.length - 1]?.day) : []}
-                  formatDayLabel={formatDayLabel} />
+                  formatDayLabel={formatDayLabel}
+                  hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={false} />
               </div>
             </div>
           )}
