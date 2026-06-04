@@ -381,13 +381,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
           {isAllProjects && (projectPrompts.length > 0 || projectTimes.length > 0) && (
             <div className="stats-section">
               <div className="stats-section-title">
-                <span className="stats-tab-label">{t('stats.promptsByProject')}</span>
-                <span className="stats-tabs">
-                  <button type="button" className={`stats-tab${projectTab === 'prompts' ? ' is-active' : ''}`}
-                    onClick={() => setProjectTab('prompts')}>{t('stats.prompts')}</button>
-                  <button type="button" className={`stats-tab${projectTab === 'time' ? ' is-active' : ''}`}
-                    onClick={() => setProjectTab('time')}>{t('stats.totalTime')}</button>
-                </span>
+                <button type="button" className={`stats-tab${projectTab === 'prompts' ? ' is-active' : ''}`}
+                  onClick={() => setProjectTab('prompts')}>{t('stats.promptsByProject')}</button>
+                <button type="button" className={`stats-tab${projectTab === 'time' ? ' is-active' : ''}`}
+                  onClick={() => setProjectTab('time')}>{t('stats.timeByProject')}</button>
               </div>
               {projectTab === 'prompts' ? (
                 <div className="stats-project-bars">
