@@ -42,6 +42,8 @@ interface ProjectSidebarProps {
   onUserLabelFilter: (label: string | null) => void;
   /** Whether the stats analytics page is currently active. */
   statsMode: boolean;
+  /** Called when user clicks a group's "stats" button — switch to stats + filter by user. */
+  onStatsForUser: (label: string) => void;
 }
 
 interface ProjectStat {
@@ -118,6 +120,7 @@ export function ProjectSidebar({
   userLabelFilter,
   onUserLabelFilter,
   statsMode,
+  onStatsForUser,
 }: ProjectSidebarProps) {
   const { t } = useLocale();
 
@@ -643,6 +646,17 @@ export function ProjectSidebar({
                   {userLabelFilter === group.user && statsMode && (
                     <span className="project-sidebar-filter-indicator" aria-label={t('sidebar.filterActive')}>◆</span>
                   )}
+                </button>
+                <button
+                  type="button"
+                  className="project-sidebar-group-stats-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onStatsForUser(group.user);
+                  }}
+                  title={t('sidebar.statsForUser')}
+                >
+                  {t('header.stats')}
                 </button>
                 {isExpanded && group.projects.map((p) => renderProjectRow(p, true))}
               </div>
