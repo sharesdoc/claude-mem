@@ -1,211 +1,166 @@
 from 37d24944af5f4afaa0de2b0bd0034bb432f2b714 of https://github.com/thedotmack/claude-mem.git
 
-# claude-mem 部署与开发备忘
+claude-mem 部署与开发备忘
 
 本文件记录本地部署、重装、卸载、开发构建和 Codex 集成注意事项。当前分支包含一项历史修复：信息存储不再只按项目文件夹名区分，避免不同路径下同名文件夹产生记忆冲突。
 
-## 1. 部署前准备
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. 部署前准备
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 首次使用 Claude Code 插件时，需要在 Claude Code 会话里启用一次插件：
 
-```bash
-/plugin install claude-mem
-```
+  /plugin install claude-mem
 
 如果要同时支持 Codex CLI，安装脚本现在会自动完成 Codex marketplace 注册、插件安装和 hooks 启用。安装后需要重启 Codex 会话，新的 hooks 才会加载。
 
-## 2. Claude Code 三种部署模式
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. Claude Code 三种部署模式
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### 2.1 纯个人本地模式
+2.1 纯个人本地模式
 
-适合单机使用，数据保存在本机 `~/.claude-mem`。
+适合单机使用，数据保存在本机 ~/.claude-mem。
 
-```bash
-./auto-build-all
-./install-claude-mem -i claude
-```
+  ./auto-build-all; ./install-claude-mem -i claude
 
-### 2.2 本地服务端模式
+2.2 本地服务端模式
 
 适合一台机器作为服务端，允许其他客户端同步消息到本机。
 
-```bash
-./auto-build-all
-./install-claude-mem -i claude --role server \
-  --token 3b3a4a7debefd1e56988095673764a22d54f48cb \
-  --admin-password 3b3a4a7debefd1e56988095673764a22d54f48cb
-```
+  ./auto-build-all; ./install-claude-mem -i claude --role server --token 3b3a4a7debefd1e56988095673764a22d54f48cb --admin-password 3b3a4a7debefd1e56988095673764a22d54f48cb
 
 说明：
+  - --token 和 --admin-password 可以不指定，脚本会自动生成。
+  - 指定后请妥善保存，客户端同步时需要使用服务端提供的 token。
 
-- `--token` 和 `--admin-password` 可以不指定，脚本会自动生成。
-- 指定后请妥善保存，客户端同步时需要使用服务端提供的 token。
-
-### 2.3 本地客户端模式
+2.3 本地客户端模式
 
 适合把本机 Claude/Codex 的会话消息同步到服务端。
 
-```bash
-./auto-build-all
-./install-claude-mem -i claude --role client \
-  --upstream http://192.168.0.110:37701 \
-  --token 3b3a4a7debefd1e56988095673764a22d54f48cb
-```
+  ./auto-build-all; ./install-claude-mem -i claude --role client --upstream http://192.168.0.110:37701 --token 3b3a4a7debefd1e56988095673764a22d54f48cb
 
 说明：
+  - --upstream 填服务端地址。
+  - --token 必须使用服务端提供的 token。
 
-- `--upstream` 填服务端地址。
-- `--token` 必须使用服务端提供的 token。
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. Codex CLI 集成
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-## 3. Codex CLI 集成
+3.1 只安装 Codex 集成
 
-### 3.1 只安装 Codex 集成
-
-```bash
-./auto-build-all
-./install-claude-mem -i codex
-```
+  ./auto-build-all; ./install-claude-mem -i codex
 
 安装脚本会执行以下关键动作：
 
-```bash
-codex plugin marketplace add <当前 claude-mem 仓库路径>
-codex plugin marketplace upgrade claude-mem-local
-codex plugin add claude-mem@claude-mem-local
-codex features enable hooks
-```
+  codex plugin marketplace add <当前 claude-mem 仓库路径>
+  codex plugin marketplace upgrade claude-mem-local
+  codex plugin add claude-mem@claude-mem-local
+  codex features enable hooks
 
-这次修复后，脚本不再只检查 `codex plugin list` 里是否出现 `claude-mem` 字样，而是必须确认插件状态为 `installed, enabled`。这样可以避免把 `not installed` 误判为安装成功。
+这次修复后，脚本不再只检查 codex plugin list 里是否出现 claude-mem 字样，而是必须确认插件状态为 installed, enabled。这样可以避免把 not installed 误判为安装成功。
 
-### 3.2 同时安装 Claude Code 和 Codex
+3.2 同时安装 Claude Code 和 Codex
 
-```bash
-./auto-build-all
-./install-claude-mem -i both
-```
+  ./auto-build-all; ./install-claude-mem -i both
 
 也可以写成：
 
-```bash
-./install-claude-mem -i claude,codex
-```
+  ./install-claude-mem -i claude,codex
 
-### 3.3 验证 Codex 是否真正生效
+3.3 验证 Codex 是否真正生效
 
-```bash
-codex plugin list | grep claude-mem
-grep -n 'claude-mem@claude-mem-local\|hooks' ~/.codex/config.toml
-```
+  codex plugin list | grep claude-mem
+  grep -n 'claude-mem@claude-mem-local\|hooks' ~/.codex/config.toml
 
 期望看到：
 
-```text
-claude-mem@claude-mem-local  installed, enabled
-```
+  claude-mem@claude-mem-local  installed, enabled
 
-以及 `~/.codex/config.toml` 中存在：
+以及 ~/.codex/config.toml 中存在：
 
-```toml
-[plugins."claude-mem@claude-mem-local"]
-enabled = true
+  [plugins."claude-mem@claude-mem-local"]
+  enabled = true
 
-[features]
-hooks = true
-```
+  [features]
+  hooks = true
 
-如果配置里还有旧的 `plugin_hooks = true`，这是旧版本脚本留下的残留项；当前脚本已改为启用 `hooks`，不再写入 `plugin_hooks`。
+如果配置里还有旧的 plugin_hooks = true，这是旧版本脚本留下的残留项；当前脚本已改为启用 hooks，不再写入 plugin_hooks。
 
-## 4. 重装与卸载
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+4. 重装与卸载
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-### 4.1 重装
+4.1 重装
 
 三种 Claude 模式的重装命令相同，会沿用之前部署时保存的配置：
 
-```bash
-./auto-build-all
-./install-claude-mem -r claude
-```
+  ./auto-build-all; ./install-claude-mem -r claude
 
 Codex 重装：
 
-```bash
-./auto-build-all
-./install-claude-mem -r codex
-```
+  ./auto-build-all; ./install-claude-mem -r codex
 
 同时重装 Claude Code 和 Codex：
 
-```bash
-./auto-build-all
-./install-claude-mem -r both
-```
+  ./auto-build-all; ./install-claude-mem -r both
 
-### 4.2 卸载但保留数据
+4.2 卸载但保留数据
 
-```bash
-./install-claude-mem -u claude
-./install-claude-mem -u codex
-./install-claude-mem -u both
-```
+  ./install-claude-mem -u claude
+  ./install-claude-mem -u codex
+  ./install-claude-mem -u both
 
-`-u` 只移除插件集成，不删除 `~/.claude-mem` 数据。
+-u 只移除插件集成，不删除 ~/.claude-mem 数据。
 
-### 4.3 彻底删除
+4.3 彻底删除
 
-```bash
-./install-claude-mem -d claude
-./install-claude-mem -d codex
-./install-claude-mem -d both
-```
+  ./install-claude-mem -d claude
+  ./install-claude-mem -d codex
+  ./install-claude-mem -d both
 
-`-d` 会删除数据目录，执行前确认不再需要历史记忆、日志和 Chroma 数据。
+-d 会删除数据目录，执行前确认不再需要历史记忆、日志和 Chroma 数据。
 
-## 5. Worker 与 MCP 注意事项
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+5. Worker 与 MCP 注意事项
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 每启动一个 Claude Code 会话，都会启动一个类似下面路径的 MCP server：
 
-```text
-~/.claude/plugins/cache/thedotmack/claude-mem/13.2.0/scripts/mcp-server.cjs
-```
+  ~/.claude/plugins/cache/thedotmack/claude-mem/13.2.0/scripts/mcp-server.cjs
 
-如果修改了 `mcp-server.cjs` 或相关插件脚本，需要重启 Claude Code 或 Codex 会话才能加载新的 MCP/hooks。
+如果修改了 mcp-server.cjs 或相关插件脚本，需要重启 Claude Code 或 Codex 会话才能加载新的 MCP/hooks。
 
 常用 worker 操作：
 
-```bash
-npm run build-and-sync
-bun plugin/scripts/worker-service.cjs restart
-```
+  npm run build-and-sync
+  bun plugin/scripts/worker-service.cjs restart
 
-`npm run build-and-sync` 会执行：build -> 同步到 marketplace -> 重启 worker。完成后访问：
+npm run build-and-sync 会执行：build -> 同步到 marketplace -> 重启 worker。完成后访问：
 
-```text
-http://localhost:37701/
-```
+  http://localhost:37701/
 
-## 6. 开发构建
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+6. 开发构建
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 首次准备依赖：
 
-```bash
-npm install --ignore-scripts esbuild
-```
+  npm install --ignore-scripts esbuild
 
 普通构建：
 
-```bash
-npm run build
-```
+  npm run build
 
 开发迭代推荐：
 
-```bash
-npm run build-and-sync
-```
+  npm run build-and-sync
 
-如果 `bun` 不在 PATH：
+如果 bun 不在 PATH：
 
-```bash
-export PATH="$HOME/.bun/bin:$PATH"
-npm run build-and-sync
-```
+  export PATH="$HOME/.bun/bin:$PATH"
+  npm run build-and-sync
+
+
+
