@@ -740,6 +740,23 @@ export class DataRoutes extends BaseRouteHandler {
       userProjectMeta[r.user_label] = { projectCount: r.project_count, activeDays: r.active_days };
     }
 
+    // ── per-project latest editor (most recent user_label per project) ──
+    const latestEditorRows = db.prepare(`
+      SELECT project, user_label FROM (
+        SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
+               COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
+               s.started_at_epoch,
+               ROW_NUMBER() OVER (PARTITION BY COALESCE(NULLIF(s.project, ''), 'unknown') ORDER BY s.started_at_epoch DESC) AS rn
+        FROM sdk_sessions s
+        WHERE s.user_label IS NOT NULL AND s.user_label != ''
+      ) WHERE rn = 1
+    `).all() as Array<{ project: string; user_label: string }>;
+
+    const projectEditor: Record<string, string> = {};
+    for (const r of latestEditorRows) {
+      projectEditor[r.project] = r.user_label;
+    }
+
     // ── per-project processing time (all users, only for all-projects rank) ──
     const projectTimeRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
@@ -797,6 +814,7 @@ export class DataRoutes extends BaseRouteHandler {
         sessionCount: r.session_count,
       })),
       dailyProcessingTimeByUser: filterByLabel(formatTimePoints(dailyTimeByUser)),
+      projectEditor,
     });
   });
 

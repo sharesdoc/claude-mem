@@ -122,10 +122,9 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
         </svg>
         <div className="stats-user-legend">
           {series.map(s => (
-            <label key={s.user_label} className="stats-user-legend-item" style={{ cursor: 'pointer' }}>
+            <label key={s.user_label} className="stats-user-legend-item">
               <input type="checkbox" className="stats-legend-checkbox" checked={!hidden.has(s.user_label)}
                 onChange={() => setHidden(prev => { const n = new Set(prev); if (n.has(s.user_label)) n.delete(s.user_label); else n.add(s.user_label); return n; })} />
-              <span className="stats-user-legend-swatch" style={{ background: s.color }} />
               {s.user_label}
             </label>
           ))}
@@ -345,8 +344,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
               <div className="stats-project-bars">
                 {projectPrompts.map(row => {
                   const pct = Math.round((row.count / maxProjectPrompts) * 100);
+                  const editor = analytics!.projectEditor?.[row.project];
                   return (
                     <div key={row.project} className="stats-project-row">
+                      {editor && <span className="stats-project-editor">{editor}</span>}
                       <span className="stats-project-label" title={row.project}>{row.project}</span>
                       <div className="stats-project-track"><div className="stats-project-fill" style={{ width: `${Math.max(pct, 1)}%` }} /></div>
                       <span className="stats-project-count">{formatNumber(row.count)}</span>

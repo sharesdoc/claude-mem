@@ -163,4 +163,6 @@ export interface AnalyticsResponse {
   projectProcessingTime: Array<{ project: string; totalMs: number; sessionCount: number }>;
   /** 每日每用户 AI 处理时间（ms），用于折线图。 */
   dailyProcessingTimeByUser: Array<{ day: string; user_label: string; totalMs: number }>;
+  /** 各项目的最新编辑用户，key = project, value = user_label。 */
+  projectEditor: Record<string, string>;
 }
