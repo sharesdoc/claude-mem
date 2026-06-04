@@ -285,7 +285,7 @@ export function App() {
           userLabelFilter={userLabelFilter}
           onUserLabelFilter={setUserLabelFilter}
           statsMode={viewMode === 'stats'}
-          onStatsForUser={(label) => { setViewMode('stats'); setUserLabelFilter(label); }}
+          onStatsForUser={(label) => { setCurrentFilter(''); setViewMode('stats'); setUserLabelFilter(label); }}
         />
         <div className="app-main">
           <Header
