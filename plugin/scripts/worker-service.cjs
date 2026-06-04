@@ -11644,6 +11644,14 @@ ${e}`,o=a7(i,s),a=`${t}.tmp`;try{(0,Fu.writeFileSync)(a,o),(0,Fu.renameSync)(a,t
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
     `).all(l,o||null,o||null),d=i.prepare(`
+      SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
+             COUNT(*) AS count
+      FROM user_prompts up
+      JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+      WHERE up.created_at_epoch >= ?
+      GROUP BY project
+      ORDER BY count DESC
+    `).all(l),p=i.prepare(`
       SELECT (o.created_at_epoch / 86400000) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
@@ -11653,7 +11661,7 @@ ${e}`,o=a7(i,s),a=`${t}.tmp`;try{(0,Fu.writeFileSync)(a,o),(0,Fu.renameSync)(a,t
         AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(l,o||null,o||null),p=i.prepare(`
+    `).all(l,o||null,o||null),f=i.prepare(`
       SELECT (ss.created_at_epoch / 86400000) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
@@ -11663,22 +11671,22 @@ ${e}`,o=a7(i,s),a=`${t}.tmp`;try{(0,Fu.writeFileSync)(a,o),(0,Fu.renameSync)(a,t
         AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(l,o||null,o||null),f=i.prepare(`
+    `).all(l,o||null,o||null),m=i.prepare(`
       SELECT COALESCE(SUM(discovery_tokens), 0) AS totalDiscoveryTokens,
              COUNT(*) AS totalObservations
       FROM observations
       WHERE (? IS NULL OR COALESCE(NULLIF(merged_into_project, ''), project) = ?)
-    `).get(o||null,o||null),m=i.prepare(`
+    `).get(o||null,o||null),h=i.prepare(`
       SELECT COUNT(*) AS totalSessions
       FROM sdk_sessions
       WHERE (? IS NULL OR project = ?)
-    `).get(o||null,o||null),g=i.prepare(`
+    `).get(o||null,o||null),y=i.prepare(`
       SELECT DISTINCT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label
       FROM sdk_sessions s
       WHERE s.user_label IS NOT NULL AND s.user_label != ''
         AND (? IS NULL OR s.project = ?)
       ORDER BY user_label
-    `).all(o||null,o||null).map(v=>v.user_label),y=v=>{let _=new Date(v*864e5),w=_.getFullYear(),S=String(_.getMonth()+1).padStart(2,"0"),A=String(_.getDate()).padStart(2,"0");return`${w}-${S}-${A}`},b=v=>v.map(_=>({day:y(_.day_bucket),user_label:_.user_label,count:_.count}));n.json({promptsByUserByDay:b(u),observationsByUserByDay:b(d),summariesByUserByDay:b(p),totalDiscoveryTokens:f.totalDiscoveryTokens,totalObservations:f.totalObservations,totalSessions:m.totalSessions,uniqueUsers:g})});handleGetProcessingStatus=this.wrapHandler(async(r,n)=>{let i=await this.sessionManager.isAnySessionProcessing(),s=await this.sessionManager.getTotalActiveWork();n.json({isProcessing:i,queueDepth:s})});handleSetProcessing=this.wrapHandler(async(r,n)=>{let i=await this.sessionManager.isAnySessionProcessing(),s=await this.sessionManager.getTotalQueueDepth(),o=this.sessionManager.getActiveSessionCount();n.json({status:"ok",isProcessing:i,queueDepth:s,activeSessions:o})});parsePaginationParams(r){let n=parseInt(r.query.offset,10)||0,i=Math.min(parseInt(r.query.limit,10)||20,100),s=r.query.project,o=r.query.platformSource,a=o?_n(o):void 0,c=f=>{if(typeof f!="string"||f.length===0)return;let m=Number.parseInt(f,10);return Number.isFinite(m)?m:void 0},l=c(r.query.dateStart),u=c(r.query.dateEnd),d=r.query.userLabel,p=typeof d=="string"&&d.trim().length>0?d.trim():void 0;return{offset:n,limit:i,project:s,platformSource:a,dateStartEpoch:l,dateEndEpoch:u,userLabel:p}}handleImport=this.wrapHandler((r,n)=>{let{sessions:i,summaries:s,observations:o,prompts:a}=r.body,c={sessionsImported:0,sessionsSkipped:0,summariesImported:0,summariesSkipped:0,observationsImported:0,observationsSkipped:0,promptsImported:0,promptsSkipped:0},l=this.dbManager.getSessionStore();if(Array.isArray(i))for(let d of i)l.importSdkSession(d).imported?c.sessionsImported++:c.sessionsSkipped++;if(Array.isArray(s))for(let d of s)l.importSessionSummary(d).imported?c.summariesImported++:c.summariesSkipped++;let u=[];if(Array.isArray(o)){for(let p of o){let f=l.importObservation(p);f.imported?(c.observationsImported++,u.push({id:f.id,obs:p})):c.observationsSkipped++}c.observationsImported>0&&l.rebuildObservationsFTSIndex();let d=this.dbManager.getChromaSync();if(d&&u.length>0){let f=h=>{if(!h)return[];try{return JSON.parse(h)}catch{return[]}},m=async({id:h,obs:g})=>{let y={type:g.type||"discovery",title:g.title||null,subtitle:g.subtitle||null,facts:f(g.facts),narrative:g.narrative||null,concepts:f(g.concepts),files_read:f(g.files_read),files_modified:f(g.files_modified)};await d.syncObservation(h,g.memory_session_id,g.project,y,g.prompt_number||0,g.created_at_epoch,g.discovery_tokens||0).catch(b=>{E.error("CHROMA","Import ChromaDB sync failed",{id:h},b)})};(async()=>{for(let h=0;h<u.length;h+=8){let g=u.slice(h,h+8);await Promise.all(g.map(m))}})().catch(h=>{E.error("CHROMA","Import ChromaDB batch sync failed",{},h)})}}if(Array.isArray(a))for(let d of a)l.importUserPrompt(d).imported?c.promptsImported++:c.promptsSkipped++;n.json({success:!0,stats:c})})};var RGe=le(require("fs"),1),CGe=le(require("path"),1),Nb=require("zod");ue();Yd();FF();Fr();Sy();Qe();var Dte=CGe.default.resolve(__dirname,"../skills/how-it-works/onboarding-explainer.md"),IGe=(()=>{try{let t=RGe.readFileSync(Dte,"utf-8");return E.info("SYSTEM","Cached onboarding explainer at boot",{path:Dte,bytes:Buffer.byteLength(t,"utf-8")}),t}catch(t){return E.debug("SYSTEM","Onboarding explainer not present at boot, /api/onboarding/explainer will 404",{path:Dte,message:t instanceof Error?t.message:String(t)}),null}})(),VWt=5e3,WF=null,kGe=0;function JWt(){let t=Date.now();return WF&&t-kGe<VWt||(WF=Te.loadFromFile(Je),kGe=t),WF}var OGe=new Set;function YWt(t,e){if(e.every(n=>OGe.has(n)))return!0;if(DWe(t,e)>0){for(let n of e)OGe.add(n);return!0}return!1}var ZWt=`# claude-mem status
+    `).all(o||null,o||null).map(_=>_.user_label),b=_=>{let w=new Date(_*864e5),S=w.getFullYear(),A=String(w.getMonth()+1).padStart(2,"0"),x=String(w.getDate()).padStart(2,"0");return`${S}-${A}-${x}`},v=_=>_.map(w=>({day:b(w.day_bucket),user_label:w.user_label,count:w.count}));n.json({promptsByUserByDay:v(u),observationsByUserByDay:v(p),summariesByUserByDay:v(f),promptsByProject:d,totalDiscoveryTokens:m.totalDiscoveryTokens,totalObservations:m.totalObservations,totalSessions:h.totalSessions,uniqueUsers:y})});handleGetProcessingStatus=this.wrapHandler(async(r,n)=>{let i=await this.sessionManager.isAnySessionProcessing(),s=await this.sessionManager.getTotalActiveWork();n.json({isProcessing:i,queueDepth:s})});handleSetProcessing=this.wrapHandler(async(r,n)=>{let i=await this.sessionManager.isAnySessionProcessing(),s=await this.sessionManager.getTotalQueueDepth(),o=this.sessionManager.getActiveSessionCount();n.json({status:"ok",isProcessing:i,queueDepth:s,activeSessions:o})});parsePaginationParams(r){let n=parseInt(r.query.offset,10)||0,i=Math.min(parseInt(r.query.limit,10)||20,100),s=r.query.project,o=r.query.platformSource,a=o?_n(o):void 0,c=f=>{if(typeof f!="string"||f.length===0)return;let m=Number.parseInt(f,10);return Number.isFinite(m)?m:void 0},l=c(r.query.dateStart),u=c(r.query.dateEnd),d=r.query.userLabel,p=typeof d=="string"&&d.trim().length>0?d.trim():void 0;return{offset:n,limit:i,project:s,platformSource:a,dateStartEpoch:l,dateEndEpoch:u,userLabel:p}}handleImport=this.wrapHandler((r,n)=>{let{sessions:i,summaries:s,observations:o,prompts:a}=r.body,c={sessionsImported:0,sessionsSkipped:0,summariesImported:0,summariesSkipped:0,observationsImported:0,observationsSkipped:0,promptsImported:0,promptsSkipped:0},l=this.dbManager.getSessionStore();if(Array.isArray(i))for(let d of i)l.importSdkSession(d).imported?c.sessionsImported++:c.sessionsSkipped++;if(Array.isArray(s))for(let d of s)l.importSessionSummary(d).imported?c.summariesImported++:c.summariesSkipped++;let u=[];if(Array.isArray(o)){for(let p of o){let f=l.importObservation(p);f.imported?(c.observationsImported++,u.push({id:f.id,obs:p})):c.observationsSkipped++}c.observationsImported>0&&l.rebuildObservationsFTSIndex();let d=this.dbManager.getChromaSync();if(d&&u.length>0){let f=h=>{if(!h)return[];try{return JSON.parse(h)}catch{return[]}},m=async({id:h,obs:g})=>{let y={type:g.type||"discovery",title:g.title||null,subtitle:g.subtitle||null,facts:f(g.facts),narrative:g.narrative||null,concepts:f(g.concepts),files_read:f(g.files_read),files_modified:f(g.files_modified)};await d.syncObservation(h,g.memory_session_id,g.project,y,g.prompt_number||0,g.created_at_epoch,g.discovery_tokens||0).catch(b=>{E.error("CHROMA","Import ChromaDB sync failed",{id:h},b)})};(async()=>{for(let h=0;h<u.length;h+=8){let g=u.slice(h,h+8);await Promise.all(g.map(m))}})().catch(h=>{E.error("CHROMA","Import ChromaDB batch sync failed",{},h)})}}if(Array.isArray(a))for(let d of a)l.importUserPrompt(d).imported?c.promptsImported++:c.promptsSkipped++;n.json({success:!0,stats:c})})};var RGe=le(require("fs"),1),CGe=le(require("path"),1),Nb=require("zod");ue();Yd();FF();Fr();Sy();Qe();var Dte=CGe.default.resolve(__dirname,"../skills/how-it-works/onboarding-explainer.md"),IGe=(()=>{try{let t=RGe.readFileSync(Dte,"utf-8");return E.info("SYSTEM","Cached onboarding explainer at boot",{path:Dte,bytes:Buffer.byteLength(t,"utf-8")}),t}catch(t){return E.debug("SYSTEM","Onboarding explainer not present at boot, /api/onboarding/explainer will 404",{path:Dte,message:t instanceof Error?t.message:String(t)}),null}})(),VWt=5e3,WF=null,kGe=0;function JWt(){let t=Date.now();return WF&&t-kGe<VWt||(WF=Te.loadFromFile(Je),kGe=t),WF}var OGe=new Set;function YWt(t,e){if(e.every(n=>OGe.has(n)))return!0;if(DWe(t,e)>0){for(let n of e)OGe.add(n);return!0}return!1}var ZWt=`# claude-mem status
 
 This project has no memory yet. The current session will seed it; subsequent sessions will receive auto-injected context for relevant past work.
 
