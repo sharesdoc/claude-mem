@@ -609,6 +609,10 @@ export class DataRoutes extends BaseRouteHandler {
     const rawDays = req.query.days as string | undefined;
     const days = (typeof rawDays === 'string' ? parseInt(rawDays, 10) : 90) || 90;
     const sinceEpoch = Date.now() - days * 86400000;
+    const rawUserLabel = req.query.userLabel as string | undefined;
+    const userLabel = (typeof rawUserLabel === 'string' && rawUserLabel.trim().length > 0)
+      ? rawUserLabel.trim()
+      : undefined;
 
     // ── prompts by user by day ────────────────────────────────────────
     const promptsByUserByDay = db.prepare(`
@@ -705,6 +709,21 @@ export class DataRoutes extends BaseRouteHandler {
       userProcessingTime[r.user_label] = { totalMs: r.total_ms, sessionCount: r.session_count };
     }
 
+    // ── daily processing time by user (for the daily line chart) ──────
+    const dailyTimeByUser = db.prepare(`
+      SELECT (s.started_at_epoch / 86400000) AS day_bucket,
+             COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
+             SUM(s.completed_at_epoch - s.started_at_epoch) AS total_ms
+      FROM sdk_sessions s
+      WHERE s.completed_at_epoch IS NOT NULL
+        AND s.started_at_epoch IS NOT NULL
+        AND s.completed_at_epoch > s.started_at_epoch
+        AND s.started_at_epoch >= ?
+        AND (? IS NULL OR s.project = ?)
+      GROUP BY day_bucket, user_label
+      ORDER BY day_bucket ASC
+    `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
+
     // ── per-user project count & active days ──────────────────────────
     const userProjectRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
@@ -747,22 +766,37 @@ export class DataRoutes extends BaseRouteHandler {
     const formatPoints = (rows: Array<{ day_bucket: number; user_label: string; count: number }>) =>
       rows.map(r => ({ day: formatDay(r.day_bucket), user_label: r.user_label, count: r.count }));
 
+    const formatTimePoints = (rows: Array<{ day_bucket: number; user_label: string; total_ms: number }>) =>
+      rows.map(r => ({ day: formatDay(r.day_bucket), user_label: r.user_label, totalMs: r.total_ms }));
+
+    // Apply userLabel filter in JS (cleaner than adding to every SQL query)
+    const filterByLabel = <T extends { user_label: string }>(arr: T[]): T[] =>
+      userLabel ? arr.filter(r => r.user_label === userLabel) : arr;
+
+    const filteredUsers = userLabel ? [userLabel] : uniqueUsers;
+    const filterUserMap = <T>(map: Record<string, T>): Record<string, T> => {
+      if (!userLabel) return map;
+      const v = map[userLabel];
+      return v ? { [userLabel]: v } : {};
+    };
+
     res.json({
-      promptsByUserByDay: formatPoints(promptsByUserByDay),
-      observationsByUserByDay: formatPoints(observationsByUserByDay),
-      summariesByUserByDay: formatPoints(summariesByUserByDay),
+      promptsByUserByDay: filterByLabel(formatPoints(promptsByUserByDay)),
+      observationsByUserByDay: filterByLabel(formatPoints(observationsByUserByDay)),
+      summariesByUserByDay: filterByLabel(formatPoints(summariesByUserByDay)),
       promptsByProject: promptsByProjectRows,
       totalDiscoveryTokens: totalObs.totalDiscoveryTokens,
       totalObservations: totalObs.totalObservations,
       totalSessions: totalSessionsRow.totalSessions,
-      uniqueUsers,
-      userProcessingTime,
-      userProjectMeta,
+      uniqueUsers: filteredUsers,
+      userProcessingTime: filterUserMap(userProcessingTime),
+      userProjectMeta: filterUserMap(userProjectMeta),
       projectProcessingTime: projectTimeRows.map(r => ({
         project: r.project,
         totalMs: r.total_ms,
         sessionCount: r.session_count,
       })),
+      dailyProcessingTimeByUser: filterByLabel(formatTimePoints(dailyTimeByUser)),
     });
   });
 

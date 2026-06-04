@@ -161,4 +161,6 @@ export interface AnalyticsResponse {
   userProjectMeta: Record<string, { projectCount: number; activeDays: number }>;
   /** 各项目的 AI 处理时间排名（已排序，仅全局视图有效）。 */
   projectProcessingTime: Array<{ project: string; totalMs: number; sessionCount: number }>;
+  /** 每日每用户 AI 处理时间（ms），用于折线图。 */
+  dailyProcessingTimeByUser: Array<{ day: string; user_label: string; totalMs: number }>;
 }

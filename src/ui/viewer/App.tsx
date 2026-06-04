@@ -284,6 +284,7 @@ export function App() {
           onProjectsDeleted={handleProjectsDeleted}
           userLabelFilter={userLabelFilter}
           onUserLabelFilter={setUserLabelFilter}
+          statsMode={viewMode === 'stats'}
         />
         <div className="app-main">
           <Header
@@ -316,7 +317,7 @@ export function App() {
             onStatsToggle={() => setViewMode(viewMode === 'stats' ? 'all' : 'stats')}
           />
           {viewMode === 'stats' ? (
-            <StatsPage currentFilter={currentFilter} />
+            <StatsPage currentFilter={currentFilter} userLabelFilter={userLabelFilter} />
           ) : (
             <Feed
               observations={allObservations}

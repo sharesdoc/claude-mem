@@ -482,57 +482,29 @@
     .project-sidebar-group-header {
       display: flex;
       align-items: center;
+      gap: 6px;
       width: 100%;
+      padding: 6px 8px;
+      margin-bottom: 2px;
+      background: transparent;
       border: 1px solid transparent;
       border-radius: 6px;
-      transition: border-color 0.12s ease;
-    }
-    .project-sidebar-group-header.is-filtered {
-      border-color: var(--color-accent-primary);
-      background: var(--color-bg-card-hover);
-    }
-
-    .project-sidebar-group-caret-btn {
-      flex-shrink: 0;
-      width: 22px;
-      height: 24px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: transparent;
-      border: none;
-      color: var(--color-text-muted);
-      font-size: 10px;
-      cursor: pointer;
-      padding: 0;
-      border-radius: 4px;
-      transition: color 0.12s ease;
-    }
-    .project-sidebar-group-caret-btn:hover {
-      color: var(--color-text-primary);
-    }
-
-    .project-sidebar-group-filter-btn {
-      flex: 1;
-      min-width: 0;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 4px 6px 0;
-      background: transparent;
-      border: none;
-      cursor: pointer;
-      text-align: left;
+      color: var(--color-text-secondary);
       font-size: 11px;
       font-weight: 600;
       letter-spacing: 0.02em;
       text-transform: uppercase;
-      color: var(--color-text-secondary);
-      transition: color 0.12s ease;
-      border-radius: 4px;
+      cursor: pointer;
+      text-align: left;
+      transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
     }
-    .project-sidebar-group-filter-btn:hover {
+    .project-sidebar-group-header:hover {
+      background: var(--color-bg-card-hover);
       color: var(--color-text-primary);
+    }
+    .project-sidebar-group-header.is-filtered {
+      border-color: var(--color-accent-primary);
+      background: var(--color-bg-card-hover);
     }
 
     .project-sidebar-group-caret {
@@ -3294,6 +3266,14 @@
       color: var(--color-text-primary);
     }
 
+    .stats-project-name {
+      padding: 12px 0 20px;
+      font-size: 13px;
+      color: var(--color-text-muted);
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      word-break: break-all;
+    }
+
     .stats-summary-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);
@@ -3333,6 +3313,26 @@
     .stats-section {
       margin-bottom: 32px;
     }
+
+    .stats-charts-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .stats-chart-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--color-text-secondary);
+      margin-bottom: 8px;
+    }
+
+    @media (max-width: 768px) {
+      .stats-charts-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
 
     .stats-section-title {
       font-size: 15px;

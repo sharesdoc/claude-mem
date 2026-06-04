@@ -5,15 +5,15 @@ import { authFetch } from '../utils/api';
 
 interface StatsPageProps {
   currentFilter: string;
+  userLabelFilter?: string | null;
 }
 
-// Color palette for user lines/bars — cycles if more users than colors.
 const USER_COLORS = [
   '#0969da', '#1a7f37', '#cf222e', '#8250df', '#9a6700',
   '#0550ae', '#16c60c', '#e74856', '#8e7cbc', '#d4b888',
 ];
 
-const DEFAULT_DAYS = 90;
+const DEFAULT_DAYS = 30;
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -21,12 +21,8 @@ function formatNumber(n: number): string {
   return String(n);
 }
 
-function dayBucketToDate(bucket: string): Date {
-  return new Date(bucket + 'T00:00:00');
-}
-
 function formatDayLabel(day: string): string {
-  const d = dayBucketToDate(day);
+  const d = new Date(day + 'T00:00:00');
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
@@ -46,7 +42,96 @@ function formatDailyAvg(ms: number, days: number): string {
   return `${Math.round(avgMin)}m/d`;
 }
 
-export function StatsPage({ currentFilter }: StatsPageProps) {
+function buildDayRange(firstDay: string | undefined, lastDay: string | undefined): string[] {
+  if (!firstDay || !lastDay) return [];
+  const result: string[] = [];
+  const c = new Date(firstDay + 'T00:00:00');
+  const e = new Date(lastDay + 'T00:00:00');
+  while (c <= e) {
+    result.push(c.toISOString().slice(0, 10));
+    c.setDate(c.getDate() + 1);
+  }
+  return result;
+}
+
+/* ── LineChart: reusable SVG line chart ───────────────────────────── */
+interface LineSeries {
+  user_label: string;
+  color: string;
+  points: number[];
+  maxVal: number;
+}
+
+interface LineChartProps {
+  title: string;
+  series: LineSeries[];
+  svgW: number; svgH: number;
+  svgPadding: { top: number; right: number; bottom: number; left: number };
+  plotW: number; plotH: number;
+  lineChartRef?: React.RefObject<HTMLDivElement | null>;
+  formatY: (val: number) => string;
+  allDays: string[];
+  formatDayLabel: (day: string) => string;
+}
+
+function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineChartRef, formatY, allDays, formatDayLabel: fmtDay }: LineChartProps) {
+  if (series.length === 0) return null;
+  const globalMax = series.reduce((m, s) => Math.max(m, s.maxVal), 1);
+  const totalDays = series[0].points.length;
+  const step = Math.max(1, Math.floor(allDays.length / 9));
+
+  return (
+    <div className="stats-chart">
+      <div className="stats-chart-title">{title}</div>
+      <div className="stats-line-chart" ref={lineChartRef}>
+        <svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`} preserveAspectRatio="xMidYMid meet">
+          {[0, 0.25, 0.5, 0.75, 1].map(fr => {
+            const y = svgPadding.top + plotH * (1 - fr);
+            return (
+              <g key={`g-${fr}`}>
+                <line x1={svgPadding.left} y1={y} x2={svgW - svgPadding.right} y2={y}
+                  stroke="var(--color-border-primary)" strokeWidth="0.5" />
+                <text x={svgPadding.left - 6} y={y + 4} textAnchor="end"
+                  fill="var(--color-text-muted)" fontSize="9" fontFamily="monospace">
+                  {formatY(Math.round(globalMax * fr))}
+                </text>
+              </g>
+            );
+          })}
+          {allDays.filter((_d, idx) => idx % step === 0).map(day => {
+            const idx = allDays.indexOf(day);
+            const x = svgPadding.left + (totalDays > 1 ? (idx / (totalDays - 1)) * plotW : plotW / 2);
+            return (
+              <text key={day} x={x} y={svgH - 6} textAnchor="middle"
+                fill="var(--color-text-muted)" fontSize="8" fontFamily="monospace">
+                {fmtDay(day)}
+              </text>
+            );
+          })}
+          {series.map(s => {
+            const pts = s.points;
+            const d = pts.map((val, i) => {
+              const x = svgPadding.left + (totalDays > 1 ? (i / (totalDays - 1)) * plotW : plotW / 2);
+              const y = svgPadding.top + plotH * (1 - val / globalMax);
+              return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+            }).join(' ');
+            return <path key={s.user_label} d={d} fill="none" stroke={s.color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />;
+          })}
+        </svg>
+        <div className="stats-user-legend">
+          {series.map(s => (
+            <span key={s.user_label} className="stats-user-legend-item">
+              <span className="stats-user-legend-swatch" style={{ background: s.color }} />
+              {s.user_label}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const { t } = useLocale();
   const [analytics, setAnalytics] = useState<AnalyticsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,6 +146,7 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
     try {
       const params = new URLSearchParams({ days: String(DEFAULT_DAYS) });
       if (currentFilter) params.set('project', currentFilter);
+      if (userLabelFilter) params.set('userLabel', userLabelFilter);
       const resp = await authFetch(`/api/stats/analytics?${params}`, { signal: controller.signal });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json() as AnalyticsResponse;
@@ -72,14 +158,13 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
       setLoading(false);
     }
     return () => controller.abort();
-  }, [currentFilter]);
+  }, [currentFilter, userLabelFilter]);
 
   useEffect(() => {
     const ctrl = loadAnalytics();
     return () => { ctrl.then(fn => fn?.()); };
   }, [loadAnalytics]);
 
-  // Track chart container width for responsive SVG
   useEffect(() => {
     const el = lineChartRef.current;
     if (!el) return;
@@ -90,150 +175,85 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
     return () => ro.disconnect();
   }, []);
 
-  // ── Build per-user daily series for the line chart ──────────────────
   const userSeries = useMemo(() => {
     if (!analytics) return [];
     const users = analytics.uniqueUsers;
     if (users.length === 0) return [];
-
-    // Map day → { user_label → count }
     const byDay = new Map<string, Record<string, number>>();
     for (const pt of analytics.promptsByUserByDay) {
       let rec = byDay.get(pt.day);
       if (!rec) { rec = {}; byDay.set(pt.day, rec); }
       rec[pt.user_label] = pt.count;
     }
-
     const days = Array.from(byDay.keys()).sort();
     if (days.length === 0) return [];
-
-    const minDay = days[0];
-    const maxDay = days[days.length - 1];
-
-    // Fill all days in range (even those with zero data) for a continuous axis
-    const allDays: string[] = [];
-    const cursor = new Date(minDay + 'T00:00:00');
-    const end = new Date(maxDay + 'T00:00:00');
-    while (cursor <= end) {
-      const y = cursor.getFullYear();
-      const m = String(cursor.getMonth() + 1).padStart(2, '0');
-      const d = String(cursor.getDate()).padStart(2, '0');
-      allDays.push(`${y}-${m}-${d}`);
-      cursor.setDate(cursor.getDate() + 1);
-    }
-
+    const allDays = buildDayRange(days[0], days[days.length - 1]);
     return users.map((user, idx) => {
       const points = allDays.map(day => (byDay.get(day)?.[user]) ?? 0);
-      const total = points.reduce((a, b) => a + b, 0);
-      return {
-        user_label: user,
-        color: USER_COLORS[idx % USER_COLORS.length],
-        points,
-        total,
-        maxVal: Math.max(...points, 1),
-      };
+      return { user_label: user, color: USER_COLORS[idx % USER_COLORS.length], points, total: points.reduce((a,b)=>a+b,0), maxVal: Math.max(...points, 1) };
     });
   }, [analytics]);
 
-  // ── User summary table data ─────────────────────────────────────────
-  // Sorted by daily average AI processing time (desc) — users who spend
-  // more of their day working with AI rank higher.
+  const userTimeSeries = useMemo(() => {
+    if (!analytics) return [];
+    const users = analytics.uniqueUsers;
+    if (users.length === 0) return [];
+    const byDay = new Map<string, Record<string, number>>();
+    for (const pt of (analytics.dailyProcessingTimeByUser ?? [])) {
+      let rec = byDay.get(pt.day);
+      if (!rec) { rec = {}; byDay.set(pt.day, rec); }
+      rec[pt.user_label] = pt.totalMs;
+    }
+    const days = Array.from(byDay.keys()).sort();
+    if (days.length === 0) return [];
+    const allDays = buildDayRange(days[0], days[days.length - 1]);
+    return users.map((user, idx) => {
+      const points = allDays.map(day => (byDay.get(day)?.[user]) ?? 0);
+      return { user_label: user, color: USER_COLORS[idx % USER_COLORS.length], points, total: points.reduce((a,b)=>a+b,0), maxVal: Math.max(...points, 1) };
+    });
+  }, [analytics]);
+
   const userSummary = useMemo(() => {
     if (!analytics) return [];
     const users = analytics.uniqueUsers;
     if (users.length === 0) return [];
     const ptData = analytics.userProcessingTime ?? {};
     const meta = analytics.userProjectMeta ?? {};
-    const map = new Map<string, {
-      prompts: number; obs: number; summaries: number;
-      processingMs: number; sessionCount: number;
-      projectCount: number; activeDays: number;
-    }>();
+    const map = new Map<string, { prompts: number; obs: number; summaries: number; processingMs: number; sessionCount: number; projectCount: number; activeDays: number }>();
     for (const u of users) {
-      const t = ptData[u];
-      const m = meta[u];
-      map.set(u, {
-        prompts: 0, obs: 0, summaries: 0,
-        processingMs: t?.totalMs ?? 0,
-        sessionCount: t?.sessionCount ?? 0,
-        projectCount: m?.projectCount ?? 0,
-        activeDays: m?.activeDays ?? 0,
-      });
+      const t = ptData[u]; const m = meta[u];
+      map.set(u, { prompts: 0, obs: 0, summaries: 0, processingMs: t?.totalMs??0, sessionCount: t?.sessionCount??0, projectCount: m?.projectCount??0, activeDays: m?.activeDays??0 });
     }
-    for (const pt of analytics.promptsByUserByDay) {
-      const r = map.get(pt.user_label);
-      if (r) r.prompts += pt.count;
-    }
-    for (const pt of analytics.observationsByUserByDay) {
-      const r = map.get(pt.user_label);
-      if (r) r.obs += pt.count;
-    }
-    for (const pt of analytics.summariesByUserByDay) {
-      const r = map.get(pt.user_label);
-      if (r) r.summaries += pt.count;
-    }
-    return Array.from(map.entries())
-      .map(([user, counts]) => ({ user_label: user, ...counts }))
-      .sort((a, b) => {
-        // Sort by daily average processing time (desc)
-        const aAvg = a.activeDays > 0 ? a.processingMs / a.activeDays : 0;
-        const bAvg = b.activeDays > 0 ? b.processingMs / b.activeDays : 0;
-        return bAvg - aAvg;
-      });
+    for (const pt of analytics.promptsByUserByDay) { const r = map.get(pt.user_label); if (r) r.prompts += pt.count; }
+    for (const pt of analytics.observationsByUserByDay) { const r = map.get(pt.user_label); if (r) r.obs += pt.count; }
+    for (const pt of analytics.summariesByUserByDay) { const r = map.get(pt.user_label); if (r) r.summaries += pt.count; }
+    return Array.from(map.entries()).map(([user, counts]) => ({ user_label: user, ...counts })).sort((a, b) => {
+      const aAvg = a.activeDays > 0 ? a.processingMs / a.activeDays : 0;
+      const bAvg = b.activeDays > 0 ? b.processingMs / b.activeDays : 0;
+      return bAvg - aAvg;
+    });
   }, [analytics]);
 
-  // ── 各项目提示词总数（降序，所有项目视图用）─────────────────────────
   const projectPrompts = useMemo(() => {
     const rows = analytics?.promptsByProject ?? [];
-    // 后端已降序，前端再排一次以防万一
     return [...rows].sort((a, b) => b.count - a.count);
   }, [analytics]);
   const maxProjectPrompts = projectPrompts.length > 0 ? projectPrompts[0].count : 1;
 
-  // ── SVG line chart dimensions ───────────────────────────────────────
-  const svgPadding = { top: 16, right: 16, bottom: 40, left: 48 };
+  const svgPadding = { top: 16, right: 8, bottom: 32, left: 42 };
   const svgW = chartWidth;
-  const svgH = 280;
+  const svgH = 220;
   const plotW = svgW - svgPadding.left - svgPadding.right;
   const plotH = svgH - svgPadding.top - svgPadding.bottom;
 
-  // ── Load state ──────────────────────────────────────────────────────
   if (loading) {
-    return (
-      <div className="feed">
-        <div className="feed-content">
-          <div className="stats-page-loading">
-            <div className="spinner" />
-            <span>{t('stats.loading')}</span>
-          </div>
-        </div>
-      </div>
-    );
+    return (<div className="feed"><div className="feed-content"><div className="stats-page-loading"><div className="spinner" /><span>{t('stats.loading')}</span></div></div></div>);
   }
-
   if (error) {
-    return (
-      <div className="feed">
-        <div className="feed-content">
-          <div className="stats-page-error">
-            <span>{t('stats.error')}: {error}</span>
-            <button className="stats-page-retry-btn" onClick={() => loadAnalytics()}>{t('stats.retry')}</button>
-          </div>
-        </div>
-      </div>
-    );
+    return (<div className="feed"><div className="feed-content"><div className="stats-page-error"><span>{t('stats.error')}: {error}</span><button className="stats-page-retry-btn" onClick={() => loadAnalytics()}>{t('stats.retry')}</button></div></div></div>);
   }
-
   if (!analytics || (analytics.totalObservations === 0 && analytics.totalSessions === 0)) {
-    return (
-      <div className="feed">
-        <div className="feed-content">
-          <div className="stats-page-loading">
-            <span style={{ color: 'var(--color-text-muted)' }}>{t('stats.noData')}</span>
-          </div>
-        </div>
-      </div>
-    );
+    return (<div className="feed"><div className="feed-content"><div className="stats-page-loading"><span style={{ color: 'var(--color-text-muted)' }}>{t('stats.noData')}</span></div></div></div>);
   }
 
   const isAllProjects = currentFilter === '';
@@ -243,152 +263,59 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
       <div className="feed-content">
         <div className="stats-page">
 
-          {/* ── Summary cards ──────────────────────────────────────── */}
+          {!isAllProjects && (
+            <div className="stats-project-name">
+              {t('stats.singleProject')}: {currentFilter}
+            </div>
+          )}
+
           <div className="stats-summary-grid">
-            <div className="stats-summary-card">
-              <div className="stats-summary-value">{formatNumber(analytics.totalObservations)}</div>
-              <div className="stats-summary-label">{t('stats.totalObservations')}</div>
-            </div>
-            <div className="stats-summary-card">
-              <div className="stats-summary-value">{formatNumber(analytics.totalSessions)}</div>
-              <div className="stats-summary-label">{t('stats.totalSessions')}</div>
-            </div>
-            <div className="stats-summary-card">
-              <div className="stats-summary-value">{formatNumber(
-                userSummary.reduce((s, u) => s + u.prompts, 0)
-              )}</div>
-              <div className="stats-summary-label">{t('stats.totalPrompts')}</div>
-            </div>
-            <div className="stats-summary-card">
-              <div className="stats-summary-value">{formatNumber(analytics.totalDiscoveryTokens)}</div>
-              <div className="stats-summary-label">{t('stats.totalTokens')}</div>
-            </div>
+            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalObservations)}</div><div className="stats-summary-label">{t('stats.totalObservations')}</div></div>
+            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalSessions)}</div><div className="stats-summary-label">{t('stats.totalSessions')}</div></div>
+            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(userSummary.reduce((s, u) => s + u.prompts, 0))}</div><div className="stats-summary-label">{t('stats.totalPrompts')}</div></div>
+            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalDiscoveryTokens)}</div><div className="stats-summary-label">{t('stats.totalTokens')}</div></div>
           </div>
 
-          {/* ── All Projects: per-user daily line chart ────────────── */}
           {isAllProjects && userSeries.length > 0 && (
             <div className="stats-section">
-              <div className="stats-section-title">{t('stats.dailyPromptsByUser')}</div>
-              <div className="stats-line-chart" ref={lineChartRef}>
-                <svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`}>
-                  {/* Y-axis grid lines */}
-                  {[0, 0.25, 0.5, 0.75, 1].map(fr => {
-                    const y = svgPadding.top + plotH * (1 - fr);
-                    return (
-                      <g key={`grid-${fr}`}>
-                        <line x1={svgPadding.left} y1={y} x2={svgW - svgPadding.right} y2={y}
-                          stroke="var(--color-border-primary)" strokeWidth="0.5" />
-                        <text x={svgPadding.left - 8} y={y + 4}
-                          textAnchor="end" fill="var(--color-text-muted)" fontSize="10"
-                          fontFamily="monospace">
-                          {Math.round(userSeries.reduce((m, s) => Math.max(m, s.maxVal), 0) * fr)}
-                        </text>
-                      </g>
-                    );
-                  })}
-
-                  {/* X-axis labels (show ~6 evenly spaced labels) */}
-                  {userSeries[0] && (() => {
-                    const totalDays = userSeries[0].points.length;
-                    const step = Math.max(1, Math.floor(totalDays / 6));
-                    // Build the full day range for the axis
-                    const allDays: string[] = [];
-                    const firstDay = analytics!.promptsByUserByDay[0]?.day;
-                    const lastDay = analytics!.promptsByUserByDay[analytics!.promptsByUserByDay.length - 1]?.day;
-                    if (firstDay && lastDay) {
-                      const c = new Date(firstDay + 'T00:00:00');
-                      const e = new Date(lastDay + 'T00:00:00');
-                      while (c <= e) {
-                        allDays.push(c.toISOString().slice(0, 10));
-                        c.setDate(c.getDate() + 1);
-                      }
-                    }
-                    return allDays.filter((_d, idx) => idx % step === 0).map((day) => {
-                      const idx = allDays.indexOf(day);
-                      const x = svgPadding.left + (idx / Math.max(totalDays - 1, 1)) * plotW;
-                      return (
-                        <text key={day} x={x} y={svgH - 10}
-                          textAnchor="middle" fill="var(--color-text-muted)" fontSize="9"
-                          fontFamily="monospace">
-                          {formatDayLabel(day)}
-                        </text>
-                      );
-                    });
-                  })()}
-
-                  {/* Lines */}
-                  {userSeries.map(series => {
-                    const maxVal = userSeries.reduce((m, s) => Math.max(m, s.maxVal), 1);
-                    const pts = series.points;
-                    const totalDays = pts.length;
-                    const d = pts.map((val, i) => {
-                      const x = svgPadding.left + (totalDays > 1 ? (i / (totalDays - 1)) * plotW : plotW / 2);
-                      const y = svgPadding.top + plotH * (1 - val / maxVal);
-                      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-                    }).join(' ');
-                    return (
-                      <path key={series.user_label} d={d}
-                        fill="none" stroke={series.color} strokeWidth="1.5"
-                        strokeLinejoin="round" strokeLinecap="round" />
-                    );
-                  })}
-                </svg>
-
-                {/* Legend */}
-                <div className="stats-user-legend">
-                  {userSeries.map(s => (
-                    <span key={s.user_label} className="stats-user-legend-item">
-                      <span className="stats-user-legend-swatch" style={{ background: s.color }} />
-                      {s.user_label}
-                    </span>
-                  ))}
-                </div>
+              <div className="stats-charts-grid">
+                <LineChart title={t('stats.dailyPromptsByUser')} series={userSeries}
+                  svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
+                  lineChartRef={lineChartRef} formatY={v => String(v)}
+                  allDays={buildDayRange(analytics!.promptsByUserByDay[0]?.day, analytics!.promptsByUserByDay[analytics!.promptsByUserByDay.length - 1]?.day)}
+                  formatDayLabel={formatDayLabel} />
+                <LineChart title={t('stats.dailyProcessingTime')} series={userTimeSeries}
+                  svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
+                  formatY={v => { if (v < 60000) return `${Math.round(v/1000)}s`; if (v < 3600000) return `${Math.round(v/60000)}m`; return `${(v/3600000).toFixed(1)}h`; }}
+                  allDays={userTimeSeries.length > 0 ? buildDayRange(analytics!.dailyProcessingTimeByUser?.[0]?.day, analytics!.dailyProcessingTimeByUser?.[analytics!.dailyProcessingTimeByUser.length - 1]?.day) : []}
+                  formatDayLabel={formatDayLabel} />
               </div>
             </div>
           )}
 
-          {/* ── 单项目：每日柱状图（汇总所有用户，不分用户）──────────── */}
           {!isAllProjects && (
             <>
-              {analytics.observationsByUserByDay.length > 0 && (
-                <div className="stats-section">
-                  <div className="stats-section-title">{t('stats.dailyObs')}</div>
-                  <UserDailyBarChart data={analytics.observationsByUserByDay} aggregate />
-                </div>
-              )}
-              {analytics.promptsByUserByDay.length > 0 && (
-                <div className="stats-section">
-                  <div className="stats-section-title">{t('stats.dailyPrompts')}</div>
-                  <UserDailyBarChart data={analytics.promptsByUserByDay} aggregate />
-                </div>
-              )}
-              {analytics.summariesByUserByDay.length > 0 && (
-                <div className="stats-section">
-                  <div className="stats-section-title">{t('stats.dailySummaries')}</div>
-                  <UserDailyBarChart data={analytics.summariesByUserByDay} aggregate />
-                </div>
-              )}
+              {analytics.observationsByUserByDay.length > 0 && (<div className="stats-section"><div className="stats-section-title">{t('stats.dailyObs')}</div><UserDailyBarChart data={analytics.observationsByUserByDay} aggregate /></div>)}
+              {analytics.promptsByUserByDay.length > 0 && (<div className="stats-section"><div className="stats-section-title">{t('stats.dailyPrompts')}</div><UserDailyBarChart data={analytics.promptsByUserByDay} aggregate /></div>)}
+              {analytics.summariesByUserByDay.length > 0 && (<div className="stats-section"><div className="stats-section-title">{t('stats.dailySummaries')}</div><UserDailyBarChart data={analytics.summariesByUserByDay} aggregate /></div>)}
             </>
           )}
 
-          {/* ── User summary table ──────────────────────────────────── */}
           {userSummary.length > 0 && (
             <div className="stats-section">
               <div className="stats-section-title">{t('stats.userSummary')}</div>
               <div className="stats-user-table-wrap">
                 <table className="stats-user-table">
-                  <thead>
-                    <tr>
-                      <th>{t('stats.user')}</th>
-                      <th className="stats-num-col">{t('stats.projects')}</th>
-                      <th className="stats-num-col">{t('stats.prompts')}</th>
-                      <th className="stats-num-col">{t('stats.dailyAvgPrompts')}</th>
-                      <th className="stats-num-col">{t('stats.observations')}</th>
-                      <th className="stats-num-col">{t('stats.summaries')}</th>
-                      <th className="stats-num-col">{t('stats.dailyAvgTime')}</th>
-                      <th className="stats-num-col">{t('stats.totalTime')}</th>
-                    </tr>
-                  </thead>
+                  <thead><tr>
+                    <th>{t('stats.user')}</th>
+                    <th className="stats-num-col">{t('stats.projects')}</th>
+                    <th className="stats-num-col">{t('stats.prompts')}</th>
+                    <th className="stats-num-col">{t('stats.dailyAvgPrompts')}</th>
+                    <th className="stats-num-col">{t('stats.observations')}</th>
+                    <th className="stats-num-col">{t('stats.summaries')}</th>
+                    <th className="stats-num-col">{t('stats.dailyAvgTime')}</th>
+                    <th className="stats-num-col">{t('stats.totalTime')}</th>
+                  </tr></thead>
                   <tbody>
                     {userSummary.map(row => (
                       <tr key={row.user_label}>
@@ -408,7 +335,6 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
             </div>
           )}
 
-          {/* ── 各项目提示词总数（进度条，降序，仅所有项目视图）──────── */}
           {isAllProjects && projectPrompts.length > 0 && (
             <div className="stats-section">
               <div className="stats-section-title">{t('stats.promptsByProject')}</div>
@@ -417,15 +343,8 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
                   const pct = Math.round((row.count / maxProjectPrompts) * 100);
                   return (
                     <div key={row.project} className="stats-project-row">
-                      <span className="stats-project-label" title={row.project}>
-                        {row.project}
-                      </span>
-                      <div className="stats-project-track">
-                        <div
-                          className="stats-project-fill"
-                          style={{ width: `${Math.max(pct, 1)}%` }}
-                        />
-                      </div>
+                      <span className="stats-project-label" title={row.project}>{row.project}</span>
+                      <div className="stats-project-track"><div className="stats-project-fill" style={{ width: `${Math.max(pct, 1)}%` }} /></div>
                       <span className="stats-project-count">{formatNumber(row.count)}</span>
                     </div>
                   );
@@ -440,9 +359,7 @@ export function StatsPage({ currentFilter }: StatsPageProps) {
   );
 }
 
-/* ── UserDailyBarChart: 每日横向柱状图 ──────────────────────────────
-   aggregate=true（单项目视图）：汇总所有用户为一条总量柱，不分用户。
-   aggregate=false（默认）：按用户分段堆叠（需传 users）。 */
+/* ── UserDailyBarChart ─────────────────────────────────────────────── */
 interface BarChartProps {
   data: Array<{ day: string; user_label: string; count: number }>;
   users?: string[];
@@ -450,25 +367,17 @@ interface BarChartProps {
 }
 
 function UserDailyBarChart({ data, users = [], aggregate = false }: BarChartProps) {
-
-  // Build day→{user→count}
   const byDay = new Map<string, Record<string, number>>();
   for (const pt of data) {
     let rec = byDay.get(pt.day);
     if (!rec) { rec = {}; byDay.set(pt.day, rec); }
     rec[pt.user_label] = pt.count;
   }
-
   const sortedDays = Array.from(byDay.keys()).sort();
   if (sortedDays.length === 0) return null;
-
-  // Show last 30 days at most
   const displayDays = sortedDays.slice(-30);
-  const dayTotal = (day: string) =>
-    Object.values(byDay.get(day) ?? {}).reduce((a, b) => a + b, 0);
-  const maxCount = aggregate
-    ? Math.max(1, ...displayDays.map(dayTotal))
-    : Math.max(1, ...displayDays.flatMap(d => Object.values(byDay.get(d) ?? {})));
+  const dayTotal = (day: string) => Object.values(byDay.get(day) ?? {}).reduce((a, b) => a + b, 0);
+  const maxCount = aggregate ? Math.max(1, ...displayDays.map(dayTotal)) : Math.max(1, ...displayDays.flatMap(d => Object.values(byDay.get(d) ?? {})));
 
   return (
     <div className="stats-bar-chart">
@@ -479,30 +388,8 @@ function UserDailyBarChart({ data, users = [], aggregate = false }: BarChartProp
           <div key={day} className="stats-bar-row">
             <span className="stats-bar-day-label">{formatDayLabel(day)}</span>
             <div className="stats-bar-stack">
-              {aggregate ? (
-                // 汇总：一条总量柱（所有用户合计）
-                total > 0 && (
-                  <div
-                    className="stats-bar-segment"
-                    style={{ width: `${Math.max(Math.round((total / maxCount) * 100), 1)}%` }}
-                    title={`${total}`}
-                  />
-                )
-              ) : (
-                users.map(user => {
-                  const count = rec[user] ?? 0;
-                  if (count === 0) return null;
-                  const pct = Math.round((count / maxCount) * 100);
-                  return (
-                    <div
-                      key={user}
-                      className="stats-bar-segment"
-                      style={{ width: `${Math.max(pct, 1)}%` }}
-                      title={`${user}: ${count}`}
-                    />
-                  );
-                })
-              )}
+              {aggregate ? (total > 0 && <div className="stats-bar-segment" style={{ width: `${Math.max(Math.round((total/maxCount)*100), 1)}%` }} title={`${total}`} />)
+                : users.map(user => { const count = rec[user]??0; if (count===0) return null; return <div key={user} className="stats-bar-segment" style={{ width: `${Math.max(Math.round((count/maxCount)*100), 1)}%` }} title={`${user}: ${count}`} />; })}
             </div>
             <span className="stats-bar-total">{total}</span>
           </div>
