@@ -26,11 +26,11 @@ const VIEW_MODE_KEY = 'claude-mem.viewMode';
 function readInitialViewMode(): ViewMode {
   try {
     const stored = window.localStorage.getItem(VIEW_MODE_KEY);
-    if (stored === 'prompts') return 'prompts';
+    if (stored === 'prompts' || stored === 'all' || stored === 'stats') return stored as ViewMode;
   } catch {
     /* localStorage unavailable */
   }
-  return 'all';
+  return 'prompts';
 }
 
 export function App() {
@@ -283,9 +283,7 @@ export function App() {
           projectUsers={projectUsers}
           onProjectsDeleted={handleProjectsDeleted}
           userLabelFilter={userLabelFilter}
-          onUserLabelFilter={setUserLabelFilter}
           statsMode={viewMode === 'stats'}
-          onStatsForUser={(label) => { setCurrentFilter(''); setViewMode('stats'); setUserLabelFilter(label); }}
         />
         <div className="app-main">
           <Header

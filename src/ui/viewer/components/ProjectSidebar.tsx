@@ -36,14 +36,10 @@ interface ProjectSidebarProps {
    * caches so the UI doesn't show ghost entries.
    */
   onProjectsDeleted: (projects: string[]) => void;
-  /** Active user-label filter (null = no user filter). */
+  /** Active user-label filter (null = no user filter). Shown as ◆ indicator. */
   userLabelFilter: string | null;
-  /** Called when user clicks a group header to filter by that user. */
-  onUserLabelFilter: (label: string | null) => void;
   /** Whether the stats analytics page is currently active. */
   statsMode: boolean;
-  /** Called when user clicks a group's "stats" button — switch to stats + filter by user. */
-  onStatsForUser: (label: string) => void;
 }
 
 interface ProjectStat {
@@ -118,9 +114,7 @@ export function ProjectSidebar({
   projectUsers,
   onProjectsDeleted,
   userLabelFilter,
-  onUserLabelFilter,
   statsMode,
-  onStatsForUser,
 }: ProjectSidebarProps) {
   const { t } = useLocale();
 
@@ -627,13 +621,7 @@ export function ProjectSidebar({
                 <button
                   type="button"
                   className={`project-sidebar-group-header${isExpanded ? ' is-expanded' : ''}${userLabelFilter === group.user ? ' is-filtered' : ''}`}
-                  onClick={() => {
-                    if (statsMode) {
-                      onUserLabelFilter(userLabelFilter === group.user ? null : group.user);
-                    } else {
-                      toggleUser(group.user);
-                    }
-                  }}
+                  onClick={() => toggleUser(group.user)}
                   aria-expanded={isExpanded}
                 >
                   <span className="project-sidebar-group-caret" aria-hidden="true">
@@ -641,20 +629,6 @@ export function ProjectSidebar({
                   </span>
                   <span className="project-sidebar-group-name">{label}</span>
                   <span className="project-sidebar-group-count">{group.messageCount}</span>
-                  {userLabelFilter === group.user && statsMode && (
-                    <span className="project-sidebar-filter-indicator" aria-label={t('sidebar.filterActive')}>◆</span>
-                  )}
-                  <span
-                    className="project-sidebar-group-stats-btn"
-                    style={{ display: 'inline-flex', alignItems: 'center' }}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onStatsForUser(group.user);
-                    }}
-                    title={t('sidebar.statsForUser')}
-                  >
-                    {t('header.stats')}
-                  </span>
                 </button>
                 {isExpanded && group.projects.map((p) => renderProjectRow(p, true))}
               </div>
