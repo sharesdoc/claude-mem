@@ -3333,13 +3333,13 @@
 
     .stats-summary-grid {
       display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 16px;
-      margin-bottom: 32px;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 8px;
+      margin-bottom: 24px;
     }
 
     .stats-summary-card {
-      padding: 20px;
+      padding: 12px 8px;
       background: var(--color-bg-card);
       border: 1px solid var(--color-border-primary);
       border-radius: 8px;
@@ -3351,7 +3351,7 @@
     }
 
     .stats-summary-value {
-      font-size: 28px;
+      font-size: 22px;
       font-weight: 600;
       color: var(--color-text-primary);
       font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
@@ -3652,11 +3652,11 @@
     /* ── Responsive: tablet ─────────────────────────────────────────── */
     @media (max-width: 768px) {
       .stats-summary-grid {
-        grid-template-columns: repeat(3, 1fr);
-        gap: 12px;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
       }
       .stats-summary-value {
-        font-size: 22px;
+        font-size: 18px;
       }
       .stats-bar-day-label {
         width: 44px;
