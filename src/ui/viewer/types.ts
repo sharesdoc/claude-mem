@@ -165,4 +165,8 @@ export interface AnalyticsResponse {
   dailyProcessingTimeByUser: Array<{ day: string; user_label: string; totalMs: number }>;
   /** 各项目的最新编辑用户，key = project, value = user_label。 */
   projectEditor: Record<string, string>;
+  /** User Summary 表格的范围内计数（按 Today/Week/Month tab 限定）。 */
+  userSummaryCounts: Record<string, { prompts: number; obs: number; summaries: number }>;
+  /** User Summary 范围内的工作日数（用于日均计算）。 */
+  summaryBusinessDays: number;
 }

@@ -14,20 +14,6 @@ const USER_COLORS = [
 ];
 
 // Current month (backend default), or explicit days
-/** Count business days (Mon-Fri) between two date strings (inclusive). */
-function countBusinessDays(startDay: string, endDay: string): number {
-  if (!startDay || !endDay) return 0;
-  const s = new Date(startDay + 'T00:00:00');
-  const e = new Date(endDay + 'T00:00:00');
-  let count = 0;
-  const c = new Date(s);
-  while (c <= e) {
-    const dow = c.getDay();
-    if (dow !== 0 && dow !== 6) count++;
-    c.setDate(c.getDate() + 1);
-  }
-  return count;
-}
 
 function formatNumber(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -131,7 +117,8 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
           })}
           {allDays.filter((_d, idx) => idx % step === 0).map(day => {
             const idx = allDays.indexOf(day);
-            const x = svgPadding.left + (totalDays > 1 ? (idx / (totalDays - 1)) * plotW : plotW / 2);
+            // Band-center: each day occupies a slot, label/bar centered in it
+            const x = svgPadding.left + (idx + 0.5) * (plotW / Math.max(totalDays, 1));
             return (
               <text key={day} x={x} y={svgH - 6} textAnchor="middle"
                 fill="var(--color-text-muted)" fontSize="8" fontFamily="monospace">
@@ -143,7 +130,9 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
             const pts = s.points;
             return pts.map((val, di) => {
               if (val === 0) return null;
-              const groupX = svgPadding.left + (totalDays > 1 ? (di / (totalDays - 1)) * plotW : plotW / 2);
+              // Band-center: bar group sits in the middle of its day slot,
+              // so the first bar is inset from the Y-axis (not at x=0).
+              const groupX = svgPadding.left + (di + 0.5) * (plotW / Math.max(totalDays, 1));
               const bx = groupX - (visible.length * (barWidth + barGap)) / 2 + ui * (barWidth + barGap);
               const bh = Math.max(1, (val / globalMax) * plotH);
               const by = svgPadding.top + plotH - bh;
@@ -194,10 +183,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   }, []);
 
   // ── Tab state ────────────────────────────────────────────────────
+  // projectTab: switches the project-ranking section (prompts vs AI time)
+  // timeScope: ONLY scopes the User Summary table; charts are always monthly.
   const [projectTab, setProjectTab] = useState<'prompts' | 'time'>('prompts');
-  const [timeScope, setTimeScope] = useState<'day' | 'week' | 'month'>('month');
-
-  const timeScopeDays: Record<typeof timeScope, number> = { day: 1, week: 7, month: 0 };
+  const [timeScope, setTimeScope] = useState<'day' | 'week' | 'month'>('day');
 
   /**
    * Fetch analytics from the backend. Aborts in-flight requests when
@@ -209,8 +198,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     const controller = new AbortController();
     try {
       const params = new URLSearchParams();
-      const d = timeScopeDays[timeScope];
-      if (d > 0) params.set('days', String(d));
+      params.set('scope', timeScope); // only scopes the User Summary table
       if (currentFilter) params.set('project', currentFilter);
       if (userLabelFilter) params.set('userLabel', userLabelFilter);
       const resp = await authFetch(`/api/stats/analytics?${params}`, { signal: controller.signal });
@@ -279,21 +267,32 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     });
   }, [analytics]);
 
+  // User Summary table: all counts come from backend, scoped by the active
+  // time tab (userSummaryCounts/userProcessingTime/userProjectMeta) — NOT from
+  // the monthly chart arrays. Sorted by AI processing time descending.
   const userSummary = useMemo(() => {
     if (!analytics) return [];
     const users = analytics.uniqueUsers;
     if (users.length === 0) return [];
     const ptData = analytics.userProcessingTime ?? {};
     const meta = analytics.userProjectMeta ?? {};
-    const map = new Map<string, { prompts: number; obs: number; summaries: number; processingMs: number; sessionCount: number; projectCount: number; activeDays: number }>();
-    for (const u of users) {
-      const t = ptData[u]; const m = meta[u];
-      map.set(u, { prompts: 0, obs: 0, summaries: 0, processingMs: t?.totalMs??0, sessionCount: t?.sessionCount??0, projectCount: m?.projectCount??0, activeDays: m?.activeDays??0 });
-    }
-    for (const pt of analytics.promptsByUserByDay) { const r = map.get(pt.user_label); if (r) r.prompts += pt.count; }
-    for (const pt of analytics.observationsByUserByDay) { const r = map.get(pt.user_label); if (r) r.obs += pt.count; }
-    for (const pt of analytics.summariesByUserByDay) { const r = map.get(pt.user_label); if (r) r.summaries += pt.count; }
-    return Array.from(map.entries()).map(([user, counts]) => ({ user_label: user, ...counts })).sort((a, b) => b.processingMs - a.processingMs);
+    const counts = analytics.userSummaryCounts ?? {};
+    return users.map(u => {
+      const t = ptData[u]; const m = meta[u]; const c = counts[u];
+      return {
+        user_label: u,
+        prompts: c?.prompts ?? 0,
+        obs: c?.obs ?? 0,
+        summaries: c?.summaries ?? 0,
+        processingMs: t?.totalMs ?? 0,
+        sessionCount: t?.sessionCount ?? 0,
+        projectCount: m?.projectCount ?? 0,
+        activeDays: m?.activeDays ?? 0,
+      };
+    })
+    // Drop users with zero activity in the selected window
+    .filter(r => r.prompts > 0 || r.obs > 0 || r.summaries > 0 || r.processingMs > 0)
+    .sort((a, b) => b.processingMs - a.processingMs);
   }, [analytics]);
 
   const projectPrompts = useMemo(() => {
@@ -312,11 +311,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
    * Used as the denominator for Avg/Day and Prompts/Day columns so
    * weekends don't dilute the daily average.
    */
-  const bizDays = useMemo(() => {
-    const allPts = analytics?.promptsByUserByDay ?? [];
-    if (allPts.length === 0) return 1;
-    return Math.max(countBusinessDays(allPts[0]?.day, allPts[allPts.length - 1]?.day), 1);
-  }, [analytics]);
+  // Business days for the User Summary scope — provided by the backend so it
+  // matches the active Today/Week/Month tab (not the monthly chart range).
+  const bizDays = Math.max(analytics?.summaryBusinessDays ?? 1, 1);
 
   const svgPadding = { top: 16, right: 8, bottom: 32, left: 42 };
   const svgW = chartWidth;

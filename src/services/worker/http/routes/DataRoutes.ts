@@ -619,20 +619,32 @@ export class DataRoutes extends BaseRouteHandler {
     const project = (typeof rawProject === 'string' && rawProject.trim().length > 0)
       ? rawProject.trim()
       : undefined;
-    const rawDays = req.query.days as string | undefined;
-    const days = (typeof rawDays === 'string' ? parseInt(rawDays, 10) : 90) || 90;
-    // Default: first day of current month in UTC (aligns with UTC day buckets)
+    // Local-timezone day bucketing: shift epoch by the local UTC offset before
+    // dividing into day buckets, so a prompt sent at 01:00 local (GMT+8) lands
+    // in today's bucket, not yesterday's UTC bucket.
     const now = new Date();
-    const monthStart = Date.UTC(now.getFullYear(), now.getMonth(), 1);
-    const sinceEpoch = rawDays ? (Date.now() - days * 86400000) : monthStart;
+    const tzOffsetMs = -now.getTimezoneOffset() * 60000; // +8h → 28800000
+
+    // Charts always scope to the current calendar month (local).
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+
+    // User Summary table scope from ?scope=day|week|month (default month).
+    const scope = (req.query.scope as string | undefined) ?? 'month';
+    const localMidnightToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const dow = now.getDay(); // 0=Sun..6=Sat
+    const weekStart = localMidnightToday - (dow === 0 ? 6 : dow - 1) * 86400000;
+    const summarySince = scope === 'day' ? localMidnightToday
+      : scope === 'week' ? weekStart
+      : monthStart;
+
     const rawUserLabel = req.query.userLabel as string | undefined;
     const userLabel = (typeof rawUserLabel === 'string' && rawUserLabel.trim().length > 0)
       ? rawUserLabel.trim()
       : undefined;
 
-    // ── prompts by user by day ────────────────────────────────────────
+    // ── prompts by user by day (charts: always current month, local TZ) ──
     const promptsByUserByDay = db.prepare(`
-      SELECT (up.created_at_epoch / 86400000) AS day_bucket,
+      SELECT ((up.created_at_epoch + ?) / 86400000) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
       FROM user_prompts up
@@ -641,7 +653,7 @@ export class DataRoutes extends BaseRouteHandler {
         AND (? IS NULL OR s.project = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+    `).all(tzOffsetMs, monthStart, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
     // ── prompts by project (全量，所有项目视图用，不按当前筛选) ──
     const promptsByProjectRows = db.prepare(`
@@ -654,9 +666,9 @@ export class DataRoutes extends BaseRouteHandler {
       ORDER BY count DESC
     `).all() as Array<{ project: string; count: number }>;
 
-    // ── observations by user by day ────────────────────────────────────
+    // ── observations by user by day (charts: month, local TZ) ──────────
     const observationsByUserByDay = db.prepare(`
-      SELECT (o.created_at_epoch / 86400000) AS day_bucket,
+      SELECT ((o.created_at_epoch + ?) / 86400000) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
       FROM observations o
@@ -665,11 +677,11 @@ export class DataRoutes extends BaseRouteHandler {
         AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+    `).all(tzOffsetMs, monthStart, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
-    // ── summaries by user by day ───────────────────────────────────────
+    // ── summaries by user by day (charts: month, local TZ) ─────────────
     const summariesByUserByDay = db.prepare(`
-      SELECT (ss.created_at_epoch / 86400000) AS day_bucket,
+      SELECT ((ss.created_at_epoch + ?) / 86400000) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
       FROM session_summaries ss
@@ -678,7 +690,7 @@ export class DataRoutes extends BaseRouteHandler {
         AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+    `).all(tzOffsetMs, monthStart, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
     // ── global totals ──────────────────────────────────────────────────
     const totalObs = db.prepare(`
@@ -705,9 +717,9 @@ export class DataRoutes extends BaseRouteHandler {
 
     const uniqueUsers = uniqueUsersRows.map(r => r.user_label);
 
-    // ── per-user AI processing time (prompt→last observation, monthly) ──
-    // Scalar subquery is SQLite-compatible (CROSS JOIN with correlated
-    // reference doesn't work reliably across all Bun SQLite versions).
+    // ── per-user AI processing time (prompt→last observation) ───────────
+    // Table-scoped (summarySince): feeds the User Summary table, controlled
+    // by the Today/Week/Month tabs. Scalar subquery for SQLite compatibility.
     const userProcessingTimeRows = db.prepare(`
       SELECT user_label, SUM(total_ms) AS total_ms, COUNT(*) AS prompt_count
       FROM (
@@ -723,18 +735,18 @@ export class DataRoutes extends BaseRouteHandler {
       )
       WHERE total_ms IS NOT NULL AND total_ms > 0
       GROUP BY user_label
-    `).all(sinceEpoch, project || null, project || null) as Array<{ user_label: string; total_ms: number; prompt_count: number }>;
+    `).all(summarySince, project || null, project || null) as Array<{ user_label: string; total_ms: number; prompt_count: number }>;
 
     const userProcessingTime: Record<string, { totalMs: number; sessionCount: number }> = {};
     for (const r of userProcessingTimeRows) {
       userProcessingTime[r.user_label] = { totalMs: r.total_ms, sessionCount: r.prompt_count };
     }
 
-    // ── daily processing time by user (prompt-level, monthly, for line chart) ──
+    // ── daily processing time by user (chart: month, local TZ) ─────────
     const dailyTimeByUser = db.prepare(`
       SELECT day_bucket, user_label, SUM(total_ms) AS total_ms
       FROM (
-        SELECT (up.created_at_epoch / 86400000) AS day_bucket,
+        SELECT ((up.created_at_epoch + ?) / 86400000) AS day_bucket,
                COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
                (SELECT MAX(o.created_at_epoch) FROM observations o
                 WHERE o.memory_session_id = s.memory_session_id
@@ -748,22 +760,63 @@ export class DataRoutes extends BaseRouteHandler {
       WHERE total_ms IS NOT NULL AND total_ms > 0
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(sinceEpoch, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
+    `).all(tzOffsetMs, monthStart, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
 
-    // ── per-user project count & active days ──────────────────────────
+    // ── per-user project count & active days (table-scoped, local TZ) ──
     const userProjectRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(DISTINCT s.project) AS project_count,
-             COUNT(DISTINCT (s.started_at_epoch / 86400000)) AS active_days
+             COUNT(DISTINCT ((s.started_at_epoch + ?) / 86400000)) AS active_days
       FROM sdk_sessions s
       WHERE s.started_at_epoch >= ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY user_label
-    `).all(sinceEpoch, project || null, project || null) as Array<{ user_label: string; project_count: number; active_days: number }>;
+    `).all(tzOffsetMs, summarySince, project || null, project || null) as Array<{ user_label: string; project_count: number; active_days: number }>;
 
     const userProjectMeta: Record<string, { projectCount: number; activeDays: number }> = {};
     for (const r of userProjectRows) {
       userProjectMeta[r.user_label] = { projectCount: r.project_count, activeDays: r.active_days };
+    }
+
+    // ── per-user prompt/obs/summary COUNTS (table-scoped by summarySince) ──
+    // The table can no longer sum the monthly chart arrays, so count directly.
+    const userSummaryCounts: Record<string, { prompts: number; obs: number; summaries: number }> = {};
+    const ensureCounts = (u: string) => (userSummaryCounts[u] ??= { prompts: 0, obs: 0, summaries: 0 });
+    for (const r of db.prepare(`
+      SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
+      FROM user_prompts up JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+      WHERE up.created_at_epoch >= ? AND (? IS NULL OR s.project = ?) GROUP BY user_label
+    `).all(summarySince, project || null, project || null) as Array<{ user_label: string; n: number }>) {
+      ensureCounts(r.user_label).prompts = r.n;
+    }
+    for (const r of db.prepare(`
+      SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
+      FROM observations o LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
+      WHERE o.created_at_epoch >= ? AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?) GROUP BY user_label
+    `).all(summarySince, project || null, project || null) as Array<{ user_label: string; n: number }>) {
+      ensureCounts(r.user_label).obs = r.n;
+    }
+    for (const r of db.prepare(`
+      SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
+      FROM session_summaries ss LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
+      WHERE ss.created_at_epoch >= ? AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?) GROUP BY user_label
+    `).all(summarySince, project || null, project || null) as Array<{ user_label: string; n: number }>) {
+      ensureCounts(r.user_label).summaries = r.n;
+    }
+
+    // Business days (Mon–Fri) in the summary window [summarySince, now], local TZ.
+    let summaryBusinessDays = 0;
+    {
+      const cur = new Date(summarySince);
+      const end = new Date();
+      cur.setHours(0, 0, 0, 0);
+      end.setHours(0, 0, 0, 0);
+      while (cur <= end) {
+        const d = cur.getDay();
+        if (d !== 0 && d !== 6) summaryBusinessDays++;
+        cur.setDate(cur.getDate() + 1);
+      }
+      if (summaryBusinessDays === 0) summaryBusinessDays = 1;
     }
 
     // ── per-project latest editor (most recent user_label per project) ──
@@ -802,10 +855,12 @@ export class DataRoutes extends BaseRouteHandler {
 
     // ── format day_bucket → "YYYY-MM-DD" ───────────────────────────────
     const formatDay = (bucket: number): string => {
+      // bucket*DAY is local-midnight expressed as UTC (we shifted by tzOffset
+      // when bucketing), so read it back with UTC getters to get the local date.
       const d = new Date(bucket * 86400000);
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
+      const y = d.getUTCFullYear();
+      const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(d.getUTCDate()).padStart(2, '0');
       return `${y}-${m}-${day}`;
     };
 
@@ -853,6 +908,8 @@ export class DataRoutes extends BaseRouteHandler {
       })),
       dailyProcessingTimeByUser: filterByLabel(formatTimePoints(dailyTimeByUser)),
       projectEditor,
+      userSummaryCounts: userLabel ? filterUserMap(userSummaryCounts) : userSummaryCounts,
+      summaryBusinessDays,
     });
   });
 
