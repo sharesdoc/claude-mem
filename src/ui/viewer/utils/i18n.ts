@@ -134,6 +134,9 @@ export const translations: Record<Locale, Dict> = {
     'sync.statusBehind': 'Sync: {n} pending',
     'sync.statusError': 'Sync: error (see logs)',
     'sync.statusDisabled': 'Sync: disabled',
+    'sync.triggerTip': 'Force sync now',
+    'sync.triggerOk': 'Sync completed',
+    'sync.triggerFail': 'Sync failed',
 
     'summary.session': 'Session Summary',
     'summary.investigated': 'Investigated',
@@ -322,6 +325,9 @@ export const translations: Record<Locale, Dict> = {
     'sync.statusBehind': '同步：待推送 {n} 条',
     'sync.statusError': '同步：出错（见日志）',
     'sync.statusDisabled': '同步：已停用',
+    'sync.triggerTip': '强制立即同步',
+    'sync.triggerOk': '同步完成',
+    'sync.triggerFail': '同步失败',
 
     'summary.session': '会话总结',
     'summary.investigated': '调查',

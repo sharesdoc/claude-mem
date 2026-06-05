@@ -20,6 +20,7 @@ import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 export class SyncStatusRoutes extends BaseRouteHandler {
   constructor(
     private readonly dbManager: DatabaseManager,
+    private readonly syncAgentAccessor?: () => { scheduleSoon(delayMs?: number): void } | undefined,
     private readonly settingsPathResolver: () => string = () => USER_SETTINGS_PATH,
     private readonly statePathResolver: () => string | undefined = () => undefined,
   ) {
@@ -28,6 +29,7 @@ export class SyncStatusRoutes extends BaseRouteHandler {
 
   setupRoutes(app: express.Application): void {
     app.get('/api/sync/status', this.handleGet.bind(this));
+    app.post('/api/sync/trigger', this.handleTrigger.bind(this));
   }
 
   private handleGet = this.wrapHandler(async (_req: Request, res: Response): Promise<void> => {
@@ -49,6 +51,30 @@ export class SyncStatusRoutes extends BaseRouteHandler {
       last_error: state.failures.last_error,
       watermark: state.watermark,
       lag,
+    });
+  });
+
+  /** POST /api/sync/trigger — force an immediate sync tick, wait, return status. */
+  private handleTrigger = this.wrapHandler(async (_req: Request, res: Response): Promise<void> => {
+    const agent = this.syncAgentAccessor?.();
+    if (!agent) {
+      res.status(400).json({ ok: false, error: 'Sync agent not available (client mode only)' });
+      return;
+    }
+    agent.scheduleSoon(0);
+    await new Promise(r => setTimeout(r, 3000));
+    // Read fresh state and return it
+    const settings = SettingsDefaultsManager.loadFromFile(this.settingsPathResolver());
+    const role = (settings.CLAUDE_MEM_NODE_ROLE ?? 'client').trim().toLowerCase() === 'server' ? 'server' : 'client';
+    const state = readState(this.statePathResolver());
+    const lag = this.computeLag(state.watermark);
+    res.json({
+      ok: state.failures.consecutive === 0,
+      error: state.failures.last_error,
+      status: { role, sync_enabled: true, upstream: (settings.CLAUDE_MEM_SYNC_UPSTREAM_URL ?? '').trim(),
+        last_sync_at: state.last_sync_at, last_success_at: state.last_success_at,
+        consecutive_failures: state.failures.consecutive, last_error: state.failures.last_error,
+        watermark: state.watermark, lag },
     });
   });
 

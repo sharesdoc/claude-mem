@@ -10,6 +10,7 @@ import { ThemePreference } from '../hooks/useTheme';
 import { GitHubStarsButton } from './GitHubStarsButton';
 import { useSpinningFavicon } from '../hooks/useSpinningFavicon';
 import { useLocale } from '../hooks/useLocale';
+import { authFetch } from '../utils/api';
 import type { UserRow } from '../hooks/useUsers';
 
 interface HeaderProps {
@@ -98,6 +99,22 @@ export function Header({
       </div>
       <div className="status">
         <SyncStatusBadge status={syncStatus} ready={syncStatusReady} />
+        {deployment === 'client' && (
+          <button type="button" className="sync-force-btn"
+            onClick={async () => {
+              const b = document.querySelector('.sync-force-btn');
+              if (b) b.textContent = '⋯';
+              try {
+                const r = await authFetch('/api/sync/trigger', { method: 'POST' });
+                const d = await r.json();
+                if (d.ok) alert(`${t('sync.triggerOk')}\n${JSON.stringify(d.status?.lag ?? {}, null, 0)}`);
+                else alert(`${t('sync.triggerFail')}: ${d.error || r.statusText}`);
+              } catch (e: unknown) { alert(`${t('sync.triggerFail')}: ${(e as Error).message || String(e)}`); }
+              if (b) b.textContent = '↻';
+            }}
+            title={t('sync.triggerTip')}
+          >↻</button>
+        )}
         {showUserSelector && (
           <UserSelector
             users={users}

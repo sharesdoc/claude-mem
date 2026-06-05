@@ -277,7 +277,7 @@ export class WorkerService implements WorkerRef {
     // T-25: /api/sync/status — always-on so the viewer Header badge
     // can render in both client and server modes. Returns role +
     // syncEnabled so the viewer can hide the badge when irrelevant.
-    this.server.registerRoutes(new SyncStatusRoutes(this.dbManager));
+    this.server.registerRoutes(new SyncStatusRoutes(this.dbManager, () => this.syncAgent));
 
     this.server.app.get('/api/context/inject', async (req, res, next) => {
       if (!this.initializationCompleteFlag || !this.searchRoutes) {
