@@ -3333,7 +3333,7 @@
 
     .stats-summary-grid {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(5, 1fr);
       gap: 16px;
       margin-bottom: 32px;
     }
@@ -3357,6 +3357,14 @@
       font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
       line-height: 1.2;
       margin-bottom: 6px;
+    }
+
+    .stats-summary-card.is-highlight {
+      border-color: var(--color-accent-primary);
+      background: var(--color-bg-card);
+    }
+    .stats-summary-card.is-highlight .stats-summary-value {
+      color: var(--color-accent-primary);
     }
 
     .stats-summary-label {
@@ -3637,7 +3645,7 @@
     /* ── Responsive: tablet ─────────────────────────────────────────── */
     @media (max-width: 768px) {
       .stats-summary-grid {
-        grid-template-columns: repeat(2, 1fr);
+        grid-template-columns: repeat(3, 1fr);
         gap: 12px;
       }
       .stats-summary-value {
