@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# rename-label — rename claude-mem user label
+#
+# Usage:
+#   ./scripts/rename-label.sh -n oldname newname   # settings only (future sessions)
+#   ./scripts/rename-label.sh -d oldname newname   # settings + database (all history)
+#
+# Mode comparison:
+#   -n / --name      Only changes settings.json.  New sessions use the new label;
+#                    old sessions keep the old label.  Both labels appear in the viewer.
+#   -d / --database  Changes settings.json AND updates sdk_sessions.user_label in
+#                    the SQLite database.  All historical data moves to the new label.
+#                    Run this only when the worker is STOPPED.
+
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; RESET=$'\033[0m'
+
+ok()   { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
+fail() { printf "  ${RED}✗${RESET} %s\n" "$1"; }
+warn() { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
+
+show_help() {
+  cat <<EOF
+rename-label — rename claude-mem user label
+
+Usage:
+  ./scripts/rename-label.sh -n <oldname> <newname>     settings only
+  ./scripts/rename-label.sh -d <oldname> <newname>     settings + database
+
+Options:
+  -n, --name       Update only ~/.claude-mem/settings.json.
+                   Old sessions keep the old label (seen in viewer dropdown).
+  -d, --database   Update settings.json AND the SQLite database.
+                   ALL historical data moves to the new label.
+                   ⚠️  Run this when the worker is STOPPED.
+
+Examples:
+  ./scripts/rename-label.sh -n johnson JOHNSON
+  ./scripts/rename-label.sh -d alice Alice-Work
+EOF
+}
+
+# ── Resolve paths ──────────────────────────────────────────────────────
+DATA_DIR="${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}"
+SETTINGS_FILE="$DATA_DIR/settings.json"
+DB_FILE="$DATA_DIR/claude-mem.db"
+
+mode=""
+oldname=""
+newname=""
+
+# ── Parse args ─────────────────────────────────────────────────────────
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--name)     mode="name"; shift ;;
+    -d|--database) mode="database"; shift ;;
+    -h|--help)     show_help; exit 0 ;;
+    -*)
+      fail "Unknown flag: $1"
+      show_help
+      exit 1
+      ;;
+    *)
+      if [[ -z "$oldname" ]]; then oldname="$1";
+      elif [[ -z "$newname" ]]; then newname="$1";
+      else
+        fail "Too many arguments"; show_help; exit 1
+      fi
+      shift
+      ;;
+  esac
+done
+
+if [[ -z "$mode" || -z "$oldname" || -z "$newname" ]]; then
+  fail "Missing required arguments"
+  show_help
+  exit 1
+fi
+
+if [[ "$oldname" == "$newname" ]]; then
+  warn "Old and new label are the same — nothing to do"
+  exit 0
+fi
+
+echo ""
+echo "  Old label : ${YELLOW}${oldname}${RESET}"
+echo "  New label : ${GREEN}${newname}${RESET}"
+echo "  Mode      : ${mode}"
+echo ""
+
+# ── 1. Update settings.json ───────────────────────────────────────────
+if [[ ! -f "$SETTINGS_FILE" ]]; then
+  fail "Settings file not found: $SETTINGS_FILE"
+  exit 1
+fi
+
+current=$(node -e "
+  try {
+    const s = require('$SETTINGS_FILE');
+    const v = s.CLAUDE_MEM_USER_LABEL || '';
+    console.log(v);
+  } catch(e) { console.log(''); }
+" 2>/dev/null || echo "")
+
+if [[ "$current" == "$newname" ]]; then
+  ok "Settings already set to '$newname'"
+else
+  node -e "
+    const fs = require('fs');
+    const path = '$SETTINGS_FILE';
+    let raw = {};
+    try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch(e) {}
+    raw.CLAUDE_MEM_USER_LABEL = '$newname';
+    fs.writeFileSync(path, JSON.stringify(raw, null, 2) + '\n');
+    console.log('updated');
+  "
+  ok "Settings updated: CLAUDE_MEM_USER_LABEL = '$newname'"
+fi
+
+# ── 2. Database update (--database only) ───────────────────────────────
+if [[ "$mode" == "database" ]]; then
+  if [[ ! -f "$DB_FILE" ]]; then
+    fail "Database not found: $DB_FILE"
+    exit 1
+  fi
+
+  # Check if sqlite3 is available
+  if ! command -v sqlite3 &>/dev/null; then
+    fail "sqlite3 not found — install it and retry"
+    exit 1
+  fi
+
+  # Count affected rows before update
+  before=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM sdk_sessions WHERE user_label='$oldname';" 2>/dev/null || echo 0)
+  if [[ "$before" -eq 0 ]]; then
+    ok "No sessions with label '$oldname' in database — nothing to migrate"
+  else
+    sqlite3 "$DB_FILE" "UPDATE sdk_sessions SET user_label='$newname' WHERE user_label='$oldname';"
+    ok "Migrated ${before} session(s) from '$oldname' → '$newname'"
+  fi
+
+  echo ""
+  warn "Database updated.  Restart the worker to apply changes:"
+  echo "    bun plugin/scripts/worker-service.cjs restart"
+fi
+
+echo ""
+ok "Done"
