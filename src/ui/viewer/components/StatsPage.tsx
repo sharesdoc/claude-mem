@@ -87,8 +87,8 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
   const step = Math.max(1, Math.floor(allDays.length / 9));
   // Bar chart: each user group gets a bar per day, side by side
   const barGroupWidth = plotW / Math.max(totalDays, 1);
-  const barWidth = Math.max(2, (barGroupWidth * 0.7) / Math.max(visible.length, 1));
-  const barGap = barGroupWidth * 0.15;
+  const barWidth = Math.max(2, (barGroupWidth * 0.5) / Math.max(visible.length, 1));
+  const barGap = 1;
 
   return (
     <div className="stats-chart">
