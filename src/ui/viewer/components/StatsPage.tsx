@@ -341,9 +341,6 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
         <div className="stats-page">
 
           <div className="stats-scope-bar">
-            <span className="stats-scope-title">
-              {isAllProjects ? t('stats.allProjects') : `${t('stats.singleProject')}: ${currentFilter}`}
-            </span>
             <span className="stats-tabs">
               {SCOPES.map(s => (
                 <button key={s} type="button"
@@ -352,6 +349,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                   {t(`stats.scope_${s}`)}
                 </button>
               ))}
+            </span>
+            <span className="stats-scope-title">
+              {isAllProjects ? t('stats.allProjects') : `${t('stats.singleProject')}: ${currentFilter}`}
             </span>
           </div>
 
@@ -366,15 +366,15 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
           {userSeries.length > 0 && (
             <div className="stats-section">
               <div className="stats-charts-grid">
-                <LineChart title={t('stats.dailyPromptsByUser')} series={userSeries}
-                  svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
-                  lineChartRef={lineChartRef} formatY={v => String(v)}
-                  allDays={analytics.chartBuckets ?? []}
-                  formatDayLabel={formatDayLabel}
-                  hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={true} />
                 <LineChart title={t('stats.dailyProcessingTime')} series={userTimeSeries}
                   svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
                   formatY={v => { if (v < 60000) return `${Math.round(v/1000)}s`; if (v < 3600000) return `${Math.round(v/60000)}m`; return `${(v/3600000).toFixed(1)}h`; }}
+                  allDays={analytics.chartBuckets ?? []}
+                  formatDayLabel={formatDayLabel}
+                  hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={true} />
+                <LineChart title={t('stats.dailyPromptsByUser')} series={userSeries}
+                  svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
+                  lineChartRef={lineChartRef} formatY={v => String(v)}
                   allDays={analytics.chartBuckets ?? []}
                   formatDayLabel={formatDayLabel}
                   hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={false} />
