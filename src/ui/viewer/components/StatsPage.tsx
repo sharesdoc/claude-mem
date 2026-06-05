@@ -93,7 +93,7 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
   return (
     <div className="stats-chart">
       <div className="stats-chart-title">{title}</div>
-      <div className="stats-line-chart" ref={title.includes('Prompts') ? lineChartRef : undefined}>
+      <div className="stats-line-chart" ref={lineChartRef}>
         <svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`} preserveAspectRatio="xMidYMid meet">
           {[0, 0.25, 0.5, 0.75, 1].map(fr => {
             const y = svgPadding.top + plotH * (1 - fr);
@@ -431,13 +431,14 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
               <div className="stats-charts-grid">
                 <LineChart title={t('stats.dailyProcessingTime')} series={userTimeSeries}
                   svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
+                  lineChartRef={lineChartRef}
                   formatY={v => { if (v < 60000) return `${Math.round(v/1000)}s`; if (v < 3600000) return `${Math.round(v/60000)}m`; return `${(v/3600000).toFixed(1)}h`; }}
                   allDays={analytics.chartBuckets ?? []}
                   formatDayLabel={formatDayLabel}
                   hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={true} />
                 <LineChart title={t('stats.dailyPromptsByUser')} series={userSeries}
                   svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
-                  lineChartRef={lineChartRef} formatY={v => String(v)}
+                  formatY={v => String(v)}
                   allDays={analytics.chartBuckets ?? []}
                   formatDayLabel={formatDayLabel}
                   hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={false} />
