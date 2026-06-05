@@ -283,7 +283,6 @@ export function App() {
           projectUsers={projectUsers}
           onProjectsDeleted={handleProjectsDeleted}
           userLabelFilter={userLabelFilter}
-          statsMode={viewMode === 'stats'}
         />
         <div className="app-main">
           <Header

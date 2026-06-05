@@ -106,6 +106,10 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
   const globalMax = visible.reduce((m, s) => Math.max(m, s.maxVal), 1);
   const totalDays = series[0].points.length;
   const step = Math.max(1, Math.floor(allDays.length / 9));
+  // Bar chart: each user group gets a bar per day, side by side
+  const barGroupWidth = plotW / Math.max(totalDays, 1);
+  const barWidth = Math.max(2, (barGroupWidth * 0.7) / Math.max(visible.length, 1));
+  const barGap = barGroupWidth * 0.15;
 
   return (
     <div className="stats-chart">
@@ -135,14 +139,24 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
               </text>
             );
           })}
-          {visible.map(s => {
+          {visible.map((s, ui) => {
             const pts = s.points;
-            const d = pts.map((val, i) => {
-              const x = svgPadding.left + (totalDays > 1 ? (i / (totalDays - 1)) * plotW : plotW / 2);
-              const y = svgPadding.top + plotH * (1 - val / globalMax);
-              return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
-            }).join(' ');
-            return <path key={s.user_label} d={d} fill="none" stroke={s.color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />;
+            return pts.map((val, di) => {
+              if (val === 0) return null;
+              const groupX = svgPadding.left + (totalDays > 1 ? (di / (totalDays - 1)) * plotW : plotW / 2);
+              const bx = groupX - (visible.length * (barWidth + barGap)) / 2 + ui * (barWidth + barGap);
+              const bh = Math.max(1, (val / globalMax) * plotH);
+              const by = svgPadding.top + plotH - bh;
+              return (
+                <g key={`${s.user_label}-${di}`}>
+                  <rect x={bx} y={by} width={barWidth} height={bh} fill={s.color} rx="1" />
+                  <text x={bx + barWidth / 2} y={by - 3} textAnchor="middle"
+                    fill="var(--color-text-secondary)" fontSize="8" fontFamily="monospace">
+                    {formatY(val)}
+                  </text>
+                </g>
+              );
+            });
           })}
         </svg>
         {showLegend && (

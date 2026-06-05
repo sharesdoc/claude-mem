@@ -38,8 +38,6 @@ interface ProjectSidebarProps {
   onProjectsDeleted: (projects: string[]) => void;
   /** Active user-label filter (null = no user filter). Shown as ◆ indicator. */
   userLabelFilter: string | null;
-  /** Whether the stats analytics page is currently active. */
-  statsMode: boolean;
 }
 
 interface ProjectStat {
@@ -114,7 +112,6 @@ export function ProjectSidebar({
   projectUsers,
   onProjectsDeleted,
   userLabelFilter,
-  statsMode,
 }: ProjectSidebarProps) {
   const { t } = useLocale();
 
@@ -138,10 +135,16 @@ export function ProjectSidebar({
   // and the response no longer lists them) or vanish entirely.
   const [inUse, setInUse] = useState<Set<string>>(new Set());
 
-  // User groups default to collapsed. Expanded set is keyed by username; a
-  // user appears here only after the user explicitly expands their group, so
-  // the initial state has zero stored entries even with N users present.
-  const [expandedUsers, setExpandedUsers] = useState<Set<string>>(new Set());
+  // Expanded groups persisted to localStorage, defaulting to all expanded.
+  const EXPANDED_KEY = 'claude-mem.expandedUsers';
+  const [expandedUsers, setExpandedUsers] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(EXPANDED_KEY);
+      if (raw) return new Set(JSON.parse(raw) as string[]);
+    } catch {}
+    // Default: all expanded (we'll fill this in once projectGroups is ready)
+    return new Set<string>();
+  });
 
   useEffect(() => {
     ratioRef.current = ratio;
@@ -334,23 +337,28 @@ export function ProjectSidebar({
 
   const groupingEnabled = projectGroups.length > 0;
 
-  // Auto-expand all groups when entering stats mode, collapse when leaving.
-  useEffect(() => {
-    if (statsMode && projectGroups.length > 0) {
-      setExpandedUsers(new Set(projectGroups.map(g => g.user)));
-    } else if (!statsMode) {
-      setExpandedUsers(new Set());
-    }
-  }, [statsMode, projectGroups]);
-
   const toggleUser = useCallback((user: string) => {
     setExpandedUsers((prev) => {
       const next = new Set(prev);
       if (next.has(user)) next.delete(user);
       else next.add(user);
+      try { localStorage.setItem(EXPANDED_KEY, JSON.stringify([...next])); } catch {}
       return next;
     });
   }, []);
+
+  // On first load with no stored preference, expand all groups.
+  const [initialized, setInitialized] = useState(false);
+  useEffect(() => {
+    if (initialized || projectGroups.length === 0) return;
+    try {
+      const raw = localStorage.getItem(EXPANDED_KEY);
+      if (!raw) {
+        setExpandedUsers(new Set(projectGroups.map(g => g.user)));
+      }
+    } catch {}
+    setInitialized(true);
+  }, [projectGroups, initialized]);
 
   // Sum of per-project totals; pulls from the merged `stats` so the "All
   // Projects" badge stays correct after worker restart (the raw observations
