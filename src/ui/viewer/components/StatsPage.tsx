@@ -8,10 +8,24 @@ interface StatsPageProps {
   userLabelFilter?: string | null;
 }
 
+type Scope = 'day' | 'week' | 'month' | 'quarter';
+const SCOPE_KEY = 'claude-mem.statsScope';
+const SCOPES: Scope[] = ['day', 'week', 'month', 'quarter'];
+
 const USER_COLORS = [
   '#0969da', '#1a7f37', '#cf222e', '#8250df', '#9a6700',
   '#0550ae', '#16c60c', '#e74856', '#8e7cbc', '#d4b888',
 ];
+
+/** Map a local YYYY-MM-DD day to its chart bucket key given granularity. */
+function bucketKeyOf(day: string, granularity: 'day' | 'week'): string {
+  if (granularity === 'day') return day;
+  const [y, m, d] = day.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  const wd = dt.getDay();
+  dt.setDate(dt.getDate() - (wd === 0 ? 6 : wd - 1)); // Monday of that week
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
 
 // Current month (backend default), or explicit days
 
@@ -40,27 +54,6 @@ function formatDailyAvg(ms: number, days: number): string {
   if (ms <= 0 || days <= 0) return '-';
   const avgMin = ms / days / 60000;
   return `${Math.round(avgMin)}m/d`;
-}
-
-function buildDayRange(firstDay: string | undefined, lastDay: string | undefined): string[] {
-  if (!firstDay) return [];
-  // Extend end to today so the chart always shows up to current date.
-  // Use local date manipulation to avoid UTC shift (new Date("YYYY-MM-DD")
-  // in GMT+8 becomes previous day in UTC via toISOString).
-  const fmt = (d: Date): string =>
-    `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  const today = fmt(new Date());
-  const end = lastDay && lastDay < today ? today : (lastDay || today);
-  const [fy, fm, fd] = firstDay.split('-').map(Number);
-  const [ey, em, ed] = end.split('-').map(Number);
-  const c = new Date(fy, fm - 1, fd);
-  const e = new Date(ey, em - 1, ed);
-  const result: string[] = [];
-  while (c <= e) {
-    result.push(fmt(c));
-    c.setDate(c.getDate() + 1);
-  }
-  return result;
 }
 
 /* ── LineChart: reusable SVG line chart ───────────────────────────── */
@@ -184,13 +177,24 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
 
   // ── Tab state ────────────────────────────────────────────────────
   // projectTab: switches the project-ranking section (prompts vs AI time)
-  // timeScope: ONLY scopes the User Summary table; charts are always monthly.
   const [projectTab, setProjectTab] = useState<'prompts' | 'time'>('prompts');
-  const [timeScope, setTimeScope] = useState<'day' | 'week' | 'month'>('day');
+
+  // scope: GLOBAL time range — drives EVERY section on the page. Persisted.
+  const [scope, setScope] = useState<Scope>(() => {
+    try {
+      const s = localStorage.getItem(SCOPE_KEY) as Scope | null;
+      if (s === 'day' || s === 'week' || s === 'month' || s === 'quarter') return s;
+    } catch {}
+    return 'week';
+  });
+  const changeScope = useCallback((s: Scope) => {
+    setScope(s);
+    try { localStorage.setItem(SCOPE_KEY, s); } catch {}
+  }, []);
 
   /**
    * Fetch analytics from the backend. Aborts in-flight requests when
-   * currentFilter or userLabelFilter changes to avoid stale data races.
+   * currentFilter / userLabelFilter / scope changes to avoid stale data races.
    */
   const loadAnalytics = useCallback(async () => {
     setLoading(true);
@@ -198,7 +202,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     const controller = new AbortController();
     try {
       const params = new URLSearchParams();
-      params.set('scope', timeScope); // only scopes the User Summary table
+      params.set('scope', scope); // global scope for the whole page
       if (currentFilter) params.set('project', currentFilter);
       if (userLabelFilter) params.set('userLabel', userLabelFilter);
       const resp = await authFetch(`/api/stats/analytics?${params}`, { signal: controller.signal });
@@ -212,7 +216,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       setLoading(false);
     }
     return () => controller.abort();
-  }, [currentFilter, userLabelFilter, timeScope]);
+  }, [currentFilter, userLabelFilter, scope]);
 
   useEffect(() => {
     const ctrl = loadAnalytics();
@@ -229,43 +233,38 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     return () => ro.disconnect();
   }, []);
 
-  const userSeries = useMemo(() => {
+  // Build per-user chart series by aggregating daily points into the backend's
+  // chartBuckets (day or week granularity). Shared by both charts.
+  const buildSeries = useCallback((
+    points: Array<{ day: string; user_label: string }> & Array<Record<string, number>> | undefined,
+    valueKey: 'count' | 'totalMs',
+  ) => {
     if (!analytics) return [];
     const users = analytics.uniqueUsers;
-    if (users.length === 0) return [];
-    const byDay = new Map<string, Record<string, number>>();
-    for (const pt of analytics.promptsByUserByDay) {
-      let rec = byDay.get(pt.day);
-      if (!rec) { rec = {}; byDay.set(pt.day, rec); }
-      rec[pt.user_label] = pt.count;
+    const buckets = analytics.chartBuckets ?? [];
+    if (users.length === 0 || buckets.length === 0) return [];
+    const gran = analytics.granularity ?? 'day';
+    // bucketed: bucketKey -> user -> summed value
+    const bucketed = new Map<string, Record<string, number>>();
+    for (const pt of (points ?? [])) {
+      const key = bucketKeyOf((pt as { day: string }).day, gran);
+      let rec = bucketed.get(key);
+      if (!rec) { rec = {}; bucketed.set(key, rec); }
+      const u = (pt as { user_label: string }).user_label;
+      rec[u] = (rec[u] ?? 0) + ((pt as Record<string, number>)[valueKey] ?? 0);
     }
-    const days = Array.from(byDay.keys()).sort();
-    if (days.length === 0) return [];
-    const allDays = buildDayRange(days[0], days[days.length - 1]);
     return users.map((user, idx) => {
-      const points = allDays.map(day => (byDay.get(day)?.[user]) ?? 0);
-      return { user_label: user, color: USER_COLORS[idx % USER_COLORS.length], points, total: points.reduce((a,b)=>a+b,0), maxVal: Math.max(...points, 1) };
+      const pts = buckets.map(b => bucketed.get(b)?.[user] ?? 0);
+      return { user_label: user, color: USER_COLORS[idx % USER_COLORS.length], points: pts, total: pts.reduce((a, b) => a + b, 0), maxVal: Math.max(...pts, 1) };
     });
   }, [analytics]);
 
-  const userTimeSeries = useMemo(() => {
-    if (!analytics) return [];
-    const users = analytics.uniqueUsers;
-    if (users.length === 0) return [];
-    const byDay = new Map<string, Record<string, number>>();
-    for (const pt of (analytics.dailyProcessingTimeByUser ?? [])) {
-      let rec = byDay.get(pt.day);
-      if (!rec) { rec = {}; byDay.set(pt.day, rec); }
-      rec[pt.user_label] = pt.totalMs;
-    }
-    const days = Array.from(byDay.keys()).sort();
-    if (days.length === 0) return [];
-    const allDays = buildDayRange(days[0], days[days.length - 1]);
-    return users.map((user, idx) => {
-      const points = allDays.map(day => (byDay.get(day)?.[user]) ?? 0);
-      return { user_label: user, color: USER_COLORS[idx % USER_COLORS.length], points, total: points.reduce((a,b)=>a+b,0), maxVal: Math.max(...points, 1) };
-    });
-  }, [analytics]);
+  const userSeries = useMemo(
+    () => buildSeries(analytics?.promptsByUserByDay as never, 'count'),
+    [analytics, buildSeries]);
+  const userTimeSeries = useMemo(
+    () => buildSeries(analytics?.dailyProcessingTimeByUser as never, 'totalMs'),
+    [analytics, buildSeries]);
 
   // User Summary table: all counts come from backend, scoped by the active
   // time tab (userSummaryCounts/userProcessingTime/userProjectMeta) — NOT from
@@ -338,8 +337,19 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       <div className="feed-content">
         <div className="stats-page">
 
-          <div className="stats-project-name">
-            {isAllProjects ? t('stats.allProjects') : `${t('stats.singleProject')}: ${currentFilter}`}
+          <div className="stats-scope-bar">
+            <span className="stats-scope-title">
+              {isAllProjects ? t('stats.allProjects') : `${t('stats.singleProject')}: ${currentFilter}`}
+            </span>
+            <span className="stats-tabs">
+              {SCOPES.map(s => (
+                <button key={s} type="button"
+                  className={`stats-tab${scope === s ? ' is-active' : ''}`}
+                  onClick={() => changeScope(s)}>
+                  {t(`stats.scope_${s}`)}
+                </button>
+              ))}
+            </span>
           </div>
 
           <div className="stats-summary-grid">
@@ -356,42 +366,23 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                 <LineChart title={t('stats.dailyPromptsByUser')} series={userSeries}
                   svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
                   lineChartRef={lineChartRef} formatY={v => String(v)}
-                  allDays={buildDayRange(analytics!.promptsByUserByDay[0]?.day, analytics!.promptsByUserByDay[analytics!.promptsByUserByDay.length - 1]?.day)}
+                  allDays={analytics.chartBuckets ?? []}
                   formatDayLabel={formatDayLabel}
                   hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={true} />
                 <LineChart title={t('stats.dailyProcessingTime')} series={userTimeSeries}
                   svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
                   formatY={v => { if (v < 60000) return `${Math.round(v/1000)}s`; if (v < 3600000) return `${Math.round(v/60000)}m`; return `${(v/3600000).toFixed(1)}h`; }}
-                  allDays={userTimeSeries.length > 0 ? buildDayRange(analytics!.dailyProcessingTimeByUser?.[0]?.day, analytics!.dailyProcessingTimeByUser?.[analytics!.dailyProcessingTimeByUser.length - 1]?.day) : []}
+                  allDays={analytics.chartBuckets ?? []}
                   formatDayLabel={formatDayLabel}
                   hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={false} />
               </div>
             </div>
           )}
 
-          {/* 单项目：汇总每日柱状图（不分用户） */}
-          {!isAllProjects && (
-            <>
-              {analytics.observationsByUserByDay.length > 0 && (<div className="stats-section"><div className="stats-section-title">{t('stats.dailyObs')}</div><UserDailyBarChart data={analytics.observationsByUserByDay} aggregate /></div>)}
-              {analytics.promptsByUserByDay.length > 0 && (<div className="stats-section"><div className="stats-section-title">{t('stats.dailyPrompts')}</div><UserDailyBarChart data={analytics.promptsByUserByDay} aggregate /></div>)}
-              {analytics.summariesByUserByDay.length > 0 && (<div className="stats-section"><div className="stats-section-title">{t('stats.dailySummaries')}</div><UserDailyBarChart data={analytics.summariesByUserByDay} aggregate /></div>)}
-            </>
-          )}
 
           {userSummary.length > 0 && (
             <div className="stats-section">
-              <div className="stats-section-title">
-                <span>{t('stats.userSummary')}</span>
-                <span className="stats-tabs">
-                  {(['day','week','month'] as const).map(s => (
-                    <button key={s} type="button"
-                      className={`stats-tab${timeScope === s ? ' is-active' : ''}`}
-                      onClick={() => setTimeScope(s)}>
-                      {t(`stats.scope_${s}`)}
-                    </button>
-                  ))}
-                </span>
-              </div>
+              <div className="stats-section-title">{t('stats.userSummary')}</div>
               <div className="stats-user-table-wrap">
                 <table className="stats-user-table">
                   <thead><tr>
@@ -471,42 +462,3 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   );
 }
 
-/* ── UserDailyBarChart ─────────────────────────────────────────────── */
-interface BarChartProps {
-  data: Array<{ day: string; user_label: string; count: number }>;
-  users?: string[];
-  aggregate?: boolean;
-}
-
-function UserDailyBarChart({ data, users = [], aggregate = false }: BarChartProps) {
-  const byDay = new Map<string, Record<string, number>>();
-  for (const pt of data) {
-    let rec = byDay.get(pt.day);
-    if (!rec) { rec = {}; byDay.set(pt.day, rec); }
-    rec[pt.user_label] = pt.count;
-  }
-  const sortedDays = Array.from(byDay.keys()).sort();
-  if (sortedDays.length === 0) return null;
-  const displayDays = sortedDays.slice(-30);
-  const dayTotal = (day: string) => Object.values(byDay.get(day) ?? {}).reduce((a, b) => a + b, 0);
-  const maxCount = aggregate ? Math.max(1, ...displayDays.map(dayTotal)) : Math.max(1, ...displayDays.flatMap(d => Object.values(byDay.get(d) ?? {})));
-
-  return (
-    <div className="stats-bar-chart">
-      {displayDays.map(day => {
-        const rec = byDay.get(day) ?? {};
-        const total = dayTotal(day);
-        return (
-          <div key={day} className="stats-bar-row">
-            <span className="stats-bar-day-label">{formatDayLabel(day)}</span>
-            <div className="stats-bar-stack">
-              {aggregate ? (total > 0 && <div className="stats-bar-segment" style={{ width: `${Math.max(Math.round((total/maxCount)*100), 1)}%` }} title={`${total}`} />)
-                : users.map(user => { const count = rec[user]??0; if (count===0) return null; return <div key={user} className="stats-bar-segment" style={{ width: `${Math.max(Math.round((count/maxCount)*100), 1)}%` }} title={`${user}: ${count}`} />; })}
-            </div>
-            <span className="stats-bar-total">{total}</span>
-          </div>
-        );
-      })}
-    </div>
-  );
-}

@@ -3289,6 +3289,26 @@
       word-break: break-all;
     }
 
+    /* Global time-scope bar at the top of the stats page */
+    .stats-scope-bar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 16px 28px;
+      padding: 8px 0 20px;
+    }
+    .stats-scope-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--color-text-primary);
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      word-break: break-all;
+    }
+    .stats-scope-bar .stats-tabs {
+      display: flex;
+      gap: 8px;
+    }
+
     .stats-summary-grid {
       display: grid;
       grid-template-columns: repeat(4, 1fr);

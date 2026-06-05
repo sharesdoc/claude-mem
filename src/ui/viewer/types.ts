@@ -169,4 +169,8 @@ export interface AnalyticsResponse {
   userSummaryCounts: Record<string, { prompts: number; obs: number; summaries: number }>;
   /** User Summary 范围内的工作日数（用于日均计算）。 */
   summaryBusinessDays: number;
+  /** 图表 X 轴粒度：day（当日/本周/本月）或 week（季度按周聚合）。 */
+  granularity: 'day' | 'week';
+  /** 图表 X 轴的有序桶（YYYY-MM-DD，本地时间，已补齐空缺）。 */
+  chartBuckets: string[];
 }

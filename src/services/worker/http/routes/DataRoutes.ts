@@ -632,17 +632,22 @@ export class DataRoutes extends BaseRouteHandler {
     // recent prompts have no observations yet.
     const PROCESSING_CAP_MS = 15 * 60 * 1000; // 15 minutes
 
-    // Charts always scope to the current calendar month (local).
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-
-    // User Summary table scope from ?scope=day|week|month (default month).
-    const scope = (req.query.scope as string | undefined) ?? 'month';
+    // ── Global time scope: drives EVERY section on the page ─────────────
+    // scope = day | week (Mon-start) | month | quarter, all local time.
+    const scope = (req.query.scope as string | undefined) ?? 'week';
     const localMidnightToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const dow = now.getDay(); // 0=Sun..6=Sat
+    const dow = now.getDay(); // 0=Sun..6=Sat → Monday-based week
     const weekStart = localMidnightToday - (dow === 0 ? 6 : dow - 1) * 86400000;
-    const summarySince = scope === 'day' ? localMidnightToday
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3; // 0,3,6,9
+    const quarterStart = new Date(now.getFullYear(), quarterStartMonth, 1).getTime();
+    const since = scope === 'day' ? localMidnightToday
       : scope === 'week' ? weekStart
-      : monthStart;
+      : scope === 'month' ? monthStart
+      : quarterStart;
+
+    // Quarter has ~90 daily buckets → aggregate the charts by week instead.
+    const granularity: 'day' | 'week' = scope === 'quarter' ? 'week' : 'day';
 
     const rawUserLabel = req.query.userLabel as string | undefined;
     const userLabel = (typeof rawUserLabel === 'string' && rawUserLabel.trim().length > 0)
@@ -660,7 +665,7 @@ export class DataRoutes extends BaseRouteHandler {
         AND (? IS NULL OR s.project = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(tzOffsetMs, monthStart, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+    `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
     // ── prompts by project (全量，所有项目视图用，不按当前筛选) ──
     const promptsByProjectRows = db.prepare(`
@@ -668,10 +673,10 @@ export class DataRoutes extends BaseRouteHandler {
              COUNT(*) AS count
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
-      WHERE s.started_at_epoch IS NOT NULL
+      WHERE up.created_at_epoch >= ?
       GROUP BY project
       ORDER BY count DESC
-    `).all() as Array<{ project: string; count: number }>;
+    `).all(since) as Array<{ project: string; count: number }>;
 
     // ── observations by user by day (charts: month, local TZ) ──────────
     const observationsByUserByDay = db.prepare(`
@@ -684,7 +689,7 @@ export class DataRoutes extends BaseRouteHandler {
         AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(tzOffsetMs, monthStart, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+    `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
     // ── summaries by user by day (charts: month, local TZ) ─────────────
     const summariesByUserByDay = db.prepare(`
@@ -697,21 +702,23 @@ export class DataRoutes extends BaseRouteHandler {
         AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(tzOffsetMs, monthStart, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+    `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
     // ── global totals ──────────────────────────────────────────────────
     const totalObs = db.prepare(`
       SELECT COALESCE(SUM(discovery_tokens), 0) AS totalDiscoveryTokens,
              COUNT(*) AS totalObservations
       FROM observations
-      WHERE (? IS NULL OR COALESCE(NULLIF(merged_into_project, ''), project) = ?)
-    `).get(project || null, project || null) as { totalDiscoveryTokens: number; totalObservations: number };
+      WHERE created_at_epoch >= ?
+        AND (? IS NULL OR COALESCE(NULLIF(merged_into_project, ''), project) = ?)
+    `).get(since, project || null, project || null) as { totalDiscoveryTokens: number; totalObservations: number };
 
     const totalSessionsRow = db.prepare(`
       SELECT COUNT(*) AS totalSessions
       FROM sdk_sessions
-      WHERE (? IS NULL OR project = ?)
-    `).get(project || null, project || null) as { totalSessions: number };
+      WHERE started_at_epoch >= ?
+        AND (? IS NULL OR project = ?)
+    `).get(since, project || null, project || null) as { totalSessions: number };
 
     // ── unique users ───────────────────────────────────────────────────
     const uniqueUsersRows = db.prepare(`
@@ -725,7 +732,7 @@ export class DataRoutes extends BaseRouteHandler {
     const uniqueUsers = uniqueUsersRows.map(r => r.user_label);
 
     // ── per-user AI processing time (prompt→next prompt, capped) ────────
-    // Table-scoped (summarySince): feeds the User Summary table (Today/Week/Month).
+    // Table-scoped (since): feeds the User Summary table (Today/Week/Month).
     const userProcessingTimeRows = db.prepare(`
       SELECT user_label, SUM(MIN(next_ts - ts, ?)) AS total_ms, COUNT(*) AS prompt_count
       FROM (
@@ -741,7 +748,7 @@ export class DataRoutes extends BaseRouteHandler {
       )
       WHERE next_ts IS NOT NULL
       GROUP BY user_label
-    `).all(PROCESSING_CAP_MS, summarySince, project || null, project || null) as Array<{ user_label: string; total_ms: number; prompt_count: number }>;
+    `).all(PROCESSING_CAP_MS, since, project || null, project || null) as Array<{ user_label: string; total_ms: number; prompt_count: number }>;
 
     const userProcessingTime: Record<string, { totalMs: number; sessionCount: number }> = {};
     for (const r of userProcessingTimeRows) {
@@ -766,7 +773,7 @@ export class DataRoutes extends BaseRouteHandler {
       WHERE next_ts IS NOT NULL
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(PROCESSING_CAP_MS, tzOffsetMs, monthStart, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
+    `).all(PROCESSING_CAP_MS, tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
 
     // ── per-user project count & active days (table-scoped, local TZ) ──
     const userProjectRows = db.prepare(`
@@ -777,14 +784,14 @@ export class DataRoutes extends BaseRouteHandler {
       WHERE s.started_at_epoch >= ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY user_label
-    `).all(tzOffsetMs, summarySince, project || null, project || null) as Array<{ user_label: string; project_count: number; active_days: number }>;
+    `).all(tzOffsetMs, since, project || null, project || null) as Array<{ user_label: string; project_count: number; active_days: number }>;
 
     const userProjectMeta: Record<string, { projectCount: number; activeDays: number }> = {};
     for (const r of userProjectRows) {
       userProjectMeta[r.user_label] = { projectCount: r.project_count, activeDays: r.active_days };
     }
 
-    // ── per-user prompt/obs/summary COUNTS (table-scoped by summarySince) ──
+    // ── per-user prompt/obs/summary COUNTS (table-scoped by since) ──
     // The table can no longer sum the monthly chart arrays, so count directly.
     const userSummaryCounts: Record<string, { prompts: number; obs: number; summaries: number }> = {};
     const ensureCounts = (u: string) => (userSummaryCounts[u] ??= { prompts: 0, obs: 0, summaries: 0 });
@@ -792,28 +799,28 @@ export class DataRoutes extends BaseRouteHandler {
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
       FROM user_prompts up JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       WHERE up.created_at_epoch >= ? AND (? IS NULL OR s.project = ?) GROUP BY user_label
-    `).all(summarySince, project || null, project || null) as Array<{ user_label: string; n: number }>) {
+    `).all(since, project || null, project || null) as Array<{ user_label: string; n: number }>) {
       ensureCounts(r.user_label).prompts = r.n;
     }
     for (const r of db.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
       FROM observations o LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
       WHERE o.created_at_epoch >= ? AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?) GROUP BY user_label
-    `).all(summarySince, project || null, project || null) as Array<{ user_label: string; n: number }>) {
+    `).all(since, project || null, project || null) as Array<{ user_label: string; n: number }>) {
       ensureCounts(r.user_label).obs = r.n;
     }
     for (const r of db.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
       FROM session_summaries ss LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
       WHERE ss.created_at_epoch >= ? AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?) GROUP BY user_label
-    `).all(summarySince, project || null, project || null) as Array<{ user_label: string; n: number }>) {
+    `).all(since, project || null, project || null) as Array<{ user_label: string; n: number }>) {
       ensureCounts(r.user_label).summaries = r.n;
     }
 
-    // Business days (Mon–Fri) in the summary window [summarySince, now], local TZ.
+    // Business days (Mon–Fri) in the summary window [since, now], local TZ.
     let summaryBusinessDays = 0;
     {
-      const cur = new Date(summarySince);
+      const cur = new Date(since);
       const end = new Date();
       cur.setHours(0, 0, 0, 0);
       end.setHours(0, 0, 0, 0);
@@ -853,11 +860,12 @@ export class DataRoutes extends BaseRouteHandler {
                ) AS next_ts
         FROM user_prompts up
         JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+        WHERE up.created_at_epoch >= ?
       )
       WHERE next_ts IS NOT NULL
       GROUP BY project
       ORDER BY total_ms DESC
-    `).all(PROCESSING_CAP_MS) as Array<{ project: string; total_ms: number; session_count: number }>;
+    `).all(PROCESSING_CAP_MS, since) as Array<{ project: string; total_ms: number; session_count: number }>;
 
     // ── format day_bucket → "YYYY-MM-DD" ───────────────────────────────
     const formatDay = (bucket: number): string => {
@@ -875,6 +883,36 @@ export class DataRoutes extends BaseRouteHandler {
 
     const formatTimePoints = (rows: Array<{ day_bucket: number; user_label: string; total_ms: number }>) =>
       rows.map(r => ({ day: formatDay(r.day_bucket), user_label: r.user_label, totalMs: r.total_ms }));
+
+    // ── chartBuckets: ordered, gap-filled X-axis for the charts ─────────
+    // day granularity → each day from `since` to today; week granularity
+    // (quarter) → each Monday. All computed in local time so the frontend
+    // can aggregate daily points into these buckets without TZ drift.
+    const fmtLocal = (ms: number): string => {
+      const d = new Date(ms);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    };
+    const mondayOf = (ms: number): number => {
+      const d = new Date(ms); d.setHours(0, 0, 0, 0);
+      const wd = d.getDay();
+      d.setDate(d.getDate() - (wd === 0 ? 6 : wd - 1));
+      return d.getTime();
+    };
+    const chartBuckets: string[] = [];
+    if (granularity === 'day') {
+      const cur = new Date(since); cur.setHours(0, 0, 0, 0);
+      while (cur.getTime() <= localMidnightToday) {
+        chartBuckets.push(fmtLocal(cur.getTime()));
+        cur.setDate(cur.getDate() + 1);
+      }
+    } else {
+      const cur = new Date(mondayOf(since));
+      const endMonday = mondayOf(localMidnightToday);
+      while (cur.getTime() <= endMonday) {
+        chartBuckets.push(fmtLocal(cur.getTime()));
+        cur.setDate(cur.getDate() + 7);
+      }
+    }
 
     // Apply userLabel filter in JS (cleaner than adding to every SQL query).
     // Case-insensitive: sidebar shows uppercased labels, DB may store lowercase.
@@ -916,6 +954,8 @@ export class DataRoutes extends BaseRouteHandler {
       projectEditor,
       userSummaryCounts: userLabel ? filterUserMap(userSummaryCounts) : userSummaryCounts,
       summaryBusinessDays,
+      granularity,
+      chartBuckets,
     });
   });
 
