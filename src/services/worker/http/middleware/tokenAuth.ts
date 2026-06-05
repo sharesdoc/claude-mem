@@ -1,6 +1,8 @@
 import { timingSafeEqual } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../../../../utils/logger.js';
+import type { AdminSessionStore } from '../AdminSessionStore.js';
+import { extractBearerToken } from '../AdminSessionStore.js';
 
 /**
  * Shared-access-token middleware for LAN deployments.
@@ -12,12 +14,20 @@ import { logger } from '../../../../utils/logger.js';
  * When the token is empty / unset the middleware is a no-op (allow all).
  * This is the default, keeping backward compatibility.
  *
+ * When an `AdminSessionStore` is provided, the middleware also accepts a
+ * valid admin session token (obtained via POST /api/admin/login). This
+ * allows the viewer UI to reuse its existing login session instead of
+ * requiring the user to separately configure the static access token in
+ * every browser.
+ *
  * Constant-time comparison prevents timing side-channel leakage of the
  * token length / prefix.
  */
-export function tokenAuth(serverToken: string) {
+export function tokenAuth(serverToken: string, adminSessions?: AdminSessionStore) {
   const expected = (serverToken ?? '').trim();
-  if (!expected) {
+  const hasAdminFallback = adminSessions !== undefined;
+
+  if (!expected && !hasAdminFallback) {
     return (_req: Request, _res: Response, next: NextFunction): void => next();
   }
 
@@ -39,25 +49,30 @@ export function tokenAuth(serverToken: string) {
       return;
     }
 
-    // Pad user input to the same fixed length before comparison so
-    // timingSafeEqual always sees equal-length buffers and the
-    // comparison time leaks no information about token length.
-    const userBuf = Buffer.alloc(MAX, 0);
-    Buffer.from(header.slice(0, MAX), 'ascii').copy(userBuf);
+    // 1) Try static access token (constant-time comparison).
+    if (expected) {
+      const userBuf = Buffer.alloc(MAX, 0);
+      Buffer.from(header.slice(0, MAX), 'ascii').copy(userBuf);
+      if (timingSafeEqual(userBuf, expectedBuf)) {
+        next();
+        return;
+      }
+    }
 
-    if (!timingSafeEqual(userBuf, expectedBuf)) {
-      logger.warn('HTTP', 'tokenAuth: invalid access token', {
-        path: req.path,
-        address: req.socket.remoteAddress ?? '(unknown)',
-      });
-      res.status(401).json({
-        error: 'unauthorized',
-        reason: 'invalid access token',
-      });
+    // 2) Fall back to admin session token (viewer login).
+    if (hasAdminFallback && adminSessions!.verify(extractBearerToken(req))) {
+      next();
       return;
     }
 
-    next();
+    logger.warn('HTTP', 'tokenAuth: invalid access token', {
+      path: req.path,
+      address: req.socket.remoteAddress ?? '(unknown)',
+    });
+    res.status(401).json({
+      error: 'unauthorized',
+      reason: 'invalid access token',
+    });
   };
 }
 
