@@ -203,6 +203,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     try {
       const params = new URLSearchParams();
       params.set('scope', scope); // global scope for the whole page
+      // Send the viewer's TZ so day/week/month boundaries follow the user's
+      // computer even when the worker (server mode) runs in another timezone.
+      params.set('tz', String(-new Date().getTimezoneOffset()));
       if (currentFilter) params.set('project', currentFilter);
       if (userLabelFilter) params.set('userLabel', userLabelFilter);
       const resp = await authFetch(`/api/stats/analytics?${params}`, { signal: controller.signal });

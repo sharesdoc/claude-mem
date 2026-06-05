@@ -619,11 +619,14 @@ export class DataRoutes extends BaseRouteHandler {
     const project = (typeof rawProject === 'string' && rawProject.trim().length > 0)
       ? rawProject.trim()
       : undefined;
-    // Local-timezone day bucketing: shift epoch by the local UTC offset before
-    // dividing into day buckets, so a prompt sent at 01:00 local (GMT+8) lands
-    // in today's bucket, not yesterday's UTC bucket.
-    const now = new Date();
-    const tzOffsetMs = -now.getTimezoneOffset() * 60000; // +8h → 28800000
+    // Timezone: prefer the VIEWER's offset (?tz=minutes-east-of-UTC) so that
+    // in server mode the day/week/month boundaries follow the user's computer,
+    // not the server's. Fall back to the worker's own offset.
+    const tzParam = req.query.tz as string | undefined;
+    const tzOffsetMin = (tzParam != null && tzParam !== '' && !Number.isNaN(Number(tzParam)))
+      ? Number(tzParam)
+      : -new Date().getTimezoneOffset(); // +8h → 480
+    const tzOffsetMs = tzOffsetMin * 60000;
 
     // AI processing time = time from a prompt to the NEXT prompt in the same
     // session (request turnaround), capped so a long idle gap (user walked
@@ -633,14 +636,19 @@ export class DataRoutes extends BaseRouteHandler {
     const PROCESSING_CAP_MS = 15 * 60 * 1000; // 15 minutes
 
     // ── Global time scope: drives EVERY section on the page ─────────────
-    // scope = day | week (Mon-start) | month | quarter, all local time.
+    // scope = day | week (Mon-start) | month | quarter, in the VIEWER's TZ.
+    // Date.UTC(client Y/M/D) gives client-wall-clock midnight expressed as UTC;
+    // subtracting tzOffsetMs converts it to the true UTC epoch of that instant.
     const scope = (req.query.scope as string | undefined) ?? 'week';
-    const localMidnightToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const dow = now.getDay(); // 0=Sun..6=Sat → Monday-based week
-    const weekStart = localMidnightToday - (dow === 0 ? 6 : dow - 1) * 86400000;
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
-    const quarterStartMonth = Math.floor(now.getMonth() / 3) * 3; // 0,3,6,9
-    const quarterStart = new Date(now.getFullYear(), quarterStartMonth, 1).getTime();
+    const shiftedNow = new Date(Date.now() + tzOffsetMs);
+    const cy = shiftedNow.getUTCFullYear();
+    const cm = shiftedNow.getUTCMonth();
+    const cd = shiftedNow.getUTCDate();
+    const cdow = shiftedNow.getUTCDay(); // 0=Sun..6=Sat → Monday-based week
+    const localMidnightToday = Date.UTC(cy, cm, cd) - tzOffsetMs;
+    const weekStart = localMidnightToday - (cdow === 0 ? 6 : cdow - 1) * 86400000;
+    const monthStart = Date.UTC(cy, cm, 1) - tzOffsetMs;
+    const quarterStart = Date.UTC(cy, Math.floor(cm / 3) * 3, 1) - tzOffsetMs;
     const since = scope === 'day' ? localMidnightToday
       : scope === 'week' ? weekStart
       : scope === 'month' ? monthStart
@@ -674,9 +682,10 @@ export class DataRoutes extends BaseRouteHandler {
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       WHERE up.created_at_epoch >= ?
+        AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
       GROUP BY project
       ORDER BY count DESC
-    `).all(since) as Array<{ project: string; count: number }>;
+    `).all(since, userLabel || null, userLabel || null) as Array<{ project: string; count: number }>;
 
     // ── observations by user by day (charts: month, local TZ) ──────────
     const observationsByUserByDay = db.prepare(`
@@ -705,20 +714,25 @@ export class DataRoutes extends BaseRouteHandler {
     `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
     // ── global totals ──────────────────────────────────────────────────
+    // Summary cards — scoped by time, project AND userLabel (server mode) so
+    // they stay consistent with the charts/table when a user is selected.
     const totalObs = db.prepare(`
-      SELECT COALESCE(SUM(discovery_tokens), 0) AS totalDiscoveryTokens,
+      SELECT COALESCE(SUM(o.discovery_tokens), 0) AS totalDiscoveryTokens,
              COUNT(*) AS totalObservations
-      FROM observations
-      WHERE created_at_epoch >= ?
-        AND (? IS NULL OR COALESCE(NULLIF(merged_into_project, ''), project) = ?)
-    `).get(since, project || null, project || null) as { totalDiscoveryTokens: number; totalObservations: number };
+      FROM observations o
+      LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
+      WHERE o.created_at_epoch >= ?
+        AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
+        AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
+    `).get(since, project || null, project || null, userLabel || null, userLabel || null) as { totalDiscoveryTokens: number; totalObservations: number };
 
     const totalSessionsRow = db.prepare(`
       SELECT COUNT(*) AS totalSessions
       FROM sdk_sessions
       WHERE started_at_epoch >= ?
         AND (? IS NULL OR project = ?)
-    `).get(since, project || null, project || null) as { totalSessions: number };
+        AND (? IS NULL OR user_label = ? COLLATE NOCASE)
+    `).get(since, project || null, project || null, userLabel || null, userLabel || null) as { totalSessions: number };
 
     // ── unique users ───────────────────────────────────────────────────
     const uniqueUsersRows = db.prepare(`
@@ -861,11 +875,12 @@ export class DataRoutes extends BaseRouteHandler {
         FROM user_prompts up
         JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
         WHERE up.created_at_epoch >= ?
+          AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
       )
       WHERE next_ts IS NOT NULL
       GROUP BY project
       ORDER BY total_ms DESC
-    `).all(PROCESSING_CAP_MS, since) as Array<{ project: string; total_ms: number; session_count: number }>;
+    `).all(PROCESSING_CAP_MS, since, userLabel || null, userLabel || null) as Array<{ project: string; total_ms: number; session_count: number }>;
 
     // ── format day_bucket → "YYYY-MM-DD" ───────────────────────────────
     const formatDay = (bucket: number): string => {
@@ -888,29 +903,28 @@ export class DataRoutes extends BaseRouteHandler {
     // day granularity → each day from `since` to today; week granularity
     // (quarter) → each Monday. All computed in local time so the frontend
     // can aggregate daily points into these buckets without TZ drift.
-    const fmtLocal = (ms: number): string => {
-      const d = new Date(ms);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    };
+    // All bucket math is in the VIEWER's TZ: shift the epoch by tzOffsetMs and
+    // read UTC fields, matching the SQL day_bucket / formatDay convention.
+    const fmtLocal = (ms: number): string => formatDay(Math.floor((ms + tzOffsetMs) / 86400000));
     const mondayOf = (ms: number): number => {
-      const d = new Date(ms); d.setHours(0, 0, 0, 0);
-      const wd = d.getDay();
-      d.setDate(d.getDate() - (wd === 0 ? 6 : wd - 1));
-      return d.getTime();
+      const shifted = new Date(ms + tzOffsetMs);
+      const wd = shifted.getUTCDay();
+      const dayStart = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - tzOffsetMs;
+      return dayStart - (wd === 0 ? 6 : wd - 1) * 86400000;
     };
     const chartBuckets: string[] = [];
     if (granularity === 'day') {
-      const cur = new Date(since); cur.setHours(0, 0, 0, 0);
-      while (cur.getTime() <= localMidnightToday) {
-        chartBuckets.push(fmtLocal(cur.getTime()));
-        cur.setDate(cur.getDate() + 1);
+      let cur = since;
+      while (cur <= localMidnightToday) {
+        chartBuckets.push(fmtLocal(cur));
+        cur += 86400000;
       }
     } else {
-      const cur = new Date(mondayOf(since));
+      let cur = mondayOf(since);
       const endMonday = mondayOf(localMidnightToday);
-      while (cur.getTime() <= endMonday) {
-        chartBuckets.push(fmtLocal(cur.getTime()));
-        cur.setDate(cur.getDate() + 7);
+      while (cur <= endMonday) {
+        chartBuckets.push(fmtLocal(cur));
+        cur += 7 * 86400000;
       }
     }
 
