@@ -422,7 +422,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
             <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalObservations)}</div><div className="stats-summary-label">{t('stats.totalObservations')}</div></div>
             <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalSessions)}</div><div className="stats-summary-label">{t('stats.totalSessions')}</div></div>
             <div className="stats-summary-card is-highlight"><div className="stats-summary-value">{formatNumber(userSummary.reduce((s, u) => s + u.prompts, 0))}</div><div className="stats-summary-label">{t('stats.totalPrompts')}</div></div>
+            <div className="stats-summary-card is-highlight-green"><div className="stats-summary-value">{formatNumber(Math.round(userSummary.reduce((s, u) => s + u.prompts, 0) / Math.max(userSummary.length, 1)))}</div><div className="stats-summary-label">{t('stats.avgPromptsPerUser')}</div></div>
             <div className="stats-summary-card is-highlight"><div className="stats-summary-value">{formatProcessingTime(userSummary.reduce((s, u) => s + u.processingMs, 0))}</div><div className="stats-summary-label">{t('stats.totalProcessingTime')}</div></div>
+            <div className="stats-summary-card is-highlight-green"><div className="stats-summary-value">{formatProcessingTime(Math.round(userSummary.reduce((s, u) => s + u.processingMs, 0) / Math.max(userSummary.length, 1)))}</div><div className="stats-summary-label">{t('stats.avgTimePerUser')}</div></div>
             <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalDiscoveryTokens)}</div><div className="stats-summary-label">{t('stats.totalTokens')}</div></div>
           </div>
 
