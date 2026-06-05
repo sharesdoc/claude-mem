@@ -58,14 +58,20 @@ function formatDailyAvg(ms: number, days: number): string {
 
 function buildDayRange(firstDay: string | undefined, lastDay: string | undefined): string[] {
   if (!firstDay) return [];
-  // Extend end to today so the chart always shows up to current date
-  const today = new Date().toISOString().slice(0, 10);
-  const endDay = lastDay && lastDay < today ? today : (lastDay || today);
+  // Extend end to today so the chart always shows up to current date.
+  // Use local date manipulation to avoid UTC shift (new Date("YYYY-MM-DD")
+  // in GMT+8 becomes previous day in UTC via toISOString).
+  const fmt = (d: Date): string =>
+    `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const today = fmt(new Date());
+  const end = lastDay && lastDay < today ? today : (lastDay || today);
+  const [fy, fm, fd] = firstDay.split('-').map(Number);
+  const [ey, em, ed] = end.split('-').map(Number);
+  const c = new Date(fy, fm - 1, fd);
+  const e = new Date(ey, em - 1, ed);
   const result: string[] = [];
-  const c = new Date(firstDay + 'T00:00:00');
-  const e = new Date(endDay + 'T00:00:00');
   while (c <= e) {
-    result.push(c.toISOString().slice(0, 10));
+    result.push(fmt(c));
     c.setDate(c.getDate() + 1);
   }
   return result;
@@ -175,7 +181,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
 
   // ── Tab state ────────────────────────────────────────────────────
   const [projectTab, setProjectTab] = useState<'prompts' | 'time'>('prompts');
-  const [timeScope, setTimeScope] = useState<'day' | 'week' | 'month'>('day');
+  const [timeScope, setTimeScope] = useState<'day' | 'week' | 'month'>('month');
 
   const timeScopeDays: Record<typeof timeScope, number> = { day: 1, week: 7, month: 0 };
 
