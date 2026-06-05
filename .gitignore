@@ -53,3 +53,4 @@ docker/install-test/
 .pid
 SERVER-INFO.md
 claude-mem-github
+snap.txt
