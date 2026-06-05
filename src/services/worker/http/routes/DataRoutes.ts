@@ -625,6 +625,13 @@ export class DataRoutes extends BaseRouteHandler {
     const now = new Date();
     const tzOffsetMs = -now.getTimezoneOffset() * 60000; // +8h → 28800000
 
+    // AI processing time = time from a prompt to the NEXT prompt in the same
+    // session (request turnaround), capped so a long idle gap (user walked
+    // away) doesn't inflate it. Observation timestamps can't be used: they are
+    // written asynchronously by the compression worker, lag behind, and most
+    // recent prompts have no observations yet.
+    const PROCESSING_CAP_MS = 15 * 60 * 1000; // 15 minutes
+
     // Charts always scope to the current calendar month (local).
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
 
@@ -717,50 +724,49 @@ export class DataRoutes extends BaseRouteHandler {
 
     const uniqueUsers = uniqueUsersRows.map(r => r.user_label);
 
-    // ── per-user AI processing time (prompt→last observation) ───────────
-    // Table-scoped (summarySince): feeds the User Summary table, controlled
-    // by the Today/Week/Month tabs. Scalar subquery for SQLite compatibility.
+    // ── per-user AI processing time (prompt→next prompt, capped) ────────
+    // Table-scoped (summarySince): feeds the User Summary table (Today/Week/Month).
     const userProcessingTimeRows = db.prepare(`
-      SELECT user_label, SUM(total_ms) AS total_ms, COUNT(*) AS prompt_count
+      SELECT user_label, SUM(MIN(next_ts - ts, ?)) AS total_ms, COUNT(*) AS prompt_count
       FROM (
         SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
-               (SELECT MAX(o.created_at_epoch) FROM observations o
-                WHERE o.memory_session_id = s.memory_session_id
-                  AND o.prompt_number = up.prompt_number
-               ) - up.created_at_epoch AS total_ms
+               up.created_at_epoch AS ts,
+               LEAD(up.created_at_epoch) OVER (
+                 PARTITION BY up.content_session_id ORDER BY up.created_at_epoch
+               ) AS next_ts
         FROM user_prompts up
         JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
         WHERE up.created_at_epoch >= ?
           AND (? IS NULL OR s.project = ?)
       )
-      WHERE total_ms IS NOT NULL AND total_ms > 0
+      WHERE next_ts IS NOT NULL
       GROUP BY user_label
-    `).all(summarySince, project || null, project || null) as Array<{ user_label: string; total_ms: number; prompt_count: number }>;
+    `).all(PROCESSING_CAP_MS, summarySince, project || null, project || null) as Array<{ user_label: string; total_ms: number; prompt_count: number }>;
 
     const userProcessingTime: Record<string, { totalMs: number; sessionCount: number }> = {};
     for (const r of userProcessingTimeRows) {
       userProcessingTime[r.user_label] = { totalMs: r.total_ms, sessionCount: r.prompt_count };
     }
 
-    // ── daily processing time by user (chart: month, local TZ) ─────────
+    // ── daily processing time by user (chart: month, local TZ, capped) ──
     const dailyTimeByUser = db.prepare(`
-      SELECT day_bucket, user_label, SUM(total_ms) AS total_ms
+      SELECT day_bucket, user_label, SUM(MIN(next_ts - ts, ?)) AS total_ms
       FROM (
         SELECT ((up.created_at_epoch + ?) / 86400000) AS day_bucket,
                COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
-               (SELECT MAX(o.created_at_epoch) FROM observations o
-                WHERE o.memory_session_id = s.memory_session_id
-                  AND o.prompt_number = up.prompt_number
-               ) - up.created_at_epoch AS total_ms
+               up.created_at_epoch AS ts,
+               LEAD(up.created_at_epoch) OVER (
+                 PARTITION BY up.content_session_id ORDER BY up.created_at_epoch
+               ) AS next_ts
         FROM user_prompts up
         JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
         WHERE up.created_at_epoch >= ?
           AND (? IS NULL OR s.project = ?)
       )
-      WHERE total_ms IS NOT NULL AND total_ms > 0
+      WHERE next_ts IS NOT NULL
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(tzOffsetMs, monthStart, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
+    `).all(PROCESSING_CAP_MS, tzOffsetMs, monthStart, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
 
     // ── per-user project count & active days (table-scoped, local TZ) ──
     const userProjectRows = db.prepare(`
@@ -836,22 +842,22 @@ export class DataRoutes extends BaseRouteHandler {
       projectEditor[r.project] = r.user_label;
     }
 
-    // ── per-project processing time (prompt-level, all-time, for project tab) ──
+    // ── per-project processing time (prompt→next prompt, capped, all-time) ──
     const projectTimeRows = db.prepare(`
-      SELECT project, SUM(total_ms) AS total_ms, COUNT(*) AS prompt_count
+      SELECT project, SUM(MIN(next_ts - ts, ?)) AS total_ms, COUNT(*) AS prompt_count
       FROM (
         SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
-               (SELECT MAX(o.created_at_epoch) FROM observations o
-                WHERE o.memory_session_id = s.memory_session_id
-                  AND o.prompt_number = up.prompt_number
-               ) - up.created_at_epoch AS total_ms
+               up.created_at_epoch AS ts,
+               LEAD(up.created_at_epoch) OVER (
+                 PARTITION BY up.content_session_id ORDER BY up.created_at_epoch
+               ) AS next_ts
         FROM user_prompts up
         JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       )
-      WHERE total_ms IS NOT NULL AND total_ms > 0
+      WHERE next_ts IS NOT NULL
       GROUP BY project
       ORDER BY total_ms DESC
-    `).all() as Array<{ project: string; total_ms: number; session_count: number }>;
+    `).all(PROCESSING_CAP_MS) as Array<{ project: string; total_ms: number; session_count: number }>;
 
     // ── format day_bucket → "YYYY-MM-DD" ───────────────────────────────
     const formatDay = (bucket: number): string => {
