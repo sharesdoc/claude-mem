@@ -177,7 +177,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
 
   // ── Tab state ────────────────────────────────────────────────────
   // projectTab: switches the project-ranking section (prompts vs AI time)
-  const [projectTab, setProjectTab] = useState<'prompts' | 'time'>('prompts');
+  const [projectTab, setProjectTab] = useState<'prompts' | 'time'>('time');
 
   // scope: GLOBAL time range — drives EVERY section on the page. Persisted.
   const [scope, setScope] = useState<Scope>(() => {
@@ -420,10 +420,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
           {isAllProjects && (projectPrompts.length > 0 || projectTimes.length > 0) && (
             <div className="stats-section">
               <div className="stats-section-title">
-                <button type="button" className={`stats-tab${projectTab === 'prompts' ? ' is-active' : ''}`}
-                  onClick={() => setProjectTab('prompts')}>{t('stats.promptsByProject')}</button>
                 <button type="button" className={`stats-tab${projectTab === 'time' ? ' is-active' : ''}`}
                   onClick={() => setProjectTab('time')}>{t('stats.timeByProject')}</button>
+                <button type="button" className={`stats-tab${projectTab === 'prompts' ? ' is-active' : ''}`}
+                  onClick={() => setProjectTab('prompts')}>{t('stats.promptsByProject')}</button>
               </div>
               {projectTab === 'prompts' ? (
                 <div className="stats-project-bars">
