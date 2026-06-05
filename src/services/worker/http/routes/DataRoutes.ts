@@ -137,7 +137,7 @@ export class DataRoutes extends BaseRouteHandler {
     app.get('/api/stats', this.handleGetStats.bind(this));
     app.get('/api/projects', this.handleGetProjects.bind(this));
     app.get('/api/projects/stats', this.handleGetProjectStats.bind(this));
-    app.get('/api/stats/analytics', tokenAuth(this.serverAccessToken, this.adminSessions), this.handleGetAnalytics.bind(this));
+    app.get('/api/stats/analytics', tokenAuth(this.serverAccessToken, this.requireAdminForWrites ? this.adminSessions : undefined), this.handleGetAnalytics.bind(this));
 
     app.get('/api/processing-status', this.handleGetProcessingStatus.bind(this));
     app.post('/api/processing', validateBody(setProcessingSchema), this.handleSetProcessing.bind(this));

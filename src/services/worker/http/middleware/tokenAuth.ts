@@ -27,6 +27,7 @@ export function tokenAuth(serverToken: string, adminSessions?: AdminSessionStore
   const expected = (serverToken ?? '').trim();
   const hasAdminFallback = adminSessions !== undefined;
 
+  // No authenticator configured at all → pass through (standalone / client).
   if (!expected && !hasAdminFallback) {
     return (_req: Request, _res: Response, next: NextFunction): void => next();
   }
