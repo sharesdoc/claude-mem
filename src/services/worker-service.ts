@@ -321,7 +321,8 @@ export class WorkerService implements WorkerRef {
     // and those endpoints stay open (loopback-only by CORS anyway).
     const isServerMode = resolveBindAddress().role === 'server';
     const adminSessions = new AdminSessionStore();
-    this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime, adminSessions, isServerMode));
+    const statsSettings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime, adminSessions, isServerMode, (statsSettings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim()));
     this.server.registerRoutes(new SettingsRoutes(this.settingsManager));
     this.server.registerRoutes(new LogsRoutes());
     this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem'));

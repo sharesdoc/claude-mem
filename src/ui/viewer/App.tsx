@@ -69,16 +69,24 @@ export function App() {
   const { t } = useLocale();
   const role = useRole();
   const auth = useAuth();
-  const { users } = useUsers(role.role === 'server' && role.ready);
-  // Always include the current user in the picker — even before any sync
-  // data arrives, the server operator needs to be able to filter their
-  // own rows.
+  const serverUsers = useUsers(role.role === 'server' && role.ready);
+  // Build user list from SSE data (works in standalone mode too).
+  // Server mode supplements with the /api/users endpoint.
   const pickerUsers = useMemo(() => {
-    if (!role.userLabel) return users;
-    const has = users.some(u => u.user_label === role.userLabel);
-    if (has) return users;
-    return [{ user_label: role.userLabel, sessions: 0, last_active: null }, ...users];
-  }, [users, role.userLabel]);
+    // Collect unique user_labels from observations / summaries / prompts
+    // and the server user list.
+    const seen = new Set(serverUsers.users.map(u => u.user_label));
+    for (const o of observations) { if (o.user_label) seen.add(o.user_label); }
+    for (const s of summaries) { if (s.user_label) seen.add(s.user_label); }
+    for (const p of prompts) { if (p.user_label) seen.add(p.user_label); }
+    // Also include the operator's own label
+    if (role.userLabel) seen.add(role.userLabel);
+    return Array.from(seen).sort().map(label => ({
+      user_label: label,
+      sessions: serverUsers.users.find(u => u.user_label === label)?.sessions ?? 0,
+      last_active: serverUsers.users.find(u => u.user_label === label)?.last_active ?? null,
+    }));
+  }, [serverUsers.users, observations, summaries, prompts, role.userLabel]);
   const { status: syncStatus, ready: syncStatusReady } = useSyncStatus();
 
   // Convert YYYY-MM-DD (local) → half-open [start, end) ms epoch. Local
@@ -299,7 +307,7 @@ export function App() {
             onViewModeChange={setViewMode}
             dateFilter={dateFilter}
             onDateFilterChange={setDateFilter}
-            showUserSelector={role.role === 'server'}
+            showUserSelector={pickerUsers.length > 0}
             deployment={role.deployment}
             users={pickerUsers}
             userLabelFilter={userLabelFilter}

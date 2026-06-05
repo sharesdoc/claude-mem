@@ -15,6 +15,7 @@ import { SSEBroadcaster } from '../../SSEBroadcaster.js';
 import type { WorkerService } from '../../../worker-service.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { AdminSessionStore, extractBearerToken } from '../AdminSessionStore.js';
+import { tokenAuth } from '../middleware/tokenAuth.js';
 import { validateBody } from '../middleware/validateBody.js';
 import { normalizePlatformSource } from '../../../../shared/platform-source.js';
 import { getObservationsByFilePath } from '../../../sqlite/observations/get.js';
@@ -98,7 +99,9 @@ export class DataRoutes extends BaseRouteHandler {
      * standalone mode the flag is false and the gate is skipped entirely.
      */
     private adminSessions: AdminSessionStore,
-    private requireAdminForWrites: boolean
+    private requireAdminForWrites: boolean,
+    /** Server-mode shared access token for /api/stats/analytics; empty = no auth. */
+    private serverAccessToken: string,
   ) {
     super();
   }
@@ -134,7 +137,7 @@ export class DataRoutes extends BaseRouteHandler {
     app.get('/api/stats', this.handleGetStats.bind(this));
     app.get('/api/projects', this.handleGetProjects.bind(this));
     app.get('/api/projects/stats', this.handleGetProjectStats.bind(this));
-    app.get('/api/stats/analytics', this.handleGetAnalytics.bind(this));
+    app.get('/api/stats/analytics', tokenAuth(this.serverAccessToken), this.handleGetAnalytics.bind(this));
 
     app.get('/api/processing-status', this.handleGetProcessingStatus.bind(this));
     app.post('/api/processing', validateBody(setProcessingSchema), this.handleSetProcessing.bind(this));
