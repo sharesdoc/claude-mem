@@ -8,9 +8,9 @@ interface StatsPageProps {
   userLabelFilter?: string | null;
 }
 
-type Scope = 'day' | 'week' | 'month' | 'quarter';
+type Scope = 'day' | 'week' | 'month' | 'quarter' | 'history';
 const SCOPE_KEY = 'claude-mem.statsScope';
-const SCOPES: Scope[] = ['day', 'week', 'month', 'quarter'];
+const SCOPES: Scope[] = ['day', 'week', 'month', 'quarter', 'history'];
 
 const USER_COLORS = [
   '#0969da', '#1a7f37', '#cf222e', '#8250df', '#9a6700',
@@ -329,11 +329,74 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   if (error) {
     return (<div className="feed"><div className="feed-content"><div className="stats-page-error"><span>{t('stats.error')}: {error}</span><button className="stats-page-retry-btn" onClick={() => loadAnalytics()}>{t('stats.retry')}</button></div></div></div>);
   }
-  if (!analytics || (analytics.totalObservations === 0 && analytics.totalSessions === 0)) {
+  if (!analytics || (analytics.totalObservations === 0 && analytics.totalSessions === 0 && scope !== 'history')) {
     return (<div className="feed"><div className="feed-content"><div className="stats-page-loading"><span style={{ color: 'var(--color-text-muted)' }}>{t('stats.noData')}</span></div></div></div>);
   }
 
   const isAllProjects = currentFilter === '';
+
+  // ── History view (scope=history): monthly table ──────────────────
+  if (scope === 'history') {
+    const months = analytics!.historyMonths ?? [];
+    return (
+    <div className="feed">
+      <div className="feed-content">
+        <div className="stats-page">
+
+          <div className="stats-scope-bar">
+            <span className="stats-tabs">
+              {SCOPES.map(s => (
+                <button key={s} type="button"
+                  className={`stats-tab${scope === s ? ' is-active' : ''}`}
+                  onClick={() => changeScope(s)}>
+                  {t(`stats.scope_${s}`)}
+                </button>
+              ))}
+            </span>
+            <span className="stats-scope-title">
+              {t('stats.historyTitle')}
+              {!isAllProjects && `: ${currentFilter}`}
+            </span>
+          </div>
+
+          <div className="stats-section">
+            <div className="stats-user-table-wrap">
+              <table className="stats-user-table" style={{ fontSize: '12px' }}>
+                <thead><tr>
+                  <th>{t('stats.historyMonth')}</th>
+                  <th className="stats-num-col">{t('stats.prompts')}</th>
+                  <th className="stats-num-col">{t('stats.dailyAvgPrompts')}</th>
+                  <th className="stats-num-col">{t('stats.totalTime')}</th>
+                  <th className="stats-num-col">{t('stats.dailyAvgTime')}</th>
+                  <th className="stats-num-col">{t('stats.observations')}</th>
+                  <th className="stats-num-col">{t('stats.summaries')}</th>
+                  <th className="stats-num-col">{t('stats.historySessions')}</th>
+                  <th className="stats-num-col">{t('stats.projects')}</th>
+                </tr></thead>
+                <tbody>
+                  {months.filter(m => m.sessions > 0 || m.prompts > 0).map(m => (
+                    <tr key={m.month}>
+                      <td>{m.month}</td>
+                      <td className="stats-num-col">{formatNumber(m.prompts)}</td>
+                      <td className="stats-num-col">{formatNumber(m.avgPromptsPerDay)}</td>
+                      <td className="stats-num-col">{formatProcessingTime(m.processingMs)}</td>
+                      <td className="stats-num-col">{formatDailyAvg(m.processingMs, m.bizDays)}</td>
+                      <td className="stats-num-col">{formatNumber(m.obs)}</td>
+                      <td className="stats-num-col">{formatNumber(m.summaries)}</td>
+                      <td className="stats-num-col">{formatNumber(m.sessions)}</td>
+                      <td className="stats-num-col">{formatNumber(m.projects)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+    );
+  }
 
   return (
     <div className="feed">

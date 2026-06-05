@@ -649,10 +649,14 @@ export class DataRoutes extends BaseRouteHandler {
     const weekStart = localMidnightToday - (cdow === 0 ? 6 : cdow - 1) * 86400000;
     const monthStart = Date.UTC(cy, cm, 1) - tzOffsetMs;
     const quarterStart = Date.UTC(cy, Math.floor(cm / 3) * 3, 1) - tzOffsetMs;
+    // history: up to 36 calendar months before the current month
+    const historyStart = Date.UTC(cy, cm - 35, 1) - tzOffsetMs;
     const since = scope === 'day' ? localMidnightToday
       : scope === 'week' ? weekStart
       : scope === 'month' ? monthStart
-      : quarterStart;
+      : scope === 'quarter' ? quarterStart
+      : scope === 'history' ? historyStart
+      : monthStart;
 
     // Quarter has ~90 daily buckets → aggregate the charts by week instead.
     const granularity: 'day' | 'week' = scope === 'quarter' ? 'week' : 'day';
@@ -893,6 +897,114 @@ export class DataRoutes extends BaseRouteHandler {
       return `${y}-${m}-${day}`;
     };
 
+    // ── Monthly history (scope=history): 36-month backward aggregation ────
+    // Build YYYY-MM keys for every calendar month in the window, then JOIN
+    // against aggregated prompts/times/projects so months with zero activity
+    // still appear in the table.
+    const historyMonths: Array<{
+      month: string;          // "2024-01"
+      prompts: number;        // total prompt count
+      avgPromptsPerDay: number; // prompts / business days in that month (0 if no activity)
+      processingMs: number;   // total capped AI time (ms)
+      avgTimePerDay: number;  // processingMs / business days
+      obs: number;            // observation count
+      summaries: number;      // session summary count
+      projects: number;       // distinct project count
+      sessions: number;       // distinct session count
+      bizDays: number;        // business days in the month
+    }> = [];
+    if (scope === 'history') {
+      const now = new Date(Date.now() + tzOffsetMs);
+      const endYear = now.getUTCFullYear();
+      const endMonth = now.getUTCMonth(); // 0-indexed
+
+      // Collect monthly aggregate rows from DB.
+      // Month bucket = floor((epoch + tz) / 86400000) then extract year/month via UTC date math.
+      const monthLabels: string[] = [];
+      for (let y = endYear, m = endMonth, i = 0; i < 36; i++) {
+        monthLabels.push(`${y}-${String(m + 1).padStart(2, '0')}`);
+        m--; if (m < 0) { m = 11; y--; }
+      }
+      monthLabels.reverse(); // oldest first
+
+      const monthInfo = (ym: string) => {
+        const [y, m] = ym.split('-').map(Number);
+        const start = Date.UTC(y, m - 1, 1) - tzOffsetMs;
+        const end = Date.UTC(y, m, 1) - tzOffsetMs; // exclusive
+        let bizDays = 0;
+        {
+          const cur = new Date(Date.UTC(y, m - 1, 1));
+          const stop = new Date(Date.UTC(y, m, 1));
+          while (cur < stop) {
+            const d = cur.getUTCDay();
+            if (d !== 0 && d !== 6) bizDays++;
+            cur.setUTCDate(cur.getUTCDate() + 1);
+          }
+        }
+        if (bizDays === 0) bizDays = 1;
+        const promptsRow = db.prepare(`
+          SELECT COALESCE(COUNT(*), 0) AS n FROM user_prompts up
+          JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+          WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ?
+            AND (? IS NULL OR s.project = ?)
+            AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
+        `).get(start, end, project || null, project || null, userLabel || null, userLabel || null) as { n: number };
+        const obsRow = db.prepare(`
+          SELECT COALESCE(COUNT(*), 0) AS n FROM observations o
+          LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
+          WHERE o.created_at_epoch >= ? AND o.created_at_epoch < ?
+            AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
+            AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
+        `).get(start, end, project || null, project || null, userLabel || null, userLabel || null) as { n: number };
+        const summsRow = db.prepare(`
+          SELECT COALESCE(COUNT(*), 0) AS n FROM session_summaries ss
+          LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
+          WHERE ss.created_at_epoch >= ? AND ss.created_at_epoch < ?
+            AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?)
+            AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
+        `).get(start, end, project || null, project || null, userLabel || null, userLabel || null) as { n: number };
+        const timeRow = db.prepare(`
+          SELECT COALESCE(SUM(MIN(next_ts - ts, ?)), 0) AS total_ms FROM (
+            SELECT up.created_at_epoch AS ts,
+                   LEAD(up.created_at_epoch) OVER (PARTITION BY up.content_session_id ORDER BY up.created_at_epoch) AS next_ts
+            FROM user_prompts up JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+            WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ?
+              AND (? IS NULL OR s.project = ?)
+              AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
+          ) WHERE next_ts IS NOT NULL
+        `).get(PROCESSING_CAP_MS, start, end, project || null, project || null, userLabel || null, userLabel || null) as { total_ms: number };
+        const projRow = db.prepare(`
+          SELECT COUNT(DISTINCT project) AS n FROM sdk_sessions
+          WHERE started_at_epoch >= ? AND started_at_epoch < ?
+            AND (? IS NULL OR project = ?)
+            AND (? IS NULL OR user_label = ? COLLATE NOCASE)
+        `).get(start, end, project || null, project || null, userLabel || null, userLabel || null) as { n: number };
+        const sessRow = db.prepare(`
+          SELECT COUNT(*) AS n FROM sdk_sessions
+          WHERE started_at_epoch >= ? AND started_at_epoch < ?
+            AND (? IS NULL OR project = ?)
+            AND (? IS NULL OR user_label = ? COLLATE NOCASE)
+        `).get(start, end, project || null, project || null, userLabel || null, userLabel || null) as { n: number };
+
+        return {
+          month: ym,
+          prompts: promptsRow.n,
+          avgPromptsPerDay: Math.round(promptsRow.n / bizDays),
+          processingMs: timeRow.total_ms,
+          avgTimePerDay: Math.round(timeRow.total_ms / bizDays),
+          obs: obsRow.n,
+          summaries: summsRow.n,
+          projects: projRow.n,
+          sessions: sessRow.n,
+          bizDays,
+        };
+      };
+
+      for (const ym of monthLabels) {
+        historyMonths.push(monthInfo(ym));
+      }
+    }
+
     const formatPoints = (rows: Array<{ day_bucket: number; user_label: string; count: number }>) =>
       rows.map(r => ({ day: formatDay(r.day_bucket), user_label: r.user_label, count: r.count }));
 
@@ -970,6 +1082,7 @@ export class DataRoutes extends BaseRouteHandler {
       summaryBusinessDays,
       granularity,
       chartBuckets,
+      historyMonths,
     });
   });
 
