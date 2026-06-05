@@ -14,8 +14,6 @@ const USER_COLORS = [
 ];
 
 // Current month (backend default), or explicit days
-const DEFAULT_DAYS = 0; // 0 → backend uses month start
-
 /** Count business days (Mon-Fri) between two date strings (inclusive). */
 function countBusinessDays(startDay: string, endDay: string): number {
   if (!startDay || !endDay) return 0;
@@ -175,8 +173,11 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     setHiddenUsers(prev => { const n = new Set(prev); if (n.has(user)) n.delete(user); else n.add(user); return n; });
   }, []);
 
-  // ── Tab state for project rankings ───────────────────────────────
+  // ── Tab state ────────────────────────────────────────────────────
   const [projectTab, setProjectTab] = useState<'prompts' | 'time'>('prompts');
+  const [timeScope, setTimeScope] = useState<'day' | 'week' | 'month'>('day');
+
+  const timeScopeDays: Record<typeof timeScope, number> = { day: 1, week: 7, month: 0 };
 
   /**
    * Fetch analytics from the backend. Aborts in-flight requests when
@@ -188,7 +189,8 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     const controller = new AbortController();
     try {
       const params = new URLSearchParams();
-      if (DEFAULT_DAYS > 0) params.set('days', String(DEFAULT_DAYS));
+      const d = timeScopeDays[timeScope];
+      if (d > 0) params.set('days', String(d));
       if (currentFilter) params.set('project', currentFilter);
       if (userLabelFilter) params.set('userLabel', userLabelFilter);
       const resp = await authFetch(`/api/stats/analytics?${params}`, { signal: controller.signal });
@@ -202,7 +204,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       setLoading(false);
     }
     return () => controller.abort();
-  }, [currentFilter, userLabelFilter]);
+  }, [currentFilter, userLabelFilter, timeScope]);
 
   useEffect(() => {
     const ctrl = loadAnalytics();
@@ -361,7 +363,18 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
 
           {userSummary.length > 0 && (
             <div className="stats-section">
-              <div className="stats-section-title">{t('stats.userSummary')}</div>
+              <div className="stats-section-title">
+                <span>{t('stats.userSummary')}</span>
+                <span className="stats-tabs">
+                  {(['day','week','month'] as const).map(s => (
+                    <button key={s} type="button"
+                      className={`stats-tab${timeScope === s ? ' is-active' : ''}`}
+                      onClick={() => setTimeScope(s)}>
+                      {t(`stats.scope_${s}`)}
+                    </button>
+                  ))}
+                </span>
+              </div>
               <div className="stats-user-table-wrap">
                 <table className="stats-user-table">
                   <thead><tr>
