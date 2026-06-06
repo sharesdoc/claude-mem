@@ -302,16 +302,16 @@ export function ProjectSidebar({
       if (p.user_label) liveUsers.set(p.project, p.user_label.toUpperCase());
     }
 
-    // User resolution priority (all paths normalised to lowercase):
-    //   1. live SSE data (observations/summaries/prompts with user_label)
-    //   2. server-authoritative projectUsers map (from initial_load / API)
+    // User resolution priority (all paths normalised to uppercase):
+    //   1. server-authoritative projectUsers (from DB, survives rename)
+    //   2. live SSE data (observations/summaries/prompts with user_label)
     //   3. legacy path-based extraction
     //   4. empty string → "unknown" group
     const resolveUser = (project: string): string => {
-      const live = liveUsers.get(project);
-      if (live) return live;
       const fromServer = projectUsers?.[project];
       if (fromServer && fromServer.trim()) return fromServer.trim().toUpperCase();
+      const live = liveUsers.get(project);
+      if (live) return live;
       return (parseProjectId(project)?.username ?? '').toUpperCase();
     };
     const byUser = new Map<string, ProjectGroup>();
