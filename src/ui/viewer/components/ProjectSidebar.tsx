@@ -69,7 +69,7 @@ interface DeleteResponse {
 const STORAGE_KEY = 'claude-mem.sidebarRatio';
 const MIN_WIDTH = 160;
 const MAX_RATIO = 0.50;
-const DEFAULT_RATIO = 0.20;
+const DEFAULT_RATIO = 0.382;
 
 const TOAST_DURATION_MS = 5000;
 
