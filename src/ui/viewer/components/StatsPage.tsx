@@ -333,10 +333,12 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   if (error) {
     return (<div className="feed"><div className="feed-content"><div className="stats-page-error"><span>{t('stats.error')}: {error}</span><button className="stats-page-retry-btn" onClick={() => loadAnalytics()}>{t('stats.retry')}</button></div></div></div>);
   }
-  if (!analytics || (analytics.totalObservations === 0 && analytics.totalSessions === 0 && scope !== 'history')) {
-    return (<div className="feed"><div className="feed-content"><div className="stats-page-loading"><span style={{ color: 'var(--color-text-muted)' }}>{t('stats.noData')}</span></div></div></div>);
-  }
+  // Always show the page with scope buttons so the user can switch views.
+  // Show "no data" banner below the scope bar when truly empty.
+  const isEmpty = !analytics || (analytics.totalObservations === 0 && analytics.totalSessions === 0);
 
+  // Safety: never crash even if analytics is null (shouldn't happen after loading resolves)
+  const a = analytics ?? {} as AnalyticsResponse;
   const isAllProjects = currentFilter === '';
 
   // ── History view (scope=history): monthly table ──────────────────
@@ -422,8 +424,12 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
             </span>
           </div>
 
+          {isEmpty && (
+            <div className="stats-no-data-banner">{t('stats.noData')}</div>
+          )}
+
           <div className="stats-summary-grid">
-            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalObservations)}</div><div className="stats-summary-label">{t('stats.totalObservations')}</div></div>
+            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalObservations || 0)}</div><div className="stats-summary-label">{t('stats.totalObservations')}</div></div>
             <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalSessions)}</div><div className="stats-summary-label">{t('stats.totalSessions')}</div></div>
             <div className="stats-summary-card is-highlight"><div className="stats-summary-value">{formatNumber(userSummary.reduce((s, u) => s + u.prompts, 0))}</div><div className="stats-summary-label">{t('stats.totalPrompts')}</div></div>
             <div className="stats-summary-card is-highlight-green"><div className="stats-summary-value">{formatNumber(Math.round(userSummary.reduce((s, u) => s + u.prompts, 0) / Math.max(userSummary.length, 1)))}</div><div className="stats-summary-label">{t('stats.avgPromptsPerUser')}</div></div>
