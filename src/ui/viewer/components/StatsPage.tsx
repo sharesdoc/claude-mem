@@ -335,10 +335,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   }
   // Always show the page with scope buttons so the user can switch views.
   // Show "no data" banner below the scope bar when truly empty.
-  const isEmpty = !analytics || (analytics.totalObservations === 0 && analytics.totalSessions === 0);
-
   // Safety: never crash even if analytics is null (shouldn't happen after loading resolves)
   const a = analytics ?? {} as AnalyticsResponse;
+  const isEmpty = (a.totalObservations ?? 0) === 0 && (a.totalSessions ?? 0) === 0;
   const isAllProjects = currentFilter === '';
 
   // ── History view (scope=history): monthly table ──────────────────
@@ -429,13 +428,13 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
           )}
 
           <div className="stats-summary-grid">
-            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalObservations || 0)}</div><div className="stats-summary-label">{t('stats.totalObservations')}</div></div>
-            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalSessions)}</div><div className="stats-summary-label">{t('stats.totalSessions')}</div></div>
+            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(a.totalObservations || 0)}</div><div className="stats-summary-label">{t('stats.totalObservations')}</div></div>
+            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(a.totalSessions)}</div><div className="stats-summary-label">{t('stats.totalSessions')}</div></div>
             <div className="stats-summary-card is-highlight"><div className="stats-summary-value">{formatNumber(userSummary.reduce((s, u) => s + u.prompts, 0))}</div><div className="stats-summary-label">{t('stats.totalPrompts')}</div></div>
             <div className="stats-summary-card is-highlight-green"><div className="stats-summary-value">{formatNumber(Math.round(userSummary.reduce((s, u) => s + u.prompts, 0) / Math.max(userSummary.length, 1)))}</div><div className="stats-summary-label">{t('stats.avgPromptsPerUser')}</div></div>
             <div className="stats-summary-card is-highlight"><div className="stats-summary-value">{formatProcessingTime(userSummary.reduce((s, u) => s + u.processingMs, 0))}</div><div className="stats-summary-label">{t('stats.totalProcessingTime')}</div></div>
             <div className="stats-summary-card is-highlight-green"><div className="stats-summary-value">{formatProcessingTime(Math.round(userSummary.reduce((s, u) => s + u.processingMs, 0) / Math.max(userSummary.length, 1)))}</div><div className="stats-summary-label">{t('stats.avgTimePerUser')}</div></div>
-            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(analytics.totalDiscoveryTokens)}</div><div className="stats-summary-label">{t('stats.totalTokens')}</div></div>
+            <div className="stats-summary-card"><div className="stats-summary-value">{formatNumber(a.totalDiscoveryTokens)}</div><div className="stats-summary-label">{t('stats.totalTokens')}</div></div>
           </div>
 
           {/* Daily per-user line charts — works for both All Projects and single project (backend scopes by ?project=) */}
@@ -446,13 +445,13 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                   svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
                   lineChartRef={lineChartRef}
                   formatY={v => { if (v < 60000) return `${Math.round(v/1000)}s`; if (v < 3600000) return `${Math.round(v/60000)}m`; return `${(v/3600000).toFixed(1)}h`; }}
-                  allDays={analytics.chartBuckets ?? []}
+                  allDays={a.chartBuckets ?? []}
                   formatDayLabel={formatDayLabel}
                   hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={true} />
                 <LineChart title={t('stats.dailyPromptsByUser')} series={userSeries}
                   svgW={svgW} svgH={svgH} svgPadding={svgPadding} plotW={plotW} plotH={plotH}
                   formatY={v => String(v)}
-                  allDays={analytics.chartBuckets ?? []}
+                  allDays={a.chartBuckets ?? []}
                   formatDayLabel={formatDayLabel}
                   hiddenUsers={hiddenUsers} onToggleUser={toggleHiddenUser} showLegend={false} />
               </div>
