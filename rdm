@@ -165,6 +165,9 @@ npm run build-and-sync 会执行：build -> 同步到 marketplace -> 重启 work
 
 
 from 37d24944af5f4afaa0de2b0bd0034bb432f2b714 of https://github.com/thedotmack/claude-mem.git
+
+gco .; gpl; ./auto-build-all; ./install-claude-mem -r both
+
 ./auto-build-all; ./install-claude-mem -r both
 
 
