@@ -143,6 +143,17 @@ if (!ROOT) process.exit(0);
 
 ensurePluginDependencies(ROOT);
 
+// When running from a local dev project (CLAUDE_PLUGIN_ROOT is set),
+// the .install-version marker will never exist because:
+//   1. It is only written by `npx claude-mem@latest install` into the
+//      marketplace cache directory (~/.claude/plugins/cache/...).
+//   2. It is git-ignored, so it is intentionally absent from source.
+// Skip the marker check to avoid the cosmetic "runtime not yet set up"
+// hint on every Claude Code launch during local development.
+if (process.env.CLAUDE_PLUGIN_ROOT) {
+  process.exit(0);
+}
+
 function emitUpgradeHint(message) {
   if (process.env.CLAUDE_MEM_CODEX_HOOK === '1') {
     console.log(JSON.stringify({
