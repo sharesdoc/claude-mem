@@ -53,7 +53,11 @@ function formatProcessingTime(ms: number): string {
 function formatDailyAvg(ms: number, days: number): string {
   if (ms <= 0 || days <= 0) return '-';
   const avgMin = ms / days / 60000;
-  return `${Math.round(avgMin)}m/d`;
+  if (avgMin < 60) return `${Math.round(avgMin)}m/d`;
+  const h = Math.floor(avgMin / 60);
+  const m = Math.round(avgMin % 60);
+  if (m === 0) return `${h}h/d`;
+  return `${h}h${m}m/d`;
 }
 
 /* ── LineChart: reusable SVG line chart ───────────────────────────── */
