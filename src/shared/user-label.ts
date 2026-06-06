@@ -6,7 +6,7 @@ import { getOsUserName } from './os-user.js';
 import { paths } from './paths.js';
 import { logger } from '../utils/logger.js';
 
-const SAFE_CHARS = /^[A-Za-z0-9._-]+$/;
+const SAFE_CHARS = /^[A-Za-z0-9._ -]+$/;
 
 /**
  * Resolved user label for this worker process. Cached for the life of the
