@@ -108,13 +108,13 @@ if [[ "$current" == "$newname" ]]; then
 else
   node -e "
     const fs = require('fs');
-    const path = '$SETTINGS_FILE';
+    const file = process.argv[1];
+    const label = process.argv[2];
     let raw = {};
-    try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch(e) {}
-    raw.CLAUDE_MEM_USER_LABEL = '$newname';
-    fs.writeFileSync(path, JSON.stringify(raw, null, 2) + '\n');
-    console.log('updated');
-  "
+    try { raw = JSON.parse(fs.readFileSync(file, 'utf-8')); } catch(e) {}
+    raw.CLAUDE_MEM_USER_LABEL = label;
+    fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n');
+  " "$SETTINGS_FILE" "$newname"
   ok "Settings updated: CLAUDE_MEM_USER_LABEL = '$newname'"
 fi
 
