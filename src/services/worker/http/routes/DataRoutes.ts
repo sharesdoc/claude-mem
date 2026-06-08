@@ -975,7 +975,7 @@ export class DataRoutes extends BaseRouteHandler {
         const obsRows = db.prepare(`
           SELECT ${RESOLVE_USER} AS user_label, COUNT(*) AS n
           FROM observations o
-          LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
+          JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
           WHERE o.created_at_epoch >= ? AND o.created_at_epoch < ?
             AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
             AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
@@ -986,7 +986,7 @@ export class DataRoutes extends BaseRouteHandler {
         const summsRows = db.prepare(`
           SELECT ${RESOLVE_USER} AS user_label, COUNT(*) AS n
           FROM session_summaries ss
-          LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
+          JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
           WHERE ss.created_at_epoch >= ? AND ss.created_at_epoch < ?
             AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?)
             AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
