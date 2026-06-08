@@ -12,7 +12,7 @@ set -euo pipefail
 #                    old sessions keep the old label.  Both labels appear in the viewer.
 #   -d / --database  Changes settings.json AND updates sdk_sessions.user_label in
 #                    the SQLite database.  All historical data moves to the new label.
-#                    Run this only when the worker is STOPPED.
+#                    Auto-stops/restarts the worker to prevent gaps.
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; RESET=$'\033[0m'
 
@@ -33,7 +33,7 @@ Options:
                    Old sessions keep the old label (seen in viewer dropdown).
   -d, --database   Update settings.json AND the SQLite database.
                    ALL historical data moves to the new label.
-                   ⚠️  Run this when the worker is STOPPED.
+                   Auto-stops/restarts the worker to avoid gaps.
 
 Examples:
   ./scripts/rename-label.sh -n johnson JOHNSON
@@ -78,10 +78,16 @@ if [[ -z "$mode" || -z "$oldname" || -z "$newname" ]]; then
   exit 1
 fi
 
+# Escape single quotes for SQLite (SQL standard: '' → literal single quote)
+sql_escape() { echo "$1" | sed "s/'/''/g"; }
+
 # Normalise to lowercase for equality checks, but preserve original case for
 # the DB query (COLLATE NOCASE handles it) and settings write (exact new name).
 OLD_LOWER="$(echo "$oldname" | tr '[:upper:]' '[:lower:]')"
 NEW_LOWER="$(echo "$newname" | tr '[:upper:]' '[:lower:]')"
+
+OLD_SQL="$(sql_escape "$oldname")"
+NEW_SQL="$(sql_escape "$newname")"
 
 if [[ "$OLD_LOWER" == "$NEW_LOWER" ]]; then
   warn "Old and new label differ only in case — renaming case"
@@ -136,17 +142,30 @@ if [[ "$mode" == "database" ]]; then
   fi
 
   # Count affected rows before update
-  before=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM sdk_sessions WHERE user_label='$oldname' COLLATE NOCASE;" 2>/dev/null || echo 0)
+  before=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM sdk_sessions WHERE user_label='${OLD_SQL}' COLLATE NOCASE;" 2>/dev/null || echo 0)
   if [[ "$before" -eq 0 ]]; then
     ok "No sessions with label '$oldname' (case-insensitive) in database — nothing to migrate"
   else
-    sqlite3 "$DB_FILE" "UPDATE sdk_sessions SET user_label='$newname' WHERE user_label='$oldname' COLLATE NOCASE;"
-    ok "Migrated ${before} session(s) from '$oldname' (case-insensitive) → '$newname'"
-  fi
+    # Stop worker to prevent new sessions with old label during the rename window
+    WORKER_SCRIPT="$(dirname "$0")/plugin/scripts/worker-service.cjs"
+    if [[ -f "$WORKER_SCRIPT" ]]; then
+      echo ""
+      echo "  Stopping worker …"
+      bun "$WORKER_SCRIPT" stop 2>/dev/null || true
+      sleep 1
+    fi
 
-  echo ""
-  warn "Database updated.  Restart the worker to apply changes:"
-  echo "    bun plugin/scripts/worker-service.cjs restart"
+    sqlite3 "$DB_FILE" "UPDATE sdk_sessions SET user_label='${NEW_SQL}' WHERE user_label='${OLD_SQL}' COLLATE NOCASE;"
+    ok "Migrated ${before} session(s) from '$oldname' (case-insensitive) → '$newname'"
+
+    # Restart worker so new sessions use the new label immediately
+    if [[ -f "$WORKER_SCRIPT" ]]; then
+      echo ""
+      echo "  Restarting worker …"
+      bun "$WORKER_SCRIPT" start 2>/dev/null || true
+      ok "Worker restarted — new sessions will use '$newname'"
+    fi
+  fi
 fi
 
 echo ""
