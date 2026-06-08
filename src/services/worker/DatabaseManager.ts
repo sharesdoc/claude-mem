@@ -16,7 +16,8 @@ export class DatabaseManager {
 
   async initialize(): Promise<void> {
     this.db = new Database(DB_PATH);
-    
+    this.db.run('PRAGMA foreign_keys = ON');
+
     this.sessionStore = new SessionStore(this.db);
     this.sessionSearch = new SessionSearch(this.db);
 
