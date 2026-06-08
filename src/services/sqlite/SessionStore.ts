@@ -176,12 +176,13 @@ export class SessionStore {
     `).run();
     logger.debug('DB', `Backfilled observations.user_label from sdk_sessions: ${obsBackfilled.changes} rows`);
 
-    // ── Backfill orphans: match by project (any session for same project) ──
+    // ── Backfill orphans: match by project, prefer most recent session ──
     const orphanBackfilled = this.db.prepare(`
       UPDATE observations SET user_label = (
         SELECT s.user_label FROM sdk_sessions s
         WHERE s.project = observations.project
           AND s.user_label IS NOT NULL AND s.user_label != ''
+        ORDER BY s.started_at_epoch DESC
         LIMIT 1
       )
       WHERE user_label = ''
@@ -206,12 +207,13 @@ export class SessionStore {
         SELECT s.user_label FROM sdk_sessions s
         WHERE s.project = session_summaries.project
           AND s.user_label IS NOT NULL AND s.user_label != ''
+        ORDER BY s.started_at_epoch DESC
         LIMIT 1
       )
       WHERE user_label = ''
         AND project IN (SELECT project FROM sdk_sessions)
     `).run();
-    logger.debug('DB', `Backfilled orphan session_summaries.user_label by project+time: ${sumOrphanBackfilled.changes} rows`);
+    logger.debug('DB', `Backfilled orphan session_summaries.user_label by project: ${sumOrphanBackfilled.changes} rows`);
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(39, new Date().toISOString());
   }

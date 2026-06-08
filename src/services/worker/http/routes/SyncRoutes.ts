@@ -59,6 +59,7 @@ const observationSchema = z.object({
   created_at: z.string(),
   created_at_epoch: z.number().int(),
   content_hash: z.string().nullable(),
+  user_label: z.string().optional(),
 }).passthrough();
 
 const summarySchema = z.object({
@@ -76,6 +77,7 @@ const summarySchema = z.object({
   prompt_number: z.number().int().nullable(),
   created_at: z.string(),
   created_at_epoch: z.number().int(),
+  user_label: z.string().optional(),
 }).passthrough();
 
 const promptSchema = z.object({
@@ -85,6 +87,7 @@ const promptSchema = z.object({
   prompt_text: z.string(),
   created_at: z.string(),
   created_at_epoch: z.number().int(),
+  completed_at_epoch: z.number().int().nullable().optional(),
 }).passthrough();
 
 const syncIngestSchema = z.object({
@@ -321,7 +324,7 @@ export class SyncRoutes extends BaseRouteHandler {
           o.created_at,
           o.created_at_epoch,
           o.content_hash ?? null,
-          (o as any).user_label || p.user_label,
+          (o.user_label || p.user_label),
         );
         recordInbox.run(p.user_label, 'observations', sourceUid, now, o.id);
         applied.observations.inserted++;
@@ -348,7 +351,7 @@ export class SyncRoutes extends BaseRouteHandler {
           s.prompt_number ?? null,
           s.created_at,
           s.created_at_epoch,
-          (s as any).user_label || p.user_label,
+          (s.user_label || p.user_label),
         );
         recordInbox.run(p.user_label, 'session_summaries', sourceUid, now, s.id);
         applied.summaries.inserted++;
