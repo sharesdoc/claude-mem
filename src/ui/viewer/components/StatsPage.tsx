@@ -8,17 +8,18 @@ interface StatsPageProps {
   userLabelFilter?: string | null;
 }
 
-type Scope = 'day' | 'week' | 'month' | 'quarter' | 'history';
+type Scope = '24h' | 'day' | 'week' | 'month' | 'quarter' | 'history';
 const SCOPE_KEY = 'claude-mem.statsScope';
-const SCOPES: Scope[] = ['day', 'week', 'month', 'quarter', 'history'];
+const SCOPES: Scope[] = ['24h', 'day', 'week', 'month', 'quarter', 'history'];
 
 const USER_COLORS = [
   '#0969da', '#1a7f37', '#cf222e', '#8250df', '#9a6700',
   '#0550ae', '#16c60c', '#e74856', '#8e7cbc', '#d4b888',
 ];
 
-/** Map a local YYYY-MM-DD day to its chart bucket key given granularity. */
-function bucketKeyOf(day: string, granularity: 'day' | 'week'): string {
+/** Map a data point ''day'' (bucket label) to its chart bucket key given granularity. */
+function bucketKeyOf(day: string, granularity: 'hour' | 'day' | 'week'): string {
+  if (granularity === 'hour') return day; // "14:00" → as-is
   if (granularity === 'day') return day;
   const [y, m, d] = day.split('-').map(Number);
   const dt = new Date(y, m - 1, d);
@@ -35,8 +36,10 @@ function formatNumber(n: number): string {
   return String(n);
 }
 
-function formatDayLabel(day: string): string {
-  const d = new Date(day + 'T00:00:00');
+function formatDayLabel(bucket: string): string {
+  // Hourly bucket: "14:00"
+  if (bucket.includes(':')) return bucket;
+  const d = new Date(bucket + 'T00:00:00');
   return `${d.getMonth() + 1}/${d.getDate()}`;
 }
 
@@ -187,7 +190,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const [scope, setScope] = useState<Scope>(() => {
     try {
       const s = localStorage.getItem(SCOPE_KEY) as Scope | null;
-      if (s === 'day' || s === 'week' || s === 'month' || s === 'quarter') return s;
+      if (s === '24h' || s === 'day' || s === 'week' || s === 'month' || s === 'quarter') return s;
     } catch {}
     return 'week';
   });
@@ -250,7 +253,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     const users = analytics.uniqueUsers;
     const buckets = analytics.chartBuckets ?? [];
     if (users.length === 0 || buckets.length === 0) return [];
-    const gran = analytics.granularity ?? 'day';
+    const gran = (analytics.granularity ?? 'day') as 'hour' | 'day' | 'week';
     // bucketed: bucketKey -> user -> summed value
     const bucketed = new Map<string, Record<string, number>>();
     for (const pt of (points ?? [])) {

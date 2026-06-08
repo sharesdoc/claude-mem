@@ -639,10 +639,11 @@ export class DataRoutes extends BaseRouteHandler {
     const PROCESSING_CAP_MS = 15 * 60 * 1000; // 15 minutes
 
     // ── Global time scope: drives EVERY section on the page ─────────────
-    // scope = day | week (Mon-start) | month | quarter, in the VIEWER's TZ.
+    // scope = 24h | day | week (Mon-start) | month | quarter, in the VIEWER's TZ.
     // Date.UTC(client Y/M/D) gives client-wall-clock midnight expressed as UTC;
     // subtracting tzOffsetMs converts it to the true UTC epoch of that instant.
     const scope = (req.query.scope as string | undefined) ?? 'week';
+    const is24h = scope === '24h';
     const shiftedNow = new Date(Date.now() + tzOffsetMs);
     const cy = shiftedNow.getUTCFullYear();
     const cm = shiftedNow.getUTCMonth();
@@ -654,7 +655,8 @@ export class DataRoutes extends BaseRouteHandler {
     const quarterStart = Date.UTC(cy, Math.floor(cm / 3) * 3, 1) - tzOffsetMs;
     // history: up to 36 calendar months before the current month
     const historyStart = Date.UTC(cy, cm - 35, 1) - tzOffsetMs;
-    const since = scope === 'day' ? localMidnightToday
+    const since = is24h ? Date.now() - 24 * 3600000
+      : scope === 'day' ? localMidnightToday
       : scope === 'week' ? weekStart
       : scope === 'month' ? monthStart
       : scope === 'quarter' ? quarterStart
@@ -662,16 +664,20 @@ export class DataRoutes extends BaseRouteHandler {
       : monthStart;
 
     // Quarter has ~90 daily buckets → aggregate the charts by week instead.
-    const granularity: 'day' | 'week' = scope === 'quarter' ? 'week' : 'day';
+    // 24h has hourly buckets.
+    const granularity: 'hour' | 'day' | 'week' = is24h ? 'hour'
+      : scope === 'quarter' ? 'week'
+      : 'day';
+    const bucketDivisor = is24h ? 3600000 : 86400000;
 
     const rawUserLabel = req.query.userLabel as string | undefined;
     const userLabel = (typeof rawUserLabel === 'string' && rawUserLabel.trim().length > 0)
       ? rawUserLabel.trim()
       : undefined;
 
-    // ── prompts by user by day (charts: always current month, local TZ) ──
+    // ── prompts by user by bucket (charts: hourly/day-level/weeks) ──
     const promptsByUserByDay = db.prepare(`
-      SELECT ((up.created_at_epoch + ?) / 86400000) AS day_bucket,
+      SELECT CAST((up.created_at_epoch + ?) / ${bucketDivisor} AS INTEGER) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
       FROM user_prompts up
@@ -694,9 +700,9 @@ export class DataRoutes extends BaseRouteHandler {
       ORDER BY count DESC
     `).all(since, userLabel || null, userLabel || null) as Array<{ project: string; count: number }>;
 
-    // ── observations by user by day (charts: month, local TZ) ──────────
+    // ── observations by user by bucket ─────────────────────────────────
     const observationsByUserByDay = db.prepare(`
-      SELECT ((o.created_at_epoch + ?) / 86400000) AS day_bucket,
+      SELECT CAST((o.created_at_epoch + ?) / ${bucketDivisor} AS INTEGER) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
       FROM observations o
@@ -707,9 +713,9 @@ export class DataRoutes extends BaseRouteHandler {
       ORDER BY day_bucket ASC
     `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
-    // ── summaries by user by day (charts: month, local TZ) ─────────────
+    // ── summaries by user by bucket ────────────────────────────────────
     const summariesByUserByDay = db.prepare(`
-      SELECT ((ss.created_at_epoch + ?) / 86400000) AS day_bucket,
+      SELECT CAST((ss.created_at_epoch + ?) / ${bucketDivisor} AS INTEGER) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
       FROM session_summaries ss
@@ -776,11 +782,11 @@ export class DataRoutes extends BaseRouteHandler {
       userProcessingTime[r.user_label] = { totalMs: r.total_ms, sessionCount: r.prompt_count };
     }
 
-    // ── daily processing time by user (chart: month, local TZ, capped) ──
+    // ── processing time by user per bucket (chart, local TZ, capped) ──
     const dailyTimeByUser = db.prepare(`
       SELECT day_bucket, user_label, SUM(MIN(next_ts - ts, ?)) AS total_ms
       FROM (
-        SELECT ((up.created_at_epoch + ?) / 86400000) AS day_bucket,
+        SELECT CAST((up.created_at_epoch + ?) / ${bucketDivisor} AS INTEGER) AS day_bucket,
                COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
                up.created_at_epoch AS ts,
                LEAD(up.created_at_epoch) OVER (
@@ -889,10 +895,15 @@ export class DataRoutes extends BaseRouteHandler {
       ORDER BY total_ms DESC
     `).all(PROCESSING_CAP_MS, since, userLabel || null, userLabel || null) as Array<{ project: string; total_ms: number; session_count: number }>;
 
-    // ── format day_bucket → "YYYY-MM-DD" ───────────────────────────────
-    const formatDay = (bucket: number): string => {
-      // bucket*DAY is local-midnight expressed as UTC (we shifted by tzOffset
-      // when bucketing), so read it back with UTC getters to get the local date.
+    // ── format bucket → label ───────────────────────────────────────────
+    const formatBucket = (bucket: number): string => {
+      if (is24h) {
+        // Hourly bucket: render as "HH:00" in the viewer's local time.
+        const d = new Date(bucket * 3600000);
+        const h = String(d.getUTCHours()).padStart(2, '0');
+        return `${h}:00`;
+      }
+      // Daily bucket: bucket*DAY → local date "YYYY-MM-DD".
       const d = new Date(bucket * 86400000);
       const y = d.getUTCFullYear();
       const m = String(d.getUTCMonth() + 1).padStart(2, '0');
@@ -1009,18 +1020,17 @@ export class DataRoutes extends BaseRouteHandler {
     }
 
     const formatPoints = (rows: Array<{ day_bucket: number; user_label: string; count: number }>) =>
-      rows.map(r => ({ day: formatDay(r.day_bucket), user_label: r.user_label, count: r.count }));
+      rows.map(r => ({ day: formatBucket(r.day_bucket), user_label: r.user_label, count: r.count }));
 
     const formatTimePoints = (rows: Array<{ day_bucket: number; user_label: string; total_ms: number }>) =>
-      rows.map(r => ({ day: formatDay(r.day_bucket), user_label: r.user_label, totalMs: r.total_ms }));
+      rows.map(r => ({ day: formatBucket(r.day_bucket), user_label: r.user_label, totalMs: r.total_ms }));
 
     // ── chartBuckets: ordered, gap-filled X-axis for the charts ─────────
-    // day granularity → each day from `since` to today; week granularity
-    // (quarter) → each Monday. All computed in local time so the frontend
-    // can aggregate daily points into these buckets without TZ drift.
-    // All bucket math is in the VIEWER's TZ: shift the epoch by tzOffsetMs and
-    // read UTC fields, matching the SQL day_bucket / formatDay convention.
-    const fmtLocal = (ms: number): string => formatDay(Math.floor((ms + tzOffsetMs) / 86400000));
+    // Hour granularity → each hour in past 24h. Day granularity → each day
+    // from `since` to today. Week granularity (quarter) → each Monday.
+    const fmtLocal = is24h
+      ? (ms: number): string => formatBucket(Math.floor((ms + tzOffsetMs) / 3600000))
+      : (ms: number): string => formatBucket(Math.floor((ms + tzOffsetMs) / 86400000));
     const mondayOf = (ms: number): number => {
       const shifted = new Date(ms + tzOffsetMs);
       const wd = shifted.getUTCDay();
@@ -1028,7 +1038,14 @@ export class DataRoutes extends BaseRouteHandler {
       return dayStart - (wd === 0 ? 6 : wd - 1) * 86400000;
     };
     const chartBuckets: string[] = [];
-    if (granularity === 'day') {
+    if (granularity === 'hour') {
+      let cur = since;
+      const now = Date.now();
+      while (cur <= now) {
+        chartBuckets.push(fmtLocal(cur));
+        cur += 3600000;
+      }
+    } else if (granularity === 'day') {
       let cur = since;
       while (cur <= localMidnightToday) {
         chartBuckets.push(fmtLocal(cur));

@@ -170,7 +170,7 @@ export interface AnalyticsResponse {
   /** User Summary 范围内的工作日数（用于日均计算）。 */
   summaryBusinessDays: number;
   /** 图表 X 轴粒度：day（当日/本周/本月）或 week（季度按周聚合）。 */
-  granularity: 'day' | 'week';
+  granularity: 'hour' | 'day' | 'week';
   /** 图表 X 轴的有序桶（YYYY-MM-DD，本地时间，已补齐空缺）。 */
   chartBuckets: string[];
   /** 月度历史记录（scope=history 时返回，最多36个月）。 */
