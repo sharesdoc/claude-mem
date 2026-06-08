@@ -1,66 +1,102 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# name-manager — manage claude-mem user labels (list / rename)
+# name-manager — manage claude-mem user labels (list / rename / delete)
 #
 # Usage:
 #   ./name-manager -l                    List all names
-#   ./name-manager -n oldname newname    Rename settings only
-#   ./name-manager -d oldname newname    Rename settings + database
-#
-# Mode comparison:
-#   -l / --list       List all user names managed by claude-mem across all records.
-#   -n / --name       Only changes settings.json.  New sessions use the new label;
-#                     old sessions keep the old label.  Both labels appear in the viewer.
-#   -d / --database   Changes settings.json AND updates sdk_sessions.user_label in
-#                     the SQLite database.  All historical data moves to the new label.
-#                     Auto-stops/restarts the worker to prevent gaps.
+#   ./name-manager -r oldname newname    Rename user (settings + database)
+#   ./name-manager -d username           Delete all records for a user
+#   ./name-manager -h                    Show help
 
-RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; RESET=$'\033[0m'
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
+BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
 
 ok()   { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
 fail() { printf "  ${RED}✗${RESET} %s\n" "$1"; }
 warn() { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
+info() { printf "  ${DIM}→${RESET} %s\n" "$1"; }
 
 show_help() {
   cat <<EOF
-name-manager — manage claude-mem user labels (list / rename)
+name-manager — manage claude-mem user labels (list / rename / delete)
 
 Usage:
   ./name-manager -l                        List all names
-  ./name-manager -n <oldname> <newname>    Rename settings only
-  ./name-manager -d <oldname> <newname>    Rename settings + database
+  ./name-manager -r <oldname> <newname>    Rename user (settings + database)
+  ./name-manager -d <username>             Delete ALL records for a user
 
 Options:
   -l, --list       List all user names in the database with record counts.
-  -n, --name       Update only ~/.claude-mem/settings.json.
-                   Old sessions keep the old label (seen in viewer dropdown).
-  -d, --database   Update settings.json AND the SQLite database.
+  -r, --rename     Rename a user label in settings.json AND the SQLite database.
                    ALL historical data moves to the new label.
                    Auto-stops/restarts the worker to avoid gaps.
+  -d, --delete     Permanently delete all records belonging to a user.
+                   Includes sessions, observations, prompts, summaries, and
+                   pending messages. Requires typed confirmation.
+  -h, --help       Show this help.
 
 Examples:
   ./name-manager -l
-  ./name-manager -n johnson JOHNSON
-  ./name-manager -d alice Alice-Work
+  ./name-manager -r alice Alice-Work
+  ./name-manager -d zhangsan
+  ./name-manager -d "Z. Johnson"
 EOF
 }
 
 # ── Resolve paths ──────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DATA_DIR="${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}"
 SETTINGS_FILE="$DATA_DIR/settings.json"
 DB_FILE="$DATA_DIR/claude-mem.db"
 
+# ── Worker helpers ─────────────────────────────────────────────────────
+stop_worker() {
+  local pids
+  pids=$(pgrep -f "worker-service.cjs" 2>/dev/null || true)
+  if [[ -n "$pids" ]]; then
+    info "Stopping worker (PID: $pids)..."
+    kill $pids 2>/dev/null || true
+    sleep 1
+    # Verify it stopped
+    local port="${CLAUDE_MEM_WORKER_PORT:-$((37700 + $(id -u) % 100))}"
+    local waited=0
+    while curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 1 --max-time 2 2>/dev/null; do
+      sleep 1
+      waited=$((waited + 1))
+      if [[ $waited -ge 10 ]]; then
+        warn "Worker did not stop gracefully — forcefully killing"
+        pkill -9 -f "worker-service.cjs" 2>/dev/null || true
+        sleep 1
+        break
+      fi
+    done
+    ok "Worker stopped"
+  fi
+}
+
+start_worker() {
+  local workdir="${SCRIPT_DIR}"
+  if [[ -f "$workdir/plugin/scripts/worker-service.cjs" ]]; then
+    info "Starting worker..."
+    cd "$workdir" && bun plugin/scripts/worker-service.cjs start 2>/dev/null || true
+    ok "Worker started"
+  fi
+}
+
+# Escape single quotes for SQLite (SQL standard: '' → literal single quote)
+sql_escape() { echo "$1" | sed "s/'/''/g"; }
+
+# ── Parse args ─────────────────────────────────────────────────────────
 mode=""
 oldname=""
 newname=""
 
-# ── Parse args ─────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -l|--list)     mode="list"; shift ;;
-    -n|--name)     mode="name"; shift ;;
-    -d|--database) mode="database"; shift ;;
+    -r|--rename)   mode="rename"; shift ;;
+    -d|--delete)   mode="delete"; shift ;;
     -h|--help)     show_help; exit 0 ;;
     -*)
       fail "Unknown flag: $1"
@@ -68,8 +104,12 @@ while [[ $# -gt 0 ]]; do
       exit 1
       ;;
     *)
-      if [[ -z "$oldname" ]]; then oldname="$1";
-      elif [[ -z "$newname" ]]; then newname="$1";
+      if [[ "$mode" == "delete" ]]; then
+        newname="$1"
+      elif [[ -z "$oldname" ]]; then
+        oldname="$1"
+      elif [[ -z "$newname" ]]; then
+        newname="$1"
       else
         fail "Too many arguments"; show_help; exit 1
       fi
@@ -78,7 +118,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ── -l / --list: dump all names with record counts ───────────────────
+# ── -l / --list: dump all names with record counts ─────────────────────
 if [[ "$mode" == "list" ]]; then
   if [[ ! -f "$DB_FILE" ]]; then
     fail "Database not found: $DB_FILE"
@@ -114,101 +154,193 @@ if [[ "$mode" == "list" ]]; then
   exit 0
 fi
 
-if [[ -z "$mode" || -z "$oldname" || -z "$newname" ]]; then
-  fail "Missing required arguments"
-  show_help
-  exit 1
-fi
+# ── -r / --rename: rename user label (settings + database) ─────────────
+if [[ "$mode" == "rename" ]]; then
+  if [[ -z "$oldname" || -z "$newname" ]]; then
+    fail "Missing arguments: -r <oldname> <newname>"
+    show_help
+    exit 1
+  fi
 
-# Escape single quotes for SQLite (SQL standard: '' → literal single quote)
-sql_escape() { echo "$1" | sed "s/'/''/g"; }
+  OLD_LOWER="$(echo "$oldname" | tr '[:upper:]' '[:lower:]')"
+  NEW_LOWER="$(echo "$newname" | tr '[:upper:]' '[:lower:]')"
+  OLD_SQL="$(sql_escape "$oldname")"
+  NEW_SQL="$(sql_escape "$newname")"
 
-# Normalise to lowercase for equality checks, but preserve original case for
-# the DB query (COLLATE NOCASE handles it) and settings write (exact new name).
-OLD_LOWER="$(echo "$oldname" | tr '[:upper:]' '[:lower:]')"
-NEW_LOWER="$(echo "$newname" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$OLD_LOWER" == "$NEW_LOWER" ]]; then
+    warn "Old and new label differ only in case — renaming case"
+  fi
 
-OLD_SQL="$(sql_escape "$oldname")"
-NEW_SQL="$(sql_escape "$newname")"
+  echo ""
+  echo "  Old label : ${YELLOW}${oldname}${RESET}"
+  echo "  New label : ${GREEN}${newname}${RESET}"
+  echo ""
 
-if [[ "$OLD_LOWER" == "$NEW_LOWER" ]]; then
-  warn "Old and new label differ only in case — renaming case"
-fi
+  # ── 1. Update settings.json ─────────────────────────────────────────
+  if [[ ! -f "$SETTINGS_FILE" ]]; then
+    fail "Settings file not found: $SETTINGS_FILE"
+    exit 1
+  fi
 
-echo ""
-echo "  Old label : ${YELLOW}${oldname}${RESET}"
-echo "  New label : ${GREEN}${newname}${RESET}"
-echo "  Mode      : ${mode}"
-echo ""
+  current=$(node -e "
+    try {
+      const s = require('$SETTINGS_FILE');
+      const v = s.CLAUDE_MEM_USER_LABEL || '';
+      console.log(v);
+    } catch(e) { console.log(''); }
+  " 2>/dev/null || echo "")
 
-# ── 1. Update settings.json ───────────────────────────────────────────
-if [[ ! -f "$SETTINGS_FILE" ]]; then
-  fail "Settings file not found: $SETTINGS_FILE"
-  exit 1
-fi
+  if [[ "$(echo "$current" | tr '[:upper:]' '[:lower:]')" == "$NEW_LOWER" ]]; then
+    ok "Settings already set to '$newname' (case-insensitive)"
+  else
+    node -e "
+      const fs = require('fs');
+      const file = process.argv[1];
+      const label = process.argv[2];
+      let raw = {};
+      try { raw = JSON.parse(fs.readFileSync(file, 'utf-8')); } catch(e) {}
+      raw.CLAUDE_MEM_USER_LABEL = label;
+      fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n');
+    " "$SETTINGS_FILE" "$newname"
+    ok "Settings updated: CLAUDE_MEM_USER_LABEL = '$newname'"
+  fi
 
-current=$(node -e "
-  try {
-    const s = require('$SETTINGS_FILE');
-    const v = s.CLAUDE_MEM_USER_LABEL || '';
-    console.log(v);
-  } catch(e) { console.log(''); }
-" 2>/dev/null || echo "")
-
-if [[ "$(echo "$current" | tr '[:upper:]' '[:lower:]')" == "$NEW_LOWER" ]]; then
-  ok "Settings already set to '$newname' (case-insensitive)"
-else
-  node -e "
-    const fs = require('fs');
-    const file = process.argv[1];
-    const label = process.argv[2];
-    let raw = {};
-    try { raw = JSON.parse(fs.readFileSync(file, 'utf-8')); } catch(e) {}
-    raw.CLAUDE_MEM_USER_LABEL = label;
-    fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n');
-  " "$SETTINGS_FILE" "$newname"
-  ok "Settings updated: CLAUDE_MEM_USER_LABEL = '$newname'"
-fi
-
-# ── 2. Database update (--database only) ───────────────────────────────
-if [[ "$mode" == "database" ]]; then
+  # ── 2. Update database ──────────────────────────────────────────────
   if [[ ! -f "$DB_FILE" ]]; then
     fail "Database not found: $DB_FILE"
     exit 1
   fi
 
-  # Check if sqlite3 is available
   if ! command -v sqlite3 &>/dev/null; then
     fail "sqlite3 not found — install it and retry"
     exit 1
   fi
 
-  # Count affected rows before update
   before=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM sdk_sessions WHERE user_label='${OLD_SQL}' COLLATE NOCASE;" 2>/dev/null || echo 0)
   if [[ "$before" -eq 0 ]]; then
     ok "No sessions with label '$oldname' (case-insensitive) in database — nothing to migrate"
   else
-    # Stop worker to prevent new sessions with old label during the rename window
-    WORKER_SCRIPT="$(dirname "$0")/plugin/scripts/worker-service.cjs"
-    if [[ -f "$WORKER_SCRIPT" ]]; then
-      echo ""
-      echo "  Stopping worker …"
-      bun "$WORKER_SCRIPT" stop 2>/dev/null || true
-      sleep 1
-    fi
+    stop_worker
 
     sqlite3 "$DB_FILE" "UPDATE sdk_sessions SET user_label='${NEW_SQL}' WHERE user_label='${OLD_SQL}' COLLATE NOCASE;"
     ok "Migrated ${before} session(s) from '$oldname' (case-insensitive) → '$newname'"
 
-    # Restart worker so new sessions use the new label immediately
-    if [[ -f "$WORKER_SCRIPT" ]]; then
-      echo ""
-      echo "  Restarting worker …"
-      bun "$WORKER_SCRIPT" start 2>/dev/null || true
-      ok "Worker restarted — new sessions will use '$newname'"
-    fi
+    start_worker
   fi
+
+  echo ""
+  ok "Done"
+  exit 0
 fi
 
-echo ""
-ok "Done"
+# ── -d / --delete: delete ALL data for a user ──────────────────────────
+if [[ "$mode" == "delete" ]]; then
+  if [[ -z "$newname" ]]; then
+    fail "Missing username: -d <username>"
+    show_help
+    exit 1
+  fi
+
+  USERNAME="$newname"
+
+  # ── Pre-flight checks ───────────────────────────────────────────────
+  if [[ ! -f "$DB_FILE" ]]; then
+    fail "Database not found at $DB_FILE"
+    exit 1
+  fi
+
+  if ! command -v sqlite3 &>/dev/null; then
+    fail "sqlite3 not found — install it first"
+    exit 1
+  fi
+
+  # ── Look up exact user_label (case-insensitive) ─────────────────────
+  EXACT_LABEL="$(sqlite3 "$DB_FILE" "
+    SELECT user_label FROM sdk_sessions
+    WHERE user_label = '$USERNAME' COLLATE NOCASE
+    LIMIT 1;
+  " 2>/dev/null || true)"
+
+  if [[ -z "$EXACT_LABEL" ]]; then
+    EXACT_LABEL="$(sqlite3 "$DB_FILE" "
+      SELECT user_label FROM sdk_sessions
+      WHERE LOWER(user_label) = LOWER('$USERNAME')
+      LIMIT 1;
+    " 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$EXACT_LABEL" ]]; then
+    warn "No records found for user '${USERNAME}' (case-insensitive match)"
+    info "Available users in database:"
+    sqlite3 "$DB_FILE" "SELECT '    ' || COALESCE(NULLIF(user_label,''), '(empty)') || ' (' || COUNT(*) || ' sessions)' FROM sdk_sessions WHERE user_label IS NOT NULL AND user_label != '' GROUP BY user_label ORDER BY COUNT(*) DESC;" 2>/dev/null || echo "    (none)"
+    exit 0
+  fi
+
+  # ── Count before deleting ────────────────────────────────────────────
+  BEFORE_SESSIONS=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM sdk_sessions WHERE LOWER(user_label) = LOWER('$EXACT_LABEL');")
+  BEFORE_OBS=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM observations o JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+  BEFORE_PROMPTS=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM user_prompts up JOIN sdk_sessions s ON s.content_session_id = up.content_session_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+  BEFORE_SUMMARIES=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM session_summaries ss JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+  BEFORE_PENDING=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM pending_messages pm JOIN sdk_sessions s ON s.id = pm.session_db_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+
+  printf "\n${BOLD}User:${RESET} ${RED}%s${RESET} (exact label in DB)\n" "$EXACT_LABEL"
+  printf "${BOLD}Records to be permanently deleted:${RESET}\n"
+  printf "  sdk_sessions:      ${RED}%s${RESET}\n" "$BEFORE_SESSIONS"
+  printf "  observations:      ${RED}%s${RESET}\n" "$BEFORE_OBS"
+  printf "  user_prompts:      ${RED}%s${RESET}\n" "$BEFORE_PROMPTS"
+  printf "  session_summaries: ${RED}%s${RESET}\n" "$BEFORE_SUMMARIES"
+  printf "  pending_messages:  ${RED}%s${RESET}\n" "$BEFORE_PENDING"
+
+  if [[ "$BEFORE_SESSIONS" == "0" ]]; then
+    warn "No sessions found for this user — nothing to delete."
+    exit 0
+  fi
+
+  # ── Confirmation ─────────────────────────────────────────────────────
+  printf "\n${YELLOW}This action is IRREVERSIBLE. Data will be permanently lost.${RESET}\n"
+  printf "Type ${BOLD}%s${RESET} to confirm: " "$EXACT_LABEL"
+  read -r CONFIRM
+
+  if [[ "$CONFIRM" != "$EXACT_LABEL" ]]; then
+    info "Confirmation did not match — aborting."
+    exit 0
+  fi
+
+  # ── Stop worker ─────────────────────────────────────────────────────
+  stop_worker
+
+  # ── Execute deletion ─────────────────────────────────────────────────
+  printf "\n${BOLD}Deleting...${RESET}\n"
+
+  DELETED_SESSIONS=$(sqlite3 "$DB_FILE" "
+    PRAGMA foreign_keys = ON;
+    DELETE FROM sdk_sessions WHERE LOWER(user_label) = LOWER('$EXACT_LABEL');
+    SELECT CHANGES();
+  ")
+
+  # ── Verify ───────────────────────────────────────────────────────────
+  AFTER_SESSIONS=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM sdk_sessions WHERE LOWER(user_label) = LOWER('$EXACT_LABEL');")
+  AFTER_OBS=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM observations o JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+  AFTER_PROMPTS=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM user_prompts up JOIN sdk_sessions s ON s.content_session_id = up.content_session_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+
+  if [[ "$AFTER_SESSIONS" == "0" && "$AFTER_OBS" == "0" && "$AFTER_PROMPTS" == "0" ]]; then
+    ok "Successfully deleted $DELETED_SESSIONS sessions and all related observations / prompts / summaries for user '$EXACT_LABEL'"
+  else
+    fail "Some records remain — manual cleanup may be needed"
+    printf "  remaining sessions: %s\n" "$AFTER_SESSIONS"
+    printf "  remaining observations: %s\n" "$AFTER_OBS"
+    printf "  remaining prompts: %s\n" "$AFTER_PROMPTS"
+  fi
+
+  # ── Restart worker ───────────────────────────────────────────────────
+  start_worker
+
+  printf "\n${GREEN}Done.${RESET}\n"
+  exit 0
+fi
+
+# ── No mode selected ───────────────────────────────────────────────────
+if [[ -z "$mode" ]]; then
+  show_help
+  exit 0
+fi
