@@ -78,9 +78,9 @@ export function Header({
   // server installs identify themselves; a plain local-only install keeps
   // the generic year branding.
   const logoText =
-    deployment === 'client' ? 'Claude-Mem Client' :
-    deployment === 'server' ? 'Claude-Mem Server' :
-    'Claude-Mem 2026';
+    deployment === 'client' ? 'claude-mem client' :
+    deployment === 'server' ? 'claude-mem server' :
+    'claude-mem';
 
   return (
     <div className="header">
