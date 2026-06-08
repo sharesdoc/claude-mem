@@ -253,6 +253,11 @@ export async function ensureWorkerRunning(): Promise<boolean> {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+    // Give the old worker a moment to release the port before the new one
+    // attempts to bind. The restart endpoint returns immediately (async
+    // shutdown), so without this pause the lazy-spawn below can hit an
+    // EADDRINUSE on the first attempt and need a retry.
+    await new Promise<void>(resolve => setTimeout(resolve, 1500));
     // Fall through to (re)spawn + readiness wait below.
   }
 
