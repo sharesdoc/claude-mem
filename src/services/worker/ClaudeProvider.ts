@@ -390,9 +390,10 @@ export class ClaudeProvider {
         }
 
         if (message.type === 'result' && message.subtype === 'success') {
-          // Capture exact AI processing completion time for stats.
-          // This is the SDK-level signal that replaces the old LEAD()-based estimate.
           const completedAt = Date.now();
+          // Log result message keys once to discover SDK-provided timing fields
+          const keys = Object.keys(message as object).filter(k => k !== 'type' && k !== 'subtype');
+          logger.info('SDK', `Result keys: [${keys.join(', ')}] | prompt#=${session.lastPromptNumber}`);
           this.dbManager.getSessionStore().updatePromptCompletedAt(
             session.contentSessionId,
             session.lastPromptNumber,
