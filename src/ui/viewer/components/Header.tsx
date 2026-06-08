@@ -82,6 +82,11 @@ export function Header({
     deployment === 'server' ? 'claude-mem server' :
     'claude-mem';
 
+  // Sync browser tab title with deployment mode
+  React.useEffect(() => {
+    document.title = logoText;
+  }, [logoText]);
+
   return (
     <div className="header">
       <div className="header-main">
