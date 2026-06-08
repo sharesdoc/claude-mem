@@ -8,16 +8,30 @@ interface PromptCardProps {
   prompt: UserPrompt;
   /** Called with the prompt id after it is deleted from the database. */
   onDeleted?: (id: number) => void;
+  /** When true and prompt has completed_at_epoch, show processing time + duration. */
+  showProcessingTime?: boolean;
 }
 
 const COPIED_DURATION_MS = 2000;
 
-export function PromptCard({ prompt, onDeleted }: PromptCardProps) {
+export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCardProps) {
   const { t } = useLocale();
   const [copied, setCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const date = formatDate(prompt.created_at_epoch);
+
+  const processingInfo = (showProcessingTime && prompt.completed_at_epoch)
+    ? (() => {
+        const durationMs = prompt.completed_at_epoch - prompt.created_at_epoch;
+        if (durationMs < 0) return null;
+        const completedDate = formatDate(prompt.completed_at_epoch);
+        const mins = Math.floor(durationMs / 60000);
+        const secs = Math.round((durationMs % 60000) / 1000);
+        const duration = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+        return { completedDate, duration };
+      })()
+    : null;
 
   const handleDelete = async () => {
     if (deleting) return;
@@ -96,6 +110,11 @@ export function PromptCard({ prompt, onDeleted }: PromptCardProps) {
       <div className="card-meta prompt-meta">
         <span className="meta-date">
           #{prompt.id} • {date}
+          {processingInfo && (
+            <span className="meta-processing-time" title={`AI 处理完成: ${processingInfo.completedDate}`}>
+              {' · '}⏱ {processingInfo.duration}
+            </span>
+          )}
           {prompt.user_label ? (
             <>
               <span className="meta-user-label" title={t('card.userLabelTip')}>  {prompt.user_label}</span>

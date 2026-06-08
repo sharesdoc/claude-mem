@@ -50,6 +50,7 @@ export interface UserPrompt {
   user_name?: string | null;
   user_label?: string | null;
   created_at_epoch: number;
+  completed_at_epoch?: number | null;
   content_hash?: string | null;
 }
 
@@ -112,6 +113,7 @@ export interface Settings {
 
   CLAUDE_MEM_CONTEXT_SHOW_LAST_SUMMARY?: string;
   CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE?: string;
+  CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME?: string;
 }
 
 export interface WorkerStats {

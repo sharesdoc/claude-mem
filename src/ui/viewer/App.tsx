@@ -332,8 +332,9 @@ export function App() {
               onLoadMore={handleLoadMore}
               onPromptDeleted={handlePromptDeleted}
               isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
-            hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore}
-          />
+              hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore}
+              showProcessingTime={settings.CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME !== 'false'}
+            />
           )}
         </div>
       </div>

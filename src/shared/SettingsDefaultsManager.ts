@@ -52,7 +52,9 @@ export interface SettingsDefaults {
   CLAUDE_MEM_TIER_ROUTING_ENABLED: string;   
   CLAUDE_MEM_TIER_SIMPLE_MODEL: string;      
   CLAUDE_MEM_TIER_SUMMARY_MODEL: string;     
-  CLAUDE_MEM_CHROMA_ENABLED: string;   
+  CLAUDE_MEM_CHROMA_ENABLED: string;
+  /** Show AI processing completion time + duration on prompt cards in viewer. */
+  CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME: string; 
   CLAUDE_MEM_CHROMA_MODE: string;      
   CLAUDE_MEM_CHROMA_HOST: string;
   CLAUDE_MEM_CHROMA_PORT: string;
@@ -156,6 +158,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_TIER_SIMPLE_MODEL: 'haiku', // Portable tier alias — works across Direct API, Bedrock, Vertex, Azure (see #1463)
     CLAUDE_MEM_TIER_SUMMARY_MODEL: '',                // Empty = use default model for summaries
     CLAUDE_MEM_CHROMA_ENABLED: 'true',         // Set to 'false' to disable Chroma and use SQLite-only search
+    CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME: 'true', // Show AI processing time + duration on prompt cards
     CLAUDE_MEM_CHROMA_MODE: 'local',           // 'local' uses persistent chroma-mcp via uvx, 'remote' connects to existing server
     CLAUDE_MEM_CHROMA_HOST: '127.0.0.1',
     CLAUDE_MEM_CHROMA_PORT: '8000',

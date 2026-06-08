@@ -143,6 +143,7 @@ export interface UserPrompt {
   user_name?: string | null;
   created_at: string;
   created_at_epoch: number;
+  completed_at_epoch?: number | null;
 }
 
 export interface DBSession {

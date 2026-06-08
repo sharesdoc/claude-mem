@@ -232,8 +232,10 @@ export class PaginationHelper {
         up.prompt_number,
         up.prompt_text,
         s.user_name as user_name,
+        s.user_label as user_label,
         up.created_at,
-        up.created_at_epoch
+        up.created_at_epoch,
+        up.completed_at_epoch
       FROM user_prompts up
       JOIN sdk_sessions s ON up.content_session_id = s.content_session_id
     `;
