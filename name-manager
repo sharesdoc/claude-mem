@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# rename-label — rename claude-mem user label
+# name-manager — manage claude-mem user labels (list / rename)
 #
 # Usage:
-#   ./scripts/rename-label.sh -n oldname newname   # settings only (future sessions)
-#   ./scripts/rename-label.sh -d oldname newname   # settings + database (all history)
+#   ./name-manager -l                    List all names
+#   ./name-manager -n oldname newname    Rename settings only
+#   ./name-manager -d oldname newname    Rename settings + database
 #
 # Mode comparison:
-#   -n / --name      Only changes settings.json.  New sessions use the new label;
-#                    old sessions keep the old label.  Both labels appear in the viewer.
-#   -d / --database  Changes settings.json AND updates sdk_sessions.user_label in
-#                    the SQLite database.  All historical data moves to the new label.
-#                    Auto-stops/restarts the worker to prevent gaps.
+#   -l / --list       List all user names managed by claude-mem across all records.
+#   -n / --name       Only changes settings.json.  New sessions use the new label;
+#                     old sessions keep the old label.  Both labels appear in the viewer.
+#   -d / --database   Changes settings.json AND updates sdk_sessions.user_label in
+#                     the SQLite database.  All historical data moves to the new label.
+#                     Auto-stops/restarts the worker to prevent gaps.
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; RESET=$'\033[0m'
 
@@ -22,13 +24,15 @@ warn() { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
 
 show_help() {
   cat <<EOF
-rename-label — rename claude-mem user label
+name-manager — manage claude-mem user labels (list / rename)
 
 Usage:
-  ./scripts/rename-label.sh -n <oldname> <newname>     settings only
-  ./scripts/rename-label.sh -d <oldname> <newname>     settings + database
+  ./name-manager -l                        List all names
+  ./name-manager -n <oldname> <newname>    Rename settings only
+  ./name-manager -d <oldname> <newname>    Rename settings + database
 
 Options:
+  -l, --list       List all user names in the database with record counts.
   -n, --name       Update only ~/.claude-mem/settings.json.
                    Old sessions keep the old label (seen in viewer dropdown).
   -d, --database   Update settings.json AND the SQLite database.
@@ -36,8 +40,9 @@ Options:
                    Auto-stops/restarts the worker to avoid gaps.
 
 Examples:
-  ./scripts/rename-label.sh -n johnson JOHNSON
-  ./scripts/rename-label.sh -d alice Alice-Work
+  ./name-manager -l
+  ./name-manager -n johnson JOHNSON
+  ./name-manager -d alice Alice-Work
 EOF
 }
 
@@ -53,6 +58,7 @@ newname=""
 # ── Parse args ─────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    -l|--list)     mode="list"; shift ;;
     -n|--name)     mode="name"; shift ;;
     -d|--database) mode="database"; shift ;;
     -h|--help)     show_help; exit 0 ;;
@@ -71,6 +77,42 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+# ── -l / --list: dump all names with record counts ───────────────────
+if [[ "$mode" == "list" ]]; then
+  if [[ ! -f "$DB_FILE" ]]; then
+    fail "Database not found: $DB_FILE"
+    exit 1
+  fi
+  if ! command -v sqlite3 &>/dev/null; then
+    fail "sqlite3 not found"
+    exit 1
+  fi
+
+  echo ""
+  printf "  %-24s %10s %10s %10s %10s\n" "NAME" "SESSIONS" "OBS" "PROMPTS" "SUMMARIES"
+  printf "  %-24s %10s %10s %10s %10s\n" "------------------------" "----------" "----------" "----------" "----------"
+
+  sqlite3 -separator '|' "$DB_FILE" "
+    SELECT
+      COALESCE(NULLIF(s.user_label, ''), '(empty)') AS name,
+      COUNT(DISTINCT s.id) AS sessions,
+      COUNT(DISTINCT o.id) AS obs,
+      COUNT(DISTINCT up.id) AS prompts,
+      COUNT(DISTINCT ss.id) AS summaries
+    FROM sdk_sessions s
+    LEFT JOIN observations o ON o.memory_session_id = s.memory_session_id
+    LEFT JOIN user_prompts up ON up.content_session_id = s.content_session_id
+    LEFT JOIN session_summaries ss ON ss.memory_session_id = s.memory_session_id
+    GROUP BY name
+    ORDER BY sessions DESC
+  " 2>/dev/null | while IFS='|' read -r name sessions obs prompts summaries; do
+    printf "  %-24s %10s %10s %10s %10s\n" "$name" "$sessions" "$obs" "$prompts" "$summaries"
+  done
+
+  echo ""
+  exit 0
+fi
 
 if [[ -z "$mode" || -z "$oldname" || -z "$newname" ]]; then
   fail "Missing required arguments"
