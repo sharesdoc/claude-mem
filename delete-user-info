@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# delete-user-info — permanently delete ALL data for a given user (case-insensitive).
+# Usage:
+#   ./delete-user-info -h            Show help
+#   ./delete-user-info -n username   Delete every record belonging to username
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+DATA_DIR="${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}"
+DB="$DATA_DIR/claude-mem.db"
+
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
+BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
+
+ok()   { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
+fail() { printf "  ${RED}✗${RESET} %s\n" "$1"; }
+warn() { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
+info() { printf "  ${DIM}→${RESET} %s\n" "$1"; }
+
+show_help() {
+  printf "${BOLD}delete-user-info${RESET} — permanently delete ALL data for a user\n\n"
+  printf "${BOLD}Usage:${RESET}\n"
+  printf "  ./delete-user-info -h                 Show this help\n"
+  printf "  ./delete-user-info -n <username>      Delete all records for username (case-insensitive)\n\n"
+  printf "${BOLD}What gets deleted:${RESET}\n"
+  printf "  • sdk_sessions       (user's session records)\n"
+  printf "  • observations       (cascade via memory_session_id FK)\n"
+  printf "  • user_prompts       (cascade via content_session_id FK)\n"
+  printf "  • session_summaries  (cascade via memory_session_id FK)\n"
+  printf "  • pending_messages   (cascade via session_db_id FK)\n"
+  printf "  • All FTS5 full-text indexes are cleaned up via triggers\n\n"
+  printf "${BOLD}Safety:${RESET}\n"
+  printf "  Requires typed confirmation. Does ${RED}NOT${RESET} touch other users' data.\n"
+  printf "  ${DIM}Database: %s${RESET}\n\n" "$DB"
+  printf "${BOLD}Examples:${RESET}\n"
+  printf "  ./delete-user-info -n zhangsan\n"
+  printf "  ./delete-user-info -n \"Z. Johnson\"\n\n"
+}
+
+# ── Parse args ──────────────────────────────────────────────────────
+USERNAME=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) show_help; exit 0 ;;
+    -n) USERNAME="${2:-}"; shift 2 ;;
+    -n=*) USERNAME="${1#-n=}"; shift ;;
+    *) fail "Unknown option: $1"; printf "\n"; show_help; exit 1 ;;
+  esac
+done
+
+if [[ -z "$USERNAME" ]]; then
+  fail "Missing required option: -n <username>"
+  printf "\n"
+  show_help
+  exit 1
+fi
+
+# ── Pre-flight checks ───────────────────────────────────────────────
+if [[ ! -f "$DB" ]]; then
+  fail "Database not found at $DB"
+  exit 1
+fi
+
+if ! command -v sqlite3 &>/dev/null; then
+  fail "sqlite3 not found — install it first"
+  exit 1
+fi
+
+# ── Look up exact user_label (case-insensitive) ─────────────────────
+EXACT_LABEL="$(sqlite3 "$DB" "
+  SELECT user_label FROM sdk_sessions
+  WHERE user_label = '$USERNAME' COLLATE NOCASE
+  LIMIT 1;
+" 2>/dev/null || true)"
+
+if [[ -z "$EXACT_LABEL" ]]; then
+  # Try case-insensitive match more broadly
+  EXACT_LABEL="$(sqlite3 "$DB" "
+    SELECT user_label FROM sdk_sessions
+    WHERE LOWER(user_label) = LOWER('$USERNAME')
+    LIMIT 1;
+  " 2>/dev/null || true)"
+fi
+
+if [[ -z "$EXACT_LABEL" ]]; then
+  warn "No records found for user '${USERNAME}' (case-insensitive match)"
+  info "Available users in database:"
+  sqlite3 "$DB" "SELECT '    ' || COALESCE(NULLIF(user_label,''), '(empty)') || ' (' || COUNT(*) || ' sessions)' FROM sdk_sessions WHERE user_label IS NOT NULL AND user_label != '' GROUP BY user_label ORDER BY COUNT(*) DESC;" 2>/dev/null || echo "    (none)"
+  exit 0
+fi
+
+# ── Count before deleting ────────────────────────────────────────────
+BEFORE_SESSIONS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sdk_sessions WHERE LOWER(user_label) = LOWER('$EXACT_LABEL');")
+BEFORE_OBS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations o JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+BEFORE_PROMPTS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM user_prompts up JOIN sdk_sessions s ON s.content_session_id = up.content_session_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+BEFORE_SUMMARIES=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries ss JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+BEFORE_PENDING=$(sqlite3 "$DB" "SELECT COUNT(*) FROM pending_messages pm JOIN sdk_sessions s ON s.id = pm.session_db_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+
+printf "\n${BOLD}User:${RESET} ${RED}%s${RESET} (exact label in DB)\n" "$EXACT_LABEL"
+printf "${BOLD}Records to be permanently deleted:${RESET}\n"
+printf "  sdk_sessions:      ${RED}%s${RESET}\n" "$BEFORE_SESSIONS"
+printf "  observations:      ${RED}%s${RESET}\n" "$BEFORE_OBS"
+printf "  user_prompts:      ${RED}%s${RESET}\n" "$BEFORE_PROMPTS"
+printf "  session_summaries: ${RED}%s${RESET}\n" "$BEFORE_SUMMARIES"
+printf "  pending_messages:  ${RED}%s${RESET}\n" "$BEFORE_PENDING"
+
+if [[ "$BEFORE_SESSIONS" == "0" ]]; then
+  warn "No sessions found for this user — nothing to delete."
+  exit 0
+fi
+
+# ── Confirmation ─────────────────────────────────────────────────────
+printf "\n${YELLOW}This action is IRREVERSIBLE. Data will be permanently lost.${RESET}\n"
+printf "Type ${BOLD}%s${RESET} to confirm: " "$EXACT_LABEL"
+read -r CONFIRM
+
+if [[ "$CONFIRM" != "$EXACT_LABEL" ]]; then
+  info "Confirmation did not match — aborting."
+  exit 0
+fi
+
+# ── Stop worker first (avoids foreign key / WAL conflicts) ───────────
+WORKER_PID_FILE="$DATA_DIR/worker.pid"
+WORKER_WAS_RUNNING=""
+if [[ -f "$WORKER_PID_FILE" ]]; then
+  WORKER_PORT=$(grep -o '"port":[[:space:]]*[0-9]*' "$WORKER_PID_FILE" 2>/dev/null | grep -o '[0-9]*$' || true)
+  if [[ -n "$WORKER_PORT" ]]; then
+    if curl -sf "http://127.0.0.1:${WORKER_PORT}/api/health" -o /dev/null --connect-timeout 2 --max-time 3 2>/dev/null; then
+      WORKER_WAS_RUNNING="1"
+      info "Stopping worker on port $WORKER_PORT..."
+      (cd "$SCRIPT_DIR" && npm run worker:stop 2>/dev/null) || true
+      sleep 2
+    fi
+  fi
+fi
+
+# ── Execute deletion ─────────────────────────────────────────────────
+printf "\n${BOLD}Deleting...${RESET}\n"
+
+# Enable cascade for this session
+DELETED_SESSIONS=$(sqlite3 "$DB" "
+  PRAGMA foreign_keys = ON;
+  DELETE FROM sdk_sessions WHERE LOWER(user_label) = LOWER('$EXACT_LABEL');
+  SELECT CHANGES();
+")
+
+# ── Verify ───────────────────────────────────────────────────────────
+AFTER_SESSIONS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sdk_sessions WHERE LOWER(user_label) = LOWER('$EXACT_LABEL');")
+AFTER_OBS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations o JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+AFTER_PROMPTS=$(sqlite3 "$DB" "SELECT COUNT(*) FROM user_prompts up JOIN sdk_sessions s ON s.content_session_id = up.content_session_id WHERE LOWER(s.user_label) = LOWER('$EXACT_LABEL');")
+
+if [[ "$AFTER_SESSIONS" == "0" && "$AFTER_OBS" == "0" && "$AFTER_PROMPTS" == "0" ]]; then
+  ok "Successfully deleted $DELETED_SESSIONS sessions and all related observations / prompts / summaries for user '$EXACT_LABEL'"
+else
+  fail "Some records remain — manual cleanup may be needed"
+  printf "  remaining sessions: %s\n" "$AFTER_SESSIONS"
+  printf "  remaining observations: %s\n" "$AFTER_OBS"
+  printf "  remaining prompts: %s\n" "$AFTER_PROMPTS"
+fi
+
+# ── Restart worker ───────────────────────────────────────────────────
+if [[ -n "$WORKER_WAS_RUNNING" ]]; then
+  info "Restarting worker..."
+  (cd "$SCRIPT_DIR" && npm run worker:start 2>/dev/null) || true
+  sleep 2
+  if curl -sf "http://127.0.0.1:${WORKER_PORT}/api/health" -o /dev/null --connect-timeout 2 --max-time 3 2>/dev/null; then
+    ok "Worker restarted on port $WORKER_PORT"
+  else
+    warn "Worker did not restart — run: npm run worker:start"
+  fi
+fi
+
+printf "\n${GREEN}Done.${RESET}\n"
