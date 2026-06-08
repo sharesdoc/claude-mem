@@ -24,9 +24,6 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
   const processingInfo = (showProcessingTime && prompt.completed_at_epoch)
     ? (() => {
         const durationMs = prompt.completed_at_epoch - prompt.created_at_epoch;
-        // Filter noise: backfilled data with very short LEAD() intervals
-        // (< 3s) are likely rapid consecutive submits, not real AI processing.
-        if (durationMs < 3000) return null;
         const completedDate = formatDate(prompt.completed_at_epoch);
         const mins = Math.floor(durationMs / 60000);
         const secs = Math.round((durationMs % 60000) / 1000);
