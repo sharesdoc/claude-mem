@@ -19,6 +19,7 @@ import { computeObservationContentHash } from './observations/store.js';
 import { parseFileList } from './observations/files.js';
 import { DEFAULT_PLATFORM_SOURCE, normalizePlatformSource, sortPlatformSources } from '../../shared/platform-source.js';
 import { resolveUserLabel } from '../../shared/user-label.js';
+import { getOsUserName } from '../../shared/os-user.js';
 import { findRecentDuplicateUserPrompt as findRecentDuplicateUserPromptRecord } from './prompts/get.js';
 
 function resolveCreateSessionArgs(
@@ -1862,14 +1863,23 @@ export class SessionStore {
           );
         }
       }
+
+      // Backfill user_label for sessions created before this column was
+      // populated at INSERT time (pre-v13.2.0).
+      this.db.prepare(`
+        UPDATE sdk_sessions SET user_label = ?, user_name = COALESCE(user_name, ?)
+        WHERE content_session_id = ?
+          AND COALESCE(user_label, '') = ''
+      `).run(resolveUserLabel(), getOsUserName(), contentSessionId);
+
       return existing.id;
     }
 
     this.db.prepare(`
       INSERT INTO sdk_sessions
-      (content_session_id, memory_session_id, project, platform_source, user_prompt, custom_title, started_at, started_at_epoch, status)
-      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'active')
-    `).run(contentSessionId, project, normalizedPlatformSource, userPrompt, resolved.customTitle || null, now.toISOString(), nowEpoch);
+      (content_session_id, memory_session_id, project, platform_source, user_prompt, custom_title, started_at, started_at_epoch, status, user_name, user_label)
+      VALUES (?, NULL, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+    `).run(contentSessionId, project, normalizedPlatformSource, userPrompt, resolved.customTitle || null, now.toISOString(), nowEpoch, getOsUserName(), resolveUserLabel());
 
     const row = this.db.prepare('SELECT id FROM sdk_sessions WHERE content_session_id = ?')
       .get(contentSessionId) as { id: number };
