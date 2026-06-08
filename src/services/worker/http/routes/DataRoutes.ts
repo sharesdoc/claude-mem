@@ -914,18 +914,19 @@ export class DataRoutes extends BaseRouteHandler {
     // ── Monthly history (scope=history): 36-month backward aggregation ────
     // Build YYYY-MM keys for every calendar month in the window, then JOIN
     // against aggregated prompts/times/projects so months with zero activity
-    // still appear in the table.
+    // still appear in the table. Each row is per-user per-month.
     const historyMonths: Array<{
       month: string;          // "2024-01"
-      prompts: number;        // total prompt count
-      avgPromptsPerDay: number; // prompts / business days in that month (0 if no activity)
-      processingMs: number;   // total capped AI time (ms)
+      user_label: string;     // resolved user label
+      prompts: number;        // prompt count for that user
+      avgPromptsPerDay: number; // prompts / business days in that month
+      processingMs: number;   // capped AI time (ms) for that user
       avgTimePerDay: number;  // processingMs / business days
-      obs: number;            // observation count
-      summaries: number;      // session summary count
-      projects: number;       // distinct project count
-      sessions: number;       // distinct session count
-      bizDays: number;        // business days in the month
+      obs: number;            // observation count for that user
+      summaries: number;      // session summary count for that user
+      projects: number;       // distinct project count for that user
+      sessions: number;       // distinct session count for that user
+      bizDays: number;        // business days in the month (same for all users)
     }> = [];
     if (scope === 'history') {
       const now = new Date(Date.now() + tzOffsetMs);
@@ -940,6 +941,8 @@ export class DataRoutes extends BaseRouteHandler {
         m--; if (m < 0) { m = 11; y--; }
       }
       monthLabels.reverse(); // oldest first
+
+      const RESOLVE_USER = `COALESCE(NULLIF(s.user_label, ''), 'unknown')`;
 
       const monthInfo = (ym: string) => {
         const [y, m] = ym.split('-').map(Number);
@@ -956,66 +959,126 @@ export class DataRoutes extends BaseRouteHandler {
           }
         }
         if (bizDays === 0) bizDays = 1;
-        const promptsRow = db.prepare(`
-          SELECT COALESCE(COUNT(*), 0) AS n FROM user_prompts up
+
+        // ── Per-user prompts ──
+        const promptsRows = db.prepare(`
+          SELECT ${RESOLVE_USER} AS user_label, COUNT(*) AS n
+          FROM user_prompts up
           JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
           WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ?
             AND (? IS NULL OR s.project = ?)
             AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
-        `).get(start, end, project || null, project || null, userLabel || null, userLabel || null) as { n: number };
-        const obsRow = db.prepare(`
-          SELECT COALESCE(COUNT(*), 0) AS n FROM observations o
+          GROUP BY user_label
+        `).all(start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; n: number }>;
+
+        // ── Per-user observations ──
+        const obsRows = db.prepare(`
+          SELECT ${RESOLVE_USER} AS user_label, COUNT(*) AS n
+          FROM observations o
           LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
           WHERE o.created_at_epoch >= ? AND o.created_at_epoch < ?
             AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
             AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
-        `).get(start, end, project || null, project || null, userLabel || null, userLabel || null) as { n: number };
-        const summsRow = db.prepare(`
-          SELECT COALESCE(COUNT(*), 0) AS n FROM session_summaries ss
+          GROUP BY user_label
+        `).all(start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; n: number }>;
+
+        // ── Per-user summaries ──
+        const summsRows = db.prepare(`
+          SELECT ${RESOLVE_USER} AS user_label, COUNT(*) AS n
+          FROM session_summaries ss
           LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
           WHERE ss.created_at_epoch >= ? AND ss.created_at_epoch < ?
             AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?)
             AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
-        `).get(start, end, project || null, project || null, userLabel || null, userLabel || null) as { n: number };
-        const timeRow = db.prepare(`
-          SELECT COALESCE(SUM(MIN(next_ts - ts, ?)), 0) AS total_ms FROM (
-            SELECT up.created_at_epoch AS ts,
+          GROUP BY user_label
+        `).all(start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; n: number }>;
+
+        // ── Per-user processing time ──
+        const timeRows = db.prepare(`
+          SELECT user_label, COALESCE(SUM(MIN(next_ts - ts, ?)), 0) AS total_ms FROM (
+            SELECT ${RESOLVE_USER} AS user_label,
+                   up.created_at_epoch AS ts,
                    LEAD(up.created_at_epoch) OVER (PARTITION BY up.content_session_id ORDER BY up.created_at_epoch) AS next_ts
             FROM user_prompts up JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
             WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ?
               AND (? IS NULL OR s.project = ?)
               AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
-          ) WHERE next_ts IS NOT NULL
-        `).get(PROCESSING_CAP_MS, start, end, project || null, project || null, userLabel || null, userLabel || null) as { total_ms: number };
-        const projRow = db.prepare(`
-          SELECT COUNT(DISTINCT project) AS n FROM sdk_sessions
-          WHERE started_at_epoch >= ? AND started_at_epoch < ?
-            AND (? IS NULL OR project = ?)
-            AND (? IS NULL OR user_label = ? COLLATE NOCASE)
-        `).get(start, end, project || null, project || null, userLabel || null, userLabel || null) as { n: number };
-        const sessRow = db.prepare(`
-          SELECT COUNT(*) AS n FROM sdk_sessions
-          WHERE started_at_epoch >= ? AND started_at_epoch < ?
-            AND (? IS NULL OR project = ?)
-            AND (? IS NULL OR user_label = ? COLLATE NOCASE)
-        `).get(start, end, project || null, project || null, userLabel || null, userLabel || null) as { n: number };
+          ) WHERE next_ts IS NOT NULL GROUP BY user_label
+        `).all(PROCESSING_CAP_MS, start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; total_ms: number }>;
 
-        return {
+        // ── Per-user projects ──
+        const projRows = db.prepare(`
+          SELECT ${RESOLVE_USER} AS user_label, COUNT(DISTINCT s.project) AS n
+          FROM sdk_sessions s
+          WHERE s.started_at_epoch >= ? AND s.started_at_epoch < ?
+            AND (? IS NULL OR s.project = ?)
+            AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
+          GROUP BY user_label
+        `).all(start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; n: number }>;
+
+        // ── Per-user sessions ──
+        const sessRows = db.prepare(`
+          SELECT ${RESOLVE_USER} AS user_label, COUNT(*) AS n
+          FROM sdk_sessions s
+          WHERE s.started_at_epoch >= ? AND s.started_at_epoch < ?
+            AND (? IS NULL OR s.project = ?)
+            AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
+          GROUP BY user_label
+        `).all(start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; n: number }>;
+
+        // ── Merge per-user data for this month ──
+        const userMap = new Map<string, { prompts: number; obs: number; summaries: number; processingMs: number; projects: number; sessions: number }>();
+        for (const r of promptsRows) {
+          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          e.prompts = r.n;
+          userMap.set(r.user_label, e);
+        }
+        for (const r of obsRows) {
+          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          e.obs = r.n;
+          userMap.set(r.user_label, e);
+        }
+        for (const r of summsRows) {
+          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          e.summaries = r.n;
+          userMap.set(r.user_label, e);
+        }
+        for (const r of timeRows) {
+          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          e.processingMs = r.total_ms;
+          userMap.set(r.user_label, e);
+        }
+        for (const r of projRows) {
+          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          e.projects = r.n;
+          userMap.set(r.user_label, e);
+        }
+        for (const r of sessRows) {
+          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          e.sessions = r.n;
+          userMap.set(r.user_label, e);
+        }
+
+        return Array.from(userMap.entries()).map(([user_label, d]) => ({
           month: ym,
-          prompts: promptsRow.n,
-          avgPromptsPerDay: Math.round(promptsRow.n / bizDays),
-          processingMs: timeRow.total_ms,
-          avgTimePerDay: Math.round(timeRow.total_ms / bizDays),
-          obs: obsRow.n,
-          summaries: summsRow.n,
-          projects: projRow.n,
-          sessions: sessRow.n,
+          user_label,
+          prompts: d.prompts,
+          avgPromptsPerDay: Math.round(d.prompts / bizDays),
+          processingMs: d.processingMs,
+          avgTimePerDay: Math.round(d.processingMs / bizDays),
+          obs: d.obs,
+          summaries: d.summaries,
+          projects: d.projects,
+          sessions: d.sessions,
           bizDays,
-        };
+        }));
       };
 
       for (const ym of monthLabels) {
-        historyMonths.push(monthInfo(ym));
+        const rows = monthInfo(ym);
+        for (const row of rows) {
+          historyMonths.push(row);
+        }
       }
     }
 

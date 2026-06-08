@@ -173,9 +173,10 @@ export interface AnalyticsResponse {
   granularity: 'hour' | 'day' | 'week';
   /** 图表 X 轴的有序桶（YYYY-MM-DD，本地时间，已补齐空缺）。 */
   chartBuckets: string[];
-  /** 月度历史记录（scope=history 时返回，最多36个月）。 */
+  /** 月度历史记录 — 按人分组（scope=history 时返回，每人每月一条，最多36个月）。 */
   historyMonths: Array<{
-    month: string; prompts: number; avgPromptsPerDay: number;
+    month: string; user_label: string;
+    prompts: number; avgPromptsPerDay: number;
     processingMs: number; avgTimePerDay: number;
     obs: number; summaries: number;
     projects: number; sessions: number; bizDays: number;
