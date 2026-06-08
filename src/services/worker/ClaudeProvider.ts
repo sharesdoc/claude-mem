@@ -194,6 +194,12 @@ export class ClaudeProvider {
       'TodoWrite'       
     ];
 
+    // Snapshot the prompt number BEFORE SDK processing starts. During redo loops
+    // or rapid consecutive submissions, the next prompt may be submitted before
+    // the result for this one arrives, incrementing session.lastPromptNumber
+    // and causing the completion timestamp to be written to the wrong prompt.
+    const pendingPromptNumber = session.lastPromptNumber;
+
     const messageGenerator = this.createMessageGenerator(session, cwdTracker);
 
     const hasRealMemorySessionId = !!session.memorySessionId;
@@ -392,11 +398,13 @@ export class ClaudeProvider {
         if (message.type === 'result' && message.subtype === 'success') {
           // Use the SDK's own timing (duration_ms) — same source as Claude Code's
           // "✻ Baked for 34s". Reconstruct end time from prompt creation + SDK duration.
+          // Use the captured prompt number (not session.lastPromptNumber) to avoid
+          // race conditions with rapid consecutive submissions (e.g. redo loops).
           const durationMs = (message as any).duration_ms;
           let completedAt: number;
           if (typeof durationMs === 'number' && durationMs > 0) {
             const createdEpoch = this.dbManager.getSessionStore().getPromptCreatedAt(
-              session.contentSessionId, session.lastPromptNumber
+              session.contentSessionId, pendingPromptNumber
             );
             if (createdEpoch != null) {
               completedAt = createdEpoch + durationMs;
@@ -408,7 +416,7 @@ export class ClaudeProvider {
           }
           this.dbManager.getSessionStore().updatePromptCompletedAt(
             session.contentSessionId,
-            session.lastPromptNumber,
+            pendingPromptNumber,
             completedAt
           );
         }
