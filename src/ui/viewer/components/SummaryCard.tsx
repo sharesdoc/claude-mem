@@ -61,11 +61,17 @@ export function SummaryCard({ summary }: SummaryCardProps) {
         <time className="summary-meta-date" dateTime={new Date(summary.created_at_epoch).toISOString()}>
           {date}
         </time>
-        {summary.user_name && (
-          <span className="meta-user" title={t('card.userNameTip')}>  {summary.user_name}</span>
-        )}
-        {summary.user_label && summary.user_label !== summary.user_name && (
-          <span className="meta-user-label" title={t('card.userLabelTip')}>  @{summary.user_label}</span>
+        {summary.user_label ? (
+          <>
+            <span className="meta-user-label" title={t('card.userLabelTip')}>  {summary.user_label}</span>
+            {summary.user_name && summary.user_name !== summary.user_label && (
+              <span className="meta-user" title={t('card.userNameTip')}>  {summary.user_name}</span>
+            )}
+          </>
+        ) : (
+          summary.user_name && (
+            <span className="meta-user" title={t('card.userNameTip')}>  {summary.user_name}</span>
+          )
         )}
       </footer>
     </article>

@@ -10,6 +10,7 @@ import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager
 import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
 import type { ActiveSession } from '../../worker-types.js';
 import { getOsUserName } from '../../../shared/os-user.js';
+import { resolveUserLabel } from '../../../shared/user-label.js';
 import type { DatabaseManager } from '../DatabaseManager.js';
 import type { SessionManager } from '../SessionManager.js';
 import type { WorkerRef, StorageResult } from './types.js';
@@ -235,6 +236,7 @@ async function syncAndBroadcastObservations(
       project: session.project,
       prompt_number: session.lastPromptNumber,
       user_name: getOsUserName(),
+      user_label: resolveUserLabel(),
       created_at_epoch: result.createdAtEpoch
     });
   }
@@ -318,6 +320,7 @@ async function syncAndBroadcastSummary(
     project: session.project,
     prompt_number: session.lastPromptNumber,
     user_name: getOsUserName(),
+    user_label: resolveUserLabel(),
     created_at_epoch: result.createdAtEpoch
   });
 

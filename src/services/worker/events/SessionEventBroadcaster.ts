@@ -2,6 +2,7 @@
 import { SSEBroadcaster } from '../SSEBroadcaster.js';
 import type { WorkerService } from '../../worker-service.js';
 import { getOsUserName } from '../../../shared/os-user.js';
+import { resolveUserLabel } from '../../../shared/user-label.js';
 
 export class SessionEventBroadcaster {
   constructor(
@@ -22,7 +23,7 @@ export class SessionEventBroadcaster {
     // prompt originated from, since claude-mem is a single-machine tool.
     this.sseBroadcaster.broadcast({
       type: 'new_prompt',
-      prompt: { ...prompt, user_name: getOsUserName() }
+      prompt: { ...prompt, user_name: getOsUserName(), user_label: resolveUserLabel() }
     });
 
     // T-13: nudge SyncAgent so the new prompt reaches the upstream within

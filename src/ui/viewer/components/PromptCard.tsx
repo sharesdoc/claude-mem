@@ -96,11 +96,17 @@ export function PromptCard({ prompt, onDeleted }: PromptCardProps) {
       <div className="card-meta prompt-meta">
         <span className="meta-date">
           #{prompt.id} • {date}
-          {prompt.user_name && (
-            <span className="meta-user" title={t('card.userNameTip')}>  {prompt.user_name}</span>
-          )}
-          {prompt.user_label && prompt.user_label !== prompt.user_name && (
-            <span className="meta-user-label" title={t('card.userLabelTip')}>  @{prompt.user_label}</span>
+          {prompt.user_label ? (
+            <>
+              <span className="meta-user-label" title={t('card.userLabelTip')}>  {prompt.user_label}</span>
+              {prompt.user_name && prompt.user_name !== prompt.user_label && (
+                <span className="meta-user" title={t('card.userNameTip')}>  {prompt.user_name}</span>
+              )}
+            </>
+          ) : (
+            prompt.user_name && (
+              <span className="meta-user" title={t('card.userNameTip')}>  {prompt.user_name}</span>
+            )
           )}
         </span>
         {copied && (
