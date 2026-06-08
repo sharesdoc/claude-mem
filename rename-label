@@ -78,9 +78,13 @@ if [[ -z "$mode" || -z "$oldname" || -z "$newname" ]]; then
   exit 1
 fi
 
-if [[ "$oldname" == "$newname" ]]; then
-  warn "Old and new label are the same — nothing to do"
-  exit 0
+# Normalise to lowercase for equality checks, but preserve original case for
+# the DB query (COLLATE NOCASE handles it) and settings write (exact new name).
+OLD_LOWER="$(echo "$oldname" | tr '[:upper:]' '[:lower:]')"
+NEW_LOWER="$(echo "$newname" | tr '[:upper:]' '[:lower:]')"
+
+if [[ "$OLD_LOWER" == "$NEW_LOWER" ]]; then
+  warn "Old and new label differ only in case — renaming case"
 fi
 
 echo ""
@@ -103,8 +107,8 @@ current=$(node -e "
   } catch(e) { console.log(''); }
 " 2>/dev/null || echo "")
 
-if [[ "$current" == "$newname" ]]; then
-  ok "Settings already set to '$newname'"
+if [[ "$(echo "$current" | tr '[:upper:]' '[:lower:]')" == "$NEW_LOWER" ]]; then
+  ok "Settings already set to '$newname' (case-insensitive)"
 else
   node -e "
     const fs = require('fs');
@@ -132,12 +136,12 @@ if [[ "$mode" == "database" ]]; then
   fi
 
   # Count affected rows before update
-  before=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM sdk_sessions WHERE user_label='$oldname';" 2>/dev/null || echo 0)
+  before=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM sdk_sessions WHERE user_label='$oldname' COLLATE NOCASE;" 2>/dev/null || echo 0)
   if [[ "$before" -eq 0 ]]; then
-    ok "No sessions with label '$oldname' in database — nothing to migrate"
+    ok "No sessions with label '$oldname' (case-insensitive) in database — nothing to migrate"
   else
-    sqlite3 "$DB_FILE" "UPDATE sdk_sessions SET user_label='$newname' WHERE user_label='$oldname';"
-    ok "Migrated ${before} session(s) from '$oldname' → '$newname'"
+    sqlite3 "$DB_FILE" "UPDATE sdk_sessions SET user_label='$newname' WHERE user_label='$oldname' COLLATE NOCASE;"
+    ok "Migrated ${before} session(s) from '$oldname' (case-insensitive) → '$newname'"
   fi
 
   echo ""
