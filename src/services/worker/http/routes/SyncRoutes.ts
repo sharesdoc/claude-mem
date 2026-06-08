@@ -256,15 +256,15 @@ export class SyncRoutes extends BaseRouteHandler {
     const upsertObs = db.prepare(`
       INSERT INTO observations
         (memory_session_id, project, text, type, title, subtitle, facts, narrative,
-         concepts, files_read, files_modified, prompt_number, created_at, created_at_epoch, content_hash)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         concepts, files_read, files_modified, prompt_number, created_at, created_at_epoch, content_hash, user_label)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(memory_session_id, content_hash) DO NOTHING
     `);
     const upsertSummary = db.prepare(`
       INSERT INTO session_summaries
         (memory_session_id, project, request, investigated, learned, completed,
-         next_steps, files_read, files_edited, notes, prompt_number, created_at, created_at_epoch)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         next_steps, files_read, files_edited, notes, prompt_number, created_at, created_at_epoch, user_label)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const upsertPrompt = db.prepare(`
       INSERT INTO user_prompts
@@ -321,6 +321,7 @@ export class SyncRoutes extends BaseRouteHandler {
           o.created_at,
           o.created_at_epoch,
           o.content_hash ?? null,
+          (o as any).user_label || p.user_label,
         );
         recordInbox.run(p.user_label, 'observations', sourceUid, now, o.id);
         applied.observations.inserted++;
@@ -347,6 +348,7 @@ export class SyncRoutes extends BaseRouteHandler {
           s.prompt_number ?? null,
           s.created_at,
           s.created_at_epoch,
+          (s as any).user_label || p.user_label,
         );
         recordInbox.run(p.user_label, 'session_summaries', sourceUid, now, s.id);
         applied.summaries.inserted++;

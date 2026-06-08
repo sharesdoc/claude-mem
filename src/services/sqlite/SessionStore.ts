@@ -105,6 +105,7 @@ export class SessionStore {
     this.addSessionUserLabelColumn();
     this.createSyncInboxTable();
     this.addApiKeysUserLabelColumn();
+    this.ensureUserLabelColumns();
   }
 
   /**
@@ -135,6 +136,83 @@ export class SessionStore {
     }
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(38, new Date().toISOString());
+  }
+
+  /**
+   * v39 — user_label on observations & session_summaries.
+   *
+   * Eliminates the need to JOIN sdk_sessions to get user_label for stats,
+   * history, and viewer queries. Also fixes the "orphaned observation"
+   * problem — observations whose memory_session_id doesn't exist in
+   * sdk_sessions can still be attributed to a user via project+time backfill.
+   */
+  private ensureUserLabelColumns(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(39) as SchemaVersion | undefined;
+    if (applied) return;
+
+    // ── Add columns ──────────────────────────────────────────────────
+    const obsCols = this.db.query('PRAGMA table_info(observations)').all() as TableColumnInfo[];
+    if (!obsCols.some(c => c.name === 'user_label')) {
+      this.db.run('ALTER TABLE observations ADD COLUMN user_label TEXT NOT NULL DEFAULT \'\'');
+    }
+    const sumCols = this.db.query('PRAGMA table_info(session_summaries)').all() as TableColumnInfo[];
+    if (!sumCols.some(c => c.name === 'user_label')) {
+      this.db.run('ALTER TABLE session_summaries ADD COLUMN user_label TEXT NOT NULL DEFAULT \'\'');
+    }
+
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_observations_user_label ON observations(user_label)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_summaries_user_label ON session_summaries(user_label)');
+
+    // ── Backfill: copy user_label from sdk_sessions where possible ────
+    const obsBackfilled = this.db.prepare(`
+      UPDATE observations SET user_label = (
+        SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown')
+        FROM sdk_sessions s
+        WHERE s.memory_session_id = observations.memory_session_id
+      )
+      WHERE user_label = ''
+        AND memory_session_id IN (SELECT memory_session_id FROM sdk_sessions WHERE memory_session_id IS NOT NULL AND user_label IS NOT NULL AND user_label != '')
+    `).run();
+    logger.debug('DB', `Backfilled observations.user_label from sdk_sessions: ${obsBackfilled.changes} rows`);
+
+    // ── Backfill orphans: match by project (any session for same project) ──
+    const orphanBackfilled = this.db.prepare(`
+      UPDATE observations SET user_label = (
+        SELECT s.user_label FROM sdk_sessions s
+        WHERE s.project = observations.project
+          AND s.user_label IS NOT NULL AND s.user_label != ''
+        LIMIT 1
+      )
+      WHERE user_label = ''
+        AND project IN (SELECT project FROM sdk_sessions)
+    `).run();
+    logger.debug('DB', `Backfilled orphan observations.user_label by project: ${orphanBackfilled.changes} rows`);
+
+    // ── session_summaries: same two-step backfill ────────────────────
+    const sumBackfilled = this.db.prepare(`
+      UPDATE session_summaries SET user_label = (
+        SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown')
+        FROM sdk_sessions s
+        WHERE s.memory_session_id = session_summaries.memory_session_id
+      )
+      WHERE user_label = ''
+        AND memory_session_id IN (SELECT memory_session_id FROM sdk_sessions WHERE memory_session_id IS NOT NULL AND user_label IS NOT NULL AND user_label != '')
+    `).run();
+    logger.debug('DB', `Backfilled session_summaries.user_label from sdk_sessions: ${sumBackfilled.changes} rows`);
+
+    const sumOrphanBackfilled = this.db.prepare(`
+      UPDATE session_summaries SET user_label = (
+        SELECT s.user_label FROM sdk_sessions s
+        WHERE s.project = session_summaries.project
+          AND s.user_label IS NOT NULL AND s.user_label != ''
+        LIMIT 1
+      )
+      WHERE user_label = ''
+        AND project IN (SELECT project FROM sdk_sessions)
+    `).run();
+    logger.debug('DB', `Backfilled orphan session_summaries.user_label by project+time: ${sumOrphanBackfilled.changes} rows`);
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(39, new Date().toISOString());
   }
 
   /**
@@ -2056,6 +2134,7 @@ export class SessionStore {
       next_steps: string;
       notes: string | null;
     } | null,
+    userLabel: string,
     promptNumber?: number,
     discoveryTokens: number = 0,
     overrideTimestampEpoch?: number,
@@ -2071,8 +2150,8 @@ export class SessionStore {
         INSERT INTO observations
         (memory_session_id, project, type, title, subtitle, facts, narrative, concepts,
          files_read, files_modified, prompt_number, discovery_tokens, agent_type, agent_id, content_hash, created_at, created_at_epoch,
-         generated_by_model)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         generated_by_model, user_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(memory_session_id, content_hash) DO NOTHING
         RETURNING id
       `);
@@ -2100,7 +2179,8 @@ export class SessionStore {
           contentHash,
           timestampIso,
           timestampEpoch,
-          generatedByModel || null
+          generatedByModel || null,
+          userLabel
         ) as { id: number } | null;
 
         if (inserted) {
@@ -2122,8 +2202,8 @@ export class SessionStore {
         const summaryStmt = this.db.prepare(`
           INSERT INTO session_summaries
           (memory_session_id, project, request, investigated, learned, completed,
-           next_steps, notes, prompt_number, discovery_tokens, created_at, created_at_epoch)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           next_steps, notes, prompt_number, discovery_tokens, created_at, created_at_epoch, user_label)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         const result = summaryStmt.run(
@@ -2138,7 +2218,8 @@ export class SessionStore {
           promptNumber || null,
           discoveryTokens,
           timestampIso,
-          timestampEpoch
+          timestampEpoch,
+          userLabel
         );
         summaryId = Number(result.lastInsertRowid);
       }
@@ -2174,6 +2255,7 @@ export class SessionStore {
     } | null,
     messageId: number,
     _pendingStore: PendingMessageStore,
+    userLabel: string,
     promptNumber?: number,
     discoveryTokens: number = 0,
     overrideTimestampEpoch?: number,
@@ -2189,8 +2271,8 @@ export class SessionStore {
         INSERT INTO observations
         (memory_session_id, project, type, title, subtitle, facts, narrative, concepts,
          files_read, files_modified, prompt_number, discovery_tokens, agent_type, agent_id, content_hash, created_at, created_at_epoch,
-         generated_by_model)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         generated_by_model, user_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(memory_session_id, content_hash) DO NOTHING
         RETURNING id
       `);
@@ -2218,7 +2300,8 @@ export class SessionStore {
           contentHash,
           timestampIso,
           timestampEpoch,
-          generatedByModel || null
+          generatedByModel || null,
+          userLabel
         ) as { id: number } | null;
 
         if (inserted) {
@@ -2240,8 +2323,8 @@ export class SessionStore {
         const summaryStmt = this.db.prepare(`
           INSERT INTO session_summaries
           (memory_session_id, project, request, investigated, learned, completed,
-           next_steps, notes, prompt_number, discovery_tokens, created_at, created_at_epoch)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           next_steps, notes, prompt_number, discovery_tokens, created_at, created_at_epoch, user_label)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
 
         const result = summaryStmt.run(
@@ -2256,7 +2339,8 @@ export class SessionStore {
           promptNumber || null,
           discoveryTokens,
           timestampIso,
-          timestampEpoch
+          timestampEpoch,
+          userLabel
         );
         summaryId = Number(result.lastInsertRowid);
       }

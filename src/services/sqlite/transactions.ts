@@ -20,6 +20,7 @@ export function storeObservationsAndMarkComplete(
   observations: ObservationInput[],
   summary: SummaryInput | null,
   messageId: number,
+  userLabel: string,
   promptNumber?: number,
   discoveryTokens: number = 0,
   overrideTimestampEpoch?: number
@@ -33,8 +34,8 @@ export function storeObservationsAndMarkComplete(
     const obsStmt = db.prepare(`
       INSERT INTO observations
       (memory_session_id, project, type, title, subtitle, facts, narrative, concepts,
-       files_read, files_modified, prompt_number, discovery_tokens, agent_type, agent_id, content_hash, created_at, created_at_epoch)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       files_read, files_modified, prompt_number, discovery_tokens, agent_type, agent_id, content_hash, created_at, created_at_epoch, user_label)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(memory_session_id, content_hash) DO NOTHING
       RETURNING id
     `);
@@ -61,7 +62,8 @@ export function storeObservationsAndMarkComplete(
         observation.agent_id ?? null,
         contentHash,
         timestampIso,
-        timestampEpoch
+        timestampEpoch,
+        userLabel
       ) as { id: number } | null;
 
       if (inserted) {
@@ -83,8 +85,8 @@ export function storeObservationsAndMarkComplete(
       const summaryStmt = db.prepare(`
         INSERT INTO session_summaries
         (memory_session_id, project, request, investigated, learned, completed,
-         next_steps, notes, prompt_number, discovery_tokens, created_at, created_at_epoch)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         next_steps, notes, prompt_number, discovery_tokens, created_at, created_at_epoch, user_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const result = summaryStmt.run(
@@ -99,7 +101,8 @@ export function storeObservationsAndMarkComplete(
         promptNumber || null,
         discoveryTokens,
         timestampIso,
-        timestampEpoch
+        timestampEpoch,
+        userLabel
       );
       summaryId = Number(result.lastInsertRowid);
     }
@@ -126,6 +129,7 @@ export function storeObservations(
   project: string,
   observations: ObservationInput[],
   summary: SummaryInput | null,
+  userLabel: string,
   promptNumber?: number,
   discoveryTokens: number = 0,
   overrideTimestampEpoch?: number
@@ -139,8 +143,8 @@ export function storeObservations(
     const obsStmt = db.prepare(`
       INSERT INTO observations
       (memory_session_id, project, type, title, subtitle, facts, narrative, concepts,
-       files_read, files_modified, prompt_number, discovery_tokens, agent_type, agent_id, content_hash, created_at, created_at_epoch)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       files_read, files_modified, prompt_number, discovery_tokens, agent_type, agent_id, content_hash, created_at, created_at_epoch, user_label)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(memory_session_id, content_hash) DO NOTHING
       RETURNING id
     `);
@@ -167,7 +171,8 @@ export function storeObservations(
         observation.agent_id ?? null,
         contentHash,
         timestampIso,
-        timestampEpoch
+        timestampEpoch,
+        userLabel
       ) as { id: number } | null;
 
       if (inserted) {
@@ -189,8 +194,8 @@ export function storeObservations(
       const summaryStmt = db.prepare(`
         INSERT INTO session_summaries
         (memory_session_id, project, request, investigated, learned, completed,
-         next_steps, notes, prompt_number, discovery_tokens, created_at, created_at_epoch)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         next_steps, notes, prompt_number, discovery_tokens, created_at, created_at_epoch, user_label)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       const result = summaryStmt.run(
@@ -205,7 +210,8 @@ export function storeObservations(
         promptNumber || null,
         discoveryTokens,
         timestampIso,
-        timestampEpoch
+        timestampEpoch,
+        userLabel
       );
       summaryId = Number(result.lastInsertRowid);
     }

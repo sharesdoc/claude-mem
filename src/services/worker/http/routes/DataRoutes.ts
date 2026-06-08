@@ -703,26 +703,24 @@ export class DataRoutes extends BaseRouteHandler {
     // ── observations by user by bucket ─────────────────────────────────
     const observationsByUserByDay = db.prepare(`
       SELECT CAST((o.created_at_epoch + ?) / ${bucketDivisor} AS INTEGER) AS day_bucket,
-             COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
+             COALESCE(NULLIF(o.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
       FROM observations o
-      LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
       WHERE o.created_at_epoch >= ?
         AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
-      GROUP BY day_bucket, user_label
+      GROUP BY day_bucket, o.user_label
       ORDER BY day_bucket ASC
     `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
     // ── summaries by user by bucket ────────────────────────────────────
     const summariesByUserByDay = db.prepare(`
       SELECT CAST((ss.created_at_epoch + ?) / ${bucketDivisor} AS INTEGER) AS day_bucket,
-             COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
+             COALESCE(NULLIF(ss.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
       FROM session_summaries ss
-      LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
       WHERE ss.created_at_epoch >= ?
         AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?)
-      GROUP BY day_bucket, user_label
+      GROUP BY day_bucket, ss.user_label
       ORDER BY day_bucket ASC
     `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
@@ -830,16 +828,16 @@ export class DataRoutes extends BaseRouteHandler {
       ensureCounts(r.user_label).prompts = r.n;
     }
     for (const r of db.prepare(`
-      SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
-      FROM observations o LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
-      WHERE o.created_at_epoch >= ? AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?) GROUP BY user_label
+      SELECT COALESCE(NULLIF(o.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
+      FROM observations o
+      WHERE o.created_at_epoch >= ? AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?) GROUP BY o.user_label
     `).all(since, project || null, project || null) as Array<{ user_label: string; n: number }>) {
       ensureCounts(r.user_label).obs = r.n;
     }
     for (const r of db.prepare(`
-      SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
-      FROM session_summaries ss LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
-      WHERE ss.created_at_epoch >= ? AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?) GROUP BY user_label
+      SELECT COALESCE(NULLIF(ss.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
+      FROM session_summaries ss
+      WHERE ss.created_at_epoch >= ? AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?) GROUP BY ss.user_label
     `).all(since, project || null, project || null) as Array<{ user_label: string; n: number }>) {
       ensureCounts(r.user_label).summaries = r.n;
     }
@@ -973,23 +971,21 @@ export class DataRoutes extends BaseRouteHandler {
 
         // ── Per-user observations ──
         const obsRows = db.prepare(`
-          SELECT ${RESOLVE_USER} AS user_label, COUNT(*) AS n
+          SELECT COALESCE(NULLIF(o.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
           FROM observations o
-          JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
           WHERE o.created_at_epoch >= ? AND o.created_at_epoch < ?
             AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
-            AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
+            AND (? IS NULL OR o.user_label = ? COLLATE NOCASE)
           GROUP BY user_label
         `).all(start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; n: number }>;
 
         // ── Per-user summaries ──
         const summsRows = db.prepare(`
-          SELECT ${RESOLVE_USER} AS user_label, COUNT(*) AS n
+          SELECT COALESCE(NULLIF(ss.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
           FROM session_summaries ss
-          JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id
           WHERE ss.created_at_epoch >= ? AND ss.created_at_epoch < ?
             AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?)
-            AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
+            AND (? IS NULL OR ss.user_label = ? COLLATE NOCASE)
           GROUP BY user_label
         `).all(start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; n: number }>;
 

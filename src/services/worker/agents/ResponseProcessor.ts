@@ -76,6 +76,9 @@ export async function processAgentResponse(
     agent_id: session.pendingAgentId ?? null
   }));
 
+  const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+  const userLabel = settings.CLAUDE_MEM_USER_LABEL || getOsUserName();
+
   let result: ReturnType<typeof sessionStore.storeObservations>;
   try {
     result = sessionStore.storeObservations(
@@ -83,6 +86,7 @@ export async function processAgentResponse(
       session.project,
       labeledObservations,
       summaryForStore,
+      userLabel,
       session.lastPromptNumber,
       discoveryTokens,
       originalTimestamp ?? undefined,

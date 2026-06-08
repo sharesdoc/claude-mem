@@ -70,6 +70,7 @@ export interface ObservationRow {
   created_at: string;
   created_at_epoch: number;
   content_hash: string | null;
+  user_label: string;
 }
 
 export interface SummaryRow {
@@ -87,6 +88,7 @@ export interface SummaryRow {
   prompt_number: number | null;
   created_at: string;
   created_at_epoch: number;
+  user_label: string;
 }
 
 export interface PromptRow {
@@ -129,7 +131,7 @@ export function collectIncremental(
   const observationsRaw = db.query<ObservationRow, [number, number]>(`
     SELECT id, memory_session_id, project, text, type, title, subtitle, facts, narrative,
            concepts, files_read, files_modified, prompt_number, created_at, created_at_epoch,
-           content_hash
+           content_hash, user_label
     FROM observations
     WHERE id > ?
     ORDER BY id ASC
@@ -138,7 +140,7 @@ export function collectIncremental(
 
   const summariesRaw = db.query<SummaryRow, [number, number]>(`
     SELECT id, memory_session_id, project, request, investigated, learned, completed,
-           next_steps, files_read, files_edited, notes, prompt_number, created_at, created_at_epoch
+           next_steps, files_read, files_edited, notes, prompt_number, created_at, created_at_epoch, user_label
     FROM session_summaries
     WHERE id > ?
     ORDER BY id ASC
