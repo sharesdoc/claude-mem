@@ -106,6 +106,7 @@ export class SessionStore {
     this.createSyncInboxTable();
     this.addApiKeysUserLabelColumn();
     this.ensureUserLabelColumns();
+    this.ensurePromptCompletedAtColumn();
   }
 
   /**
@@ -213,6 +214,96 @@ export class SessionStore {
     logger.debug('DB', `Backfilled orphan session_summaries.user_label by project+time: ${sumOrphanBackfilled.changes} rows`);
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(39, new Date().toISOString());
+  }
+
+  /**
+   * v40 — completed_at_epoch on user_prompts.
+   *
+   * Captures the exact wall-clock time when the SDK signals processing
+   * complete for a prompt (result message with subtype 'success').
+   * Replaces the old LEAD()-based estimation that included user idle time.
+   */
+  private ensurePromptCompletedAtColumn(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(40) as SchemaVersion | undefined;
+    if (applied) return;
+
+    const cols = this.db.query('PRAGMA table_info(user_prompts)').all() as TableColumnInfo[];
+    if (!cols.some(c => c.name === 'completed_at_epoch')) {
+      this.db.run('ALTER TABLE user_prompts ADD COLUMN completed_at_epoch INTEGER');
+    }
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_user_prompts_completed ON user_prompts(completed_at_epoch)');
+
+    // ── Backfill old data ──────────────────────────────────────────
+    // Step A: last prompt of each completed session → session.completed_at_epoch
+    const stepA = this.db.prepare(`
+      UPDATE user_prompts SET completed_at_epoch = (
+        SELECT s.completed_at_epoch FROM sdk_sessions s
+        WHERE s.content_session_id = user_prompts.content_session_id
+          AND s.status = 'completed' AND s.completed_at_epoch IS NOT NULL
+      )
+      WHERE completed_at_epoch IS NULL
+        AND prompt_number = (
+          SELECT MAX(prompt_number) FROM user_prompts up2
+          WHERE up2.content_session_id = user_prompts.content_session_id
+        )
+    `).run();
+    logger.debug('DB', `Backfill A (last prompt → session completed_at): ${stepA.changes} rows`);
+
+    // Step B: compute global trimmed mean of prompt-to-prompt intervals
+    // as a reasonable cap for LEAD()-based backfill of non-last prompts
+    const intervals = this.db.prepare(`
+      SELECT (up2.created_at_epoch - up.created_at_epoch) AS interval_ms
+      FROM user_prompts up
+      JOIN user_prompts up2 ON up2.content_session_id = up.content_session_id
+        AND up2.prompt_number = up.prompt_number + 1
+      WHERE up.completed_at_epoch IS NULL
+      ORDER BY interval_ms
+    `).all() as Array<{ interval_ms: number }>;
+
+    let globalCapMs = 900000; // default 15 min
+    if (intervals.length >= 5) {
+      const sorted = intervals.map(r => r.interval_ms).filter(v => v > 0);
+      const lowCut = Math.floor(sorted.length * 0.2);
+      const highCut = Math.ceil(sorted.length * 0.8);
+      const trimmed = sorted.slice(lowCut, highCut);
+      if (trimmed.length > 0) {
+        globalCapMs = Math.round(trimmed.reduce((a, b) => a + b, 0) / trimmed.length);
+      }
+    }
+
+    // Step C: apply LEAD() capped at global trimmed mean for remaining prompts
+    const stepC = this.db.prepare(`
+      UPDATE user_prompts SET completed_at_epoch = (
+        SELECT MIN(up2.created_at_epoch, up1.created_at_epoch + ?)
+        FROM user_prompts up1
+        JOIN user_prompts up2 ON up2.content_session_id = up1.content_session_id
+          AND up2.prompt_number = up1.prompt_number + 1
+        WHERE up1.id = user_prompts.id
+      )
+      WHERE completed_at_epoch IS NULL
+    `).run(globalCapMs);
+    logger.debug('DB', `Backfill C (LEAD capped at global trimmed mean ${Math.round(globalCapMs/1000)}s): ${stepC.changes} rows`);
+
+    // Step D: any remaining NULL (no next prompt, session not completed) →
+    // use a conservative 5-minute default
+    const stepD = this.db.prepare(`
+      UPDATE user_prompts SET completed_at_epoch = created_at_epoch + 300000
+      WHERE completed_at_epoch IS NULL
+    `).run();
+    if (stepD.changes > 0) {
+      logger.debug('DB', `Backfill D (default 5min): ${stepD.changes} rows`);
+    }
+
+    // Sanity: ensure no completed_at_epoch < created_at_epoch
+    const fixed = this.db.prepare(`
+      UPDATE user_prompts SET completed_at_epoch = created_at_epoch + 300000
+      WHERE completed_at_epoch < created_at_epoch
+    `).run();
+    if (fixed.changes > 0) {
+      logger.warn('DB', `Fixed ${fixed.changes} prompts with completed_at_epoch < created_at_epoch (set to +5min)`);
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(40, new Date().toISOString());
   }
 
   /**
@@ -1989,6 +2080,26 @@ export class SessionStore {
 
     const result = stmt.get(contentSessionId, promptNumber) as { prompt_text: string } | undefined;
     return result?.prompt_text ?? null;
+  }
+
+  /**
+   * v40 — record exact wall-clock completion time for a prompt.
+   * Called when the SDK signals processing is done (result message).
+   * Only sets if not already set (first result wins for restart scenarios).
+   */
+  updatePromptCompletedAt(contentSessionId: string, promptNumber: number, completedAtEpoch: number): void {
+    this.db.prepare(`
+      UPDATE user_prompts SET completed_at_epoch = ?
+      WHERE content_session_id = ? AND prompt_number = ?
+        AND completed_at_epoch IS NULL
+    `).run(completedAtEpoch, contentSessionId, promptNumber);
+  }
+
+  getMaxPromptNumber(contentSessionId: string): number | null {
+    const row = this.db.prepare(`
+      SELECT MAX(prompt_number) AS n FROM user_prompts WHERE content_session_id = ?
+    `).get(contentSessionId) as { n: number | null } | undefined;
+    return row?.n ?? null;
   }
 
   storeObservation(

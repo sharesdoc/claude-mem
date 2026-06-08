@@ -632,11 +632,10 @@ export class DataRoutes extends BaseRouteHandler {
     const tzOffsetMs = tzOffsetMin * 60000;
 
     // AI processing time = time from a prompt to the NEXT prompt in the same
-    // session (request turnaround), capped so a long idle gap (user walked
-    // away) doesn't inflate it. Observation timestamps can't be used: they are
-    // written asynchronously by the compression worker, lag behind, and most
-    // recent prompts have no observations yet.
-    const PROCESSING_CAP_MS = 15 * 60 * 1000; // 15 minutes
+    // Processing time is now measured exactly: user_prompts.completed_at_epoch
+    // (captured from SDK result message) minus user_prompts.created_at_epoch.
+    // No estimation, no cap needed. Prompts without a completion signal
+    // (aborted / crashed) are excluded via WHERE completed_at_epoch IS NOT NULL.
 
     // ── Global time scope: drives EVERY section on the page ─────────────
     // scope = 24h | day | week (Mon-start) | month | quarter, in the VIEWER's TZ.
@@ -758,22 +757,18 @@ export class DataRoutes extends BaseRouteHandler {
 
     // ── per-user AI processing time (prompt→next prompt, capped) ────────
     // Table-scoped (since): feeds the User Summary table (Today/Week/Month).
+    // Uses exact completion time from SDK result message (v40).
     const userProcessingTimeRows = db.prepare(`
-      SELECT user_label, SUM(MIN(next_ts - ts, ?)) AS total_ms, COUNT(*) AS prompt_count
-      FROM (
-        SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
-               up.created_at_epoch AS ts,
-               LEAD(up.created_at_epoch) OVER (
-                 PARTITION BY up.content_session_id ORDER BY up.created_at_epoch
-               ) AS next_ts
-        FROM user_prompts up
-        JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
-        WHERE up.created_at_epoch >= ?
-          AND (? IS NULL OR s.project = ?)
-      )
-      WHERE next_ts IS NOT NULL
+      SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
+             SUM(up.completed_at_epoch - up.created_at_epoch) AS total_ms,
+             COUNT(*) AS prompt_count
+      FROM user_prompts up
+      JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+      WHERE up.completed_at_epoch IS NOT NULL
+        AND up.created_at_epoch >= ?
+        AND (? IS NULL OR s.project = ?)
       GROUP BY user_label
-    `).all(PROCESSING_CAP_MS, since, project || null, project || null) as Array<{ user_label: string; total_ms: number; prompt_count: number }>;
+    `).all(since, project || null, project || null) as Array<{ user_label: string; total_ms: number; prompt_count: number }>;
 
     const userProcessingTime: Record<string, { totalMs: number; sessionCount: number }> = {};
     for (const r of userProcessingTimeRows) {
@@ -782,23 +777,17 @@ export class DataRoutes extends BaseRouteHandler {
 
     // ── processing time by user per bucket (chart, local TZ, capped) ──
     const dailyTimeByUser = db.prepare(`
-      SELECT day_bucket, user_label, SUM(MIN(next_ts - ts, ?)) AS total_ms
-      FROM (
-        SELECT CAST((up.created_at_epoch + ?) / ${bucketDivisor} AS INTEGER) AS day_bucket,
-               COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
-               up.created_at_epoch AS ts,
-               LEAD(up.created_at_epoch) OVER (
-                 PARTITION BY up.content_session_id ORDER BY up.created_at_epoch
-               ) AS next_ts
-        FROM user_prompts up
-        JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
-        WHERE up.created_at_epoch >= ?
-          AND (? IS NULL OR s.project = ?)
-      )
-      WHERE next_ts IS NOT NULL
+      SELECT CAST((up.created_at_epoch + ?) / ${bucketDivisor} AS INTEGER) AS day_bucket,
+             COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
+             SUM(up.completed_at_epoch - up.created_at_epoch) AS total_ms
+      FROM user_prompts up
+      JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+      WHERE up.completed_at_epoch IS NOT NULL
+        AND up.created_at_epoch >= ?
+        AND (? IS NULL OR s.project = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(PROCESSING_CAP_MS, tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
+    `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
 
     // ── per-user project count & active days (table-scoped, local TZ) ──
     const userProjectRows = db.prepare(`
@@ -874,24 +863,19 @@ export class DataRoutes extends BaseRouteHandler {
       projectEditor[r.project] = r.user_label;
     }
 
-    // ── per-project processing time (prompt→next prompt, capped, all-time) ──
+    // ── per-project processing time (exact, from SDK result message) ──
     const projectTimeRows = db.prepare(`
-      SELECT project, SUM(MIN(next_ts - ts, ?)) AS total_ms, COUNT(*) AS prompt_count
-      FROM (
-        SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
-               up.created_at_epoch AS ts,
-               LEAD(up.created_at_epoch) OVER (
-                 PARTITION BY up.content_session_id ORDER BY up.created_at_epoch
-               ) AS next_ts
-        FROM user_prompts up
-        JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
-        WHERE up.created_at_epoch >= ?
-          AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
-      )
-      WHERE next_ts IS NOT NULL
+      SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
+             SUM(up.completed_at_epoch - up.created_at_epoch) AS total_ms,
+             COUNT(*) AS prompt_count
+      FROM user_prompts up
+      JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+      WHERE up.completed_at_epoch IS NOT NULL
+        AND up.created_at_epoch >= ?
+        AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
       GROUP BY project
       ORDER BY total_ms DESC
-    `).all(PROCESSING_CAP_MS, since, userLabel || null, userLabel || null) as Array<{ project: string; total_ms: number; session_count: number }>;
+    `).all(since, userLabel || null, userLabel || null) as Array<{ project: string; total_ms: number; session_count: number }>;
 
     // ── format bucket → label ───────────────────────────────────────────
     const formatBucket = (bucket: number): string => {
@@ -989,18 +973,18 @@ export class DataRoutes extends BaseRouteHandler {
           GROUP BY user_label
         `).all(start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; n: number }>;
 
-        // ── Per-user processing time ──
+        // ── Per-user processing time (exact, from SDK result message) ──
         const timeRows = db.prepare(`
-          SELECT user_label, COALESCE(SUM(MIN(next_ts - ts, ?)), 0) AS total_ms FROM (
-            SELECT ${RESOLVE_USER} AS user_label,
-                   up.created_at_epoch AS ts,
-                   LEAD(up.created_at_epoch) OVER (PARTITION BY up.content_session_id ORDER BY up.created_at_epoch) AS next_ts
-            FROM user_prompts up JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
-            WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ?
-              AND (? IS NULL OR s.project = ?)
-              AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
-          ) WHERE next_ts IS NOT NULL GROUP BY user_label
-        `).all(PROCESSING_CAP_MS, start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; total_ms: number }>;
+          SELECT ${RESOLVE_USER} AS user_label,
+                 COALESCE(SUM(up.completed_at_epoch - up.created_at_epoch), 0) AS total_ms
+          FROM user_prompts up
+          JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+          WHERE up.completed_at_epoch IS NOT NULL
+            AND up.created_at_epoch >= ? AND up.created_at_epoch < ?
+            AND (? IS NULL OR s.project = ?)
+            AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
+          GROUP BY user_label
+        `).all(start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; total_ms: number }>;
 
         // ── Per-user projects ──
         const projRows = db.prepare(`

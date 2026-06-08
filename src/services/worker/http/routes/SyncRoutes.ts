@@ -268,8 +268,8 @@ export class SyncRoutes extends BaseRouteHandler {
     `);
     const upsertPrompt = db.prepare(`
       INSERT INTO user_prompts
-        (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch)
-      VALUES (?, ?, ?, ?, ?)
+        (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
 
     const now = Date.now();
@@ -367,6 +367,7 @@ export class SyncRoutes extends BaseRouteHandler {
           pr.prompt_text,
           pr.created_at,
           pr.created_at_epoch,
+          (pr.completed_at_epoch ?? null) as number | null,
         );
         recordInbox.run(p.user_label, 'user_prompts', sourceUid, now, pr.id);
         applied.prompts.inserted++;

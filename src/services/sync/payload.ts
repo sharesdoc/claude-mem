@@ -98,6 +98,7 @@ export interface PromptRow {
   prompt_text: string;
   created_at: string;
   created_at_epoch: number;
+  completed_at_epoch: number | null;
 }
 
 export interface CollectResult {
@@ -148,7 +149,7 @@ export function collectIncremental(
   `).all(watermark.summaries, limit);
 
   const prompts = db.query<PromptRow, [number, number]>(`
-    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch
+    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch
     FROM user_prompts
     WHERE id > ?
     ORDER BY id ASC

@@ -390,7 +390,14 @@ export class ClaudeProvider {
         }
 
         if (message.type === 'result' && message.subtype === 'success') {
-          // Usage telemetry is captured at SDK level
+          // Capture exact AI processing completion time for stats.
+          // This is the SDK-level signal that replaces the old LEAD()-based estimate.
+          const completedAt = Date.now();
+          this.dbManager.getSessionStore().updatePromptCompletedAt(
+            session.contentSessionId,
+            session.lastPromptNumber,
+            completedAt
+          );
         }
       }
     } finally {

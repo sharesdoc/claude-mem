@@ -26,6 +26,15 @@ export class SessionCompletionHandler {
 
     sessionStore.markSessionCompleted(sessionDbId);
 
+    // Fallback: ensure the last prompt in this session has a completed_at_epoch.
+    // Covers the case where the SDK result message was missed (e.g. pending-work
+    // restart that ultimately succeeded). First result wins due to the
+    // NULL guard in updatePromptCompletedAt.
+    const lastPromptNumber = sessionStore.getMaxPromptNumber(row.content_session_id);
+    if (lastPromptNumber !== null) {
+      sessionStore.updatePromptCompletedAt(row.content_session_id, lastPromptNumber, Date.now());
+    }
+
     try {
       const pendingStore = this.sessionManager.getPendingMessageStore();
       const cleared = await pendingStore.clearPendingForSession(sessionDbId);
