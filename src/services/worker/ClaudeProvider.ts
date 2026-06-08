@@ -390,10 +390,22 @@ export class ClaudeProvider {
         }
 
         if (message.type === 'result' && message.subtype === 'success') {
-          const completedAt = Date.now();
-          // Log result message keys once to discover SDK-provided timing fields
-          const keys = Object.keys(message as object).filter(k => k !== 'type' && k !== 'subtype');
-          logger.info('SDK', `Result keys: [${keys.join(', ')}] | prompt#=${session.lastPromptNumber}`);
+          // Use the SDK's own timing (duration_ms) — same source as Claude Code's
+          // "✻ Baked for 34s". Reconstruct end time from prompt creation + SDK duration.
+          const durationMs = (message as any).duration_ms;
+          let completedAt: number;
+          if (typeof durationMs === 'number' && durationMs > 0) {
+            const createdEpoch = this.dbManager.getSessionStore().getPromptCreatedAt(
+              session.contentSessionId, session.lastPromptNumber
+            );
+            if (createdEpoch != null) {
+              completedAt = createdEpoch + durationMs;
+            } else {
+              completedAt = Date.now();
+            }
+          } else {
+            completedAt = Date.now();
+          }
           this.dbManager.getSessionStore().updatePromptCompletedAt(
             session.contentSessionId,
             session.lastPromptNumber,

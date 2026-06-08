@@ -621,7 +621,10 @@ ${o.stack}`:` ${o.message}`;else if(this.getLevel()===0&&typeof o=="object")try{
       UPDATE user_prompts SET completed_at_epoch = ?
       WHERE content_session_id = ? AND prompt_number = ?
         AND completed_at_epoch IS NULL
-    `).run(s,e,t)}getMaxPromptNumber(e){return this.db.prepare(`
+    `).run(s,e,t)}getPromptCreatedAt(e,t){return this.db.prepare(`
+      SELECT created_at_epoch FROM user_prompts
+      WHERE content_session_id = ? AND prompt_number = ?
+    `).get(e,t)?.created_at_epoch??null}getMaxPromptNumber(e){return this.db.prepare(`
       SELECT MAX(prompt_number) AS n FROM user_prompts WHERE content_session_id = ?
     `).get(e)?.n??null}storeObservation(e,t,s,n,o=0,i,a){let _=i??Date.now(),u=new Date(_).toISOString(),E=J(e,s.title,s.narrative),l=this.db.prepare(`
       INSERT INTO observations
