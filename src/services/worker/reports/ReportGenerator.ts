@@ -18,6 +18,17 @@ const MAX_PROJECTS_IN_PROMPT = 8;
 // 工作任务里只体现"值得一提"的项目:本周耗时 > 1 小时,且有具体工作内容。
 const MIN_PROJECT_MS = 60 * 60 * 1000;
 
+// 周报正文需满足的要求(供 AI 质检与按意见优化时引用)。
+const REQUIREMENTS = [
+  '1. 全文简体中文(仅专有名词、项目路径、代码标识、命令、commit 号等保留原文)。',
+  '2. 结构恰好四章,标题为:"## 一、本周总体概述"、"## 二、本周工作任务"、"## 三、下周工作建议"、"## 四、本周经验与教训";不得出现其他章节(如"项目详述"或第五章)。',
+  '3. "一、本周总体概述"是一段 200~300 字的综述,有重点、有结论。',
+  '4. "二、本周工作任务"按项目分组、按耗时从多到少排列;每个项目标题严格为 `### 项目 <完整项目路径> · 耗时X`(完整路径逐字保留,作为项目唯一ID,不得简写/翻译/占位);其下每条要点要说清"完成了什么任务+用了什么方法+解决了什么问题+达到了什么效果",单个项目的任务要点不超过 10 条。',
+  '5. **数据中给出的每一个项目都必须在"本周工作任务"中单独出现**,不得遗漏、合并或删除任何项目(次要项目可以少写几条要点,但项目本身必须保留)。',
+  '6. 不得出现"数据未提供"之类占位内容;不要用代码块(三个反引号)把整篇包裹。',
+  '7. 每条要点精炼、重点突出;但不得为了精简而删除项目或丢失关键工作。',
+].join('\n');
+
 export interface ReportStats {
   totalMs: number;
   projects: number;
@@ -272,7 +283,8 @@ export class ReportGenerator {
       '【语言要求·重要】整份周报必须使用**简体中文**撰写。源数据中的工作记录可能是英文,请用中文**转述其含义**,绝不要直接照抄英文句子。' +
       '仅在以下情形保留原文:专有名词、产品/项目名称、人名、文件路径、代码标识符(函数/字段/类名)、命令、环境变量、commit 号等;其余内容(动词、说明、连接词、句子)一律用中文。\n\n' +
       '## 一、本周总体概述\n用**一段话(200~300字)**概括:本周主要做了什么、解决了什么问题、取得了什么成果、整体进展如何。要有结论、有重点,像写给主管看的开篇综述。\n\n' +
-      '## 二、本周工作任务\n按项目分组,**按投入工时从多到少排列**(重点项目在前、多写;次要项目少写或合并)。' +
+      '## 二、本周工作任务\n按项目分组,**按投入工时从多到少排列**(重点项目在前、多写;次要项目可以少写几条要点)。' +
+      '**数据中给出的每一个项目都必须单独出现,不可省略、不可合并删除任何项目**。' +
       '每个项目用三级标题,格式严格为 `### 项目 <完整项目路径> · 耗时X`。其中 `<完整项目路径>` 必须**逐字照抄**数据中给出的项目标识(通常是绝对路径,它就是该项目的唯一 ID),' +
       '**严禁简写、缩写、翻译或用"项目名"之类占位词**;`耗时X` 用数据中该项目的耗时。\n' +
       '在每个项目标题下,用要点(`- `)分条描述该项目本周完成的工作。**每条要点要说清四件事:完成了什么任务、用了什么方法、解决了什么问题、达到了什么效果**(2~4 句,精炼专业)。' +
@@ -293,23 +305,28 @@ export class ReportGenerator {
     ]);
     if (!body) return null;
 
-    // ── 生成后自检:核查是否符合结构/格式要求;有问题就带着问题让模型修正,最多 2 轮 ──
-    let issues = this.validateBody(body);
-    for (let attempt = 0; issues.length > 0 && attempt < 2; attempt++) {
-      logger.info('WORKER', 'Weekly report self-check found issues, repairing', { attempt: attempt + 1, issues });
-      const repair =
-        '你上一版周报正文存在以下不符合要求的问题,请**逐一修正**,在保持内容真实、不新增未提供信息的前提下,' +
-        '严格按要求重新输出**完整正文**(从"## 一、"开始,不要任何解释,不要用代码块包裹):\n\n问题清单:\n' +
-        issues.map((s, i) => `${i + 1}. ${s}`).join('\n') + '\n\n上一版正文:\n' + body;
-      const fixed = await this.callQwen(apiKey, model, [
+    // ── 生成后由 AI 质检:合格直接采用;不合格则按质检意见优化一次(优化后不再二次审查) ──
+    const verdict = await this.callQwen(apiKey, model, [
+      { role: 'system', content: '你是严格的周报质检员。只依据给定的《周报要求》审核周报正文,只输出审核结论,不要复述周报内容。' },
+      { role: 'user', content:
+        `《周报要求》:\n${REQUIREMENTS}\n\n《待审核周报正文》:\n${body}\n\n` +
+        '请判断该周报是否完全符合《周报要求》。\n' +
+        '- 若完全合格,只输出四个字:周报合格\n' +
+        '- 若不合格,第一行输出"周报不合格",从第二行起逐条列出存在的问题与具体修改意见(简明扼要)。' },
+    ]);
+    if (verdict && verdict.includes('不合格')) {
+      logger.info('WORKER', 'Weekly report review: 不合格, optimizing once', {});
+      const optimized = await this.callQwen(apiKey, model, [
         { role: 'system', content: sys },
-        { role: 'user', content: repair },
+        { role: 'user', content:
+          '请根据质检意见修改下面的周报正文,在保持内容真实、不新增未提供信息的前提下,' +
+          '严格按《周报要求》重新输出**完整正文**(从"## 一、"开始,不要任何解释,不要用代码块包裹)。\n\n' +
+          `《周报要求》:\n${REQUIREMENTS}\n\n质检意见:\n${verdict}\n\n待修改的周报正文:\n${body}` },
       ]);
-      if (!fixed) break;
-      body = fixed;
-      issues = this.validateBody(body);
+      if (optimized) body = optimized;
+    } else {
+      logger.info('WORKER', 'Weekly report review: 合格', {});
     }
-    if (issues.length) logger.warn('WORKER', 'Weekly report still has issues after repair attempts', { issues });
     return body;
   }
 
@@ -334,32 +351,5 @@ export class ReportGenerator {
     } finally {
       clearTimeout(timer);
     }
-  }
-
-  /** 核查 AI 周报正文是否符合结构/格式/篇幅要求,返回问题清单(空数组=合格)。 */
-  private validateBody(body: string): string[] {
-    const issues: string[] = [];
-    if (!/##\s*一/.test(body)) issues.push('缺少"## 一、本周总体概述"章节');
-    if (!/##\s*二/.test(body)) issues.push('缺少"## 二、本周工作任务"章节');
-    if (!/##\s*三/.test(body)) issues.push('缺少"## 三、下周工作建议"章节');
-    if (!/##\s*四/.test(body)) issues.push('缺少"## 四、本周经验与教训"章节');
-    if (/##\s*五/.test(body) || body.includes('项目详述')) issues.push('包含多余章节(如"项目详述"或第五章),请删除,只保留一~四');
-    if (body.includes('数据未提供') || body.includes('未提供具体')) issues.push('出现"数据未提供"之类占位——这类没有具体内容的项目应直接省略,不要写进周报');
-    if (/```/.test(body)) issues.push('整篇被代码块(三个反引号)包裹了,请直接输出 Markdown 正文');
-
-    // 取"## 二"到"## 三"之间作为本周工作任务段,逐项目校验
-    const m = body.match(/##\s*二[\s\S]*?(?=\n##\s*三|$)/);
-    const sec2 = m ? m[0] : '';
-    const blocks = sec2.split(/\n(?=###\s)/).slice(1);
-    if (blocks.length === 0) issues.push('"本周工作任务"下没有列出任何项目');
-    for (const blk of blocks) {
-      const head = (blk.match(/^###\s.*/) || [''])[0].trim();
-      if (!/^###\s*项目\s+\S/.test(head)) issues.push(`项目标题格式不符,应为"### 项目 <完整项目路径> · 耗时X":${head}`);
-      else if (!head.includes('耗时')) issues.push(`项目标题缺少耗时信息:${head}`);
-      const bullets = (blk.match(/^-\s/gm) || []).length;
-      if (bullets === 0) issues.push(`项目标题"${head}"下没有任务要点`);
-      if (bullets > 10) issues.push(`项目"${head}"任务要点超过10条(当前${bullets}条),请精简到10条以内`);
-    }
-    return issues;
   }
 }

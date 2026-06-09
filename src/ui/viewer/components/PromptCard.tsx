@@ -122,17 +122,8 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
           ) : (showProcessingTime && !prompt.completed_at_epoch) ? (
             <span className="meta-processing-time meta-cancelled"> · {t('prompt.cancelled')}</span>
           ) : null}
-          {prompt.user_label ? (
-            <>
-              <span className="meta-user-label" title={t('card.userLabelTip')}>  {prompt.user_label}</span>
-              {prompt.user_name && prompt.user_name !== prompt.user_label && (
-                <span className="meta-user" title={t('card.userNameTip')}>  {prompt.user_name}</span>
-              )}
-            </>
-          ) : (
-            prompt.user_name && (
-              <span className="meta-user" title={t('card.userNameTip')}>  {prompt.user_name}</span>
-            )
+          {(prompt.user_label || prompt.user_name) && (
+            <span className="meta-user-label" title={t('card.userLabelTip')}>  {prompt.user_label || prompt.user_name}</span>
           )}
         </span>
         {copied && (
