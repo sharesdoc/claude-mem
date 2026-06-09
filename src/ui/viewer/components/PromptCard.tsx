@@ -114,11 +114,13 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
       <div className="card-meta prompt-meta">
         <span className="meta-date">
           #{prompt.id} • {date}
-          {processingInfo && (
-            <span className="meta-processing-time" title={`AI 处理完成: ${processingInfo.completedDate}${processingInfo.thinkStr ? ' · 人处理: ' + processingInfo.thinkStr : ''}`}>
+          {processingInfo ? (
+            <span className="meta-processing-time" title={`AI 处理完成: ${processingInfo.completedDate}${processingInfo.thinkStr ? ' · ' + t('prompt.thinkTime') + ': ' + processingInfo.thinkStr : ''}`}>
               {' · '}⏱ {processingInfo.duration}{processingInfo.thinkStr && ` + ${processingInfo.thinkStr}`}
             </span>
-          )}
+          ) : (showProcessingTime && !prompt.completed_at_epoch) ? (
+            <span className="meta-processing-time meta-cancelled"> · {t('prompt.cancelled')}</span>
+          ) : null}
           {prompt.user_label ? (
             <>
               <span className="meta-user-label" title={t('card.userLabelTip')}>  {prompt.user_label}</span>

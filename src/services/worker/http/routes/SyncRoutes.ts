@@ -360,13 +360,12 @@ export class SyncRoutes extends BaseRouteHandler {
         insertedSum.push(s);
       }
 
-      // Verify & correct think-time cap: server's config is authoritative.
+      // Server's think-time cap is ALWAYS authoritative.
       const mainSettings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
       const serverCapMin = Math.max(0, parseInt(mainSettings.CLAUDE_MEM_THINK_TIME_CAP_MINUTES, 10) || 0);
       const clientCapMin = (p as any).think_time_cap_minutes ?? 0;
-      const capMismatch = serverCapMin !== clientCapMin;
-      if (capMismatch) {
-        logger.debug('SYNC', `Think-time cap mismatch: client=${clientCapMin}m server=${serverCapMin}m — correcting`);
+      if (serverCapMin !== clientCapMin) {
+        logger.info('SYNC', `Think-time cap corrected: client=${clientCapMin}m → server=${serverCapMin}m`);
       }
 
       for (const pr of p.prompts) {
@@ -375,9 +374,7 @@ export class SyncRoutes extends BaseRouteHandler {
           applied.prompts.skipped++;
           continue;
         }
-        const thinkTime: number = capMismatch
-          ? Math.min((pr as any).think_time_ms ?? 0, serverCapMin * 60_000)
-          : ((pr as any).think_time_ms ?? 0);
+        const thinkTime: number = Math.min((pr as any).think_time_ms ?? 0, serverCapMin * 60_000);
         upsertPrompt.run(
           pr.content_session_id,
           pr.prompt_number,
