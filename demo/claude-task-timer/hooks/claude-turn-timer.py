@@ -10,6 +10,8 @@ import hashlib
 import json
 import os
 import pathlib
+import re
+import shlex
 import sys
 import time
 import traceback
@@ -138,6 +140,29 @@ def shorten_text(value: object, limit: int = 300) -> str:
     return text
 
 
+def parse_redo_loop_max_iterations(prompt: object) -> int | None:
+    """Return redo loop max iterations from a /redo:loop prompt, if present."""
+    text = str(prompt or "").strip()
+    if not text.startswith("/redo:loop"):
+        return None
+
+    try:
+        parts = shlex.split(text)
+    except ValueError:
+        parts = text.split()
+
+    for index, part in enumerate(parts):
+        if part in {"-m", "--max", "--max-iterations"} and index + 1 < len(parts):
+            if parts[index + 1].isdigit():
+                return max(1, int(parts[index + 1]))
+
+        match = re.fullmatch(r"(?:-m|--max|--max-iterations)=(\d+)", part)
+        if match:
+            return max(1, int(match.group(1)))
+
+    return None
+
+
 def build_base_record(state: dict, payload: dict, end_ms: int, status: str, precision: str) -> dict:
     """Build the JSONL record for a closed task."""
     start_ms = int(state.get("start_ms", end_ms))
@@ -182,6 +207,11 @@ def build_base_record(state: dict, payload: dict, end_ms: int, status: str, prec
         record["background_tasks_count"] = len(payload.get("background_tasks") or [])
         record["session_crons_count"] = len(payload.get("session_crons") or [])
         record["last_assistant_message"] = shorten_text(payload.get("last_assistant_message", ""), 500)
+
+    if state.get("redo_loop"):
+        record["redo_loop"] = True
+        record["redo_stop_count"] = int(state.get("redo_stop_count", 0))
+        record["redo_max_iterations"] = int(state.get("redo_max_iterations", 0))
 
     return record
 
@@ -273,6 +303,7 @@ def recover_stale_active_if_needed(active_file: pathlib.Path, payload: dict, cur
 
 def start_task(active_file: pathlib.Path, payload: dict, current_ms: int) -> None:
     """Record the beginning of a new user task."""
+    redo_max_iterations = parse_redo_loop_max_iterations(payload.get("prompt", ""))
     state = {
         "turn_id": str(uuid.uuid4()),
         "session_id": payload.get("session_id", "unknown"),
@@ -290,6 +321,12 @@ def start_task(active_file: pathlib.Path, payload: dict, current_ms: int) -> Non
         "notification_count": 0,
         "tool_event_count": 0,
     }
+
+    if redo_max_iterations is not None:
+        state["redo_loop"] = True
+        state["redo_max_iterations"] = redo_max_iterations
+        state["redo_stop_count"] = 0
+
     atomic_write_json(active_file, state)
 
 
@@ -315,6 +352,30 @@ def observe_task(active_file: pathlib.Path, payload: dict, current_ms: int) -> N
     atomic_write_json(active_file, state)
 
 
+def handle_stop_event(active_file: pathlib.Path, payload: dict, current_ms: int) -> dict | None:
+    """Close normal tasks, but keep redo loop tasks open until the last iteration."""
+    state = read_json_file(active_file)
+    if not state:
+        return None
+
+    if state.get("redo_loop"):
+        stop_count = int(state.get("redo_stop_count", 0)) + 1
+        max_iterations = int(state.get("redo_max_iterations", 1))
+        state["redo_stop_count"] = stop_count
+        state["last_seen_ms"] = current_ms
+        state["last_seen_time"] = iso_time(current_ms)
+        state["last_seen_event"] = "Stop"
+        state["last_assistant_message"] = shorten_text(payload.get("last_assistant_message", ""), 500)
+
+        if stop_count < max_iterations:
+            atomic_write_json(active_file, state)
+            return None
+
+        atomic_write_json(active_file, state)
+
+    return close_active_task(active_file, payload, "completed", "exact", current_ms)
+
+
 def handle_payload(payload: dict) -> dict | None:
     """Handle one Claude Code hook event."""
     ensure_dirs()
@@ -331,7 +392,7 @@ def handle_payload(payload: dict) -> dict | None:
         return None
 
     if event_name == "Stop":
-        return close_active_task(active_file, payload, "completed", "exact", current_ms)
+        return handle_stop_event(active_file, payload, current_ms)
 
     if event_name == "StopFailure":
         return close_active_task(active_file, payload, "failed_api", "exact", current_ms)
