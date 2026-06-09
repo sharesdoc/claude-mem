@@ -24,16 +24,17 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
   const processingInfo = (showProcessingTime && prompt.completed_at_epoch)
     ? (() => {
         const thinkMs = prompt.think_time_ms ?? 0;
-        const durationMs = prompt.completed_at_epoch - prompt.created_at_epoch + thinkMs;
+        const aiMs = prompt.completed_at_epoch - prompt.created_at_epoch;
         const completedDate = formatDate(prompt.completed_at_epoch);
-        const mins = Math.floor(durationMs / 60000);
-        const secs = Math.round((durationMs % 60000) / 1000);
-        const duration = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-        // Human think time (separate from AI processing)
-        const thinkMins = thinkMs > 0 ? Math.floor(thinkMs / 60000) : 0;
-        const thinkSecs = thinkMs > 0 ? Math.round((thinkMs % 60000) / 1000) : 0;
-        const thinkStr = thinkMins > 0 ? `${thinkMins}m ${thinkSecs}s` : (thinkSecs > 0 ? `${thinkSecs}s` : '');
-        return { completedDate, duration, thinkStr };
+        // AI processing time
+        const aiMins = Math.floor(aiMs / 60000);
+        const aiSecs = Math.round((aiMs % 60000) / 1000);
+        const aiStr = aiMins > 0 ? `A${aiMins}m${aiSecs}s` : `A${aiSecs}s`;
+        // Human think time
+        const hMins = thinkMs > 0 ? Math.floor(thinkMs / 60000) : 0;
+        const hSecs = thinkMs > 0 ? Math.round((thinkMs % 60000) / 1000) : 0;
+        const hStr = (hMins > 0 || hSecs > 0) ? `H${hMins}m${hSecs}s` : '';
+        return { completedDate, aiStr, hStr };
       })()
     : null;
 
@@ -115,8 +116,8 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
         <span className="meta-date">
           #{prompt.id} • {date}
           {processingInfo ? (
-            <span className="meta-processing-time" title={`AI 处理完成: ${processingInfo.completedDate}${processingInfo.thinkStr ? ' · ' + t('prompt.thinkTime') + ': ' + processingInfo.thinkStr : ''}`}>
-              {' · '}⏱ {processingInfo.duration}{processingInfo.thinkStr && ` + ${processingInfo.thinkStr}`}
+            <span className="meta-processing-time" title={`${processingInfo.completedDate}`}>
+              {' · '}⏱ {processingInfo.hStr && `${processingInfo.hStr} + `}{processingInfo.aiStr}
             </span>
           ) : (showProcessingTime && !prompt.completed_at_epoch) ? (
             <span className="meta-processing-time meta-cancelled"> · {t('prompt.cancelled')}</span>
