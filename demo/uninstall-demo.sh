@@ -154,7 +154,8 @@ show_status() {
 show_help() {
   cat <<EOF
 用法：
-  ./uninstall-demo.sh                 卸载 claude-task-timer，保留耗时日志
+  ./uninstall-demo.sh                 显示帮助
+  ./uninstall-demo.sh -u              卸载 claude-task-timer，保留耗时日志
   ./uninstall-demo.sh --purge-logs    卸载并删除 ${TASK_TIME_DIR}
   ./uninstall-demo.sh status          查看安装状态
   ./uninstall-demo.sh -h|--help       显示帮助
@@ -165,7 +166,7 @@ show_help() {
 EOF
 }
 
-case "${1:-uninstall}" in
+case "${1:-help}" in
   uninstall|-u|--uninstall)
     uninstall_plugin
     ;;
