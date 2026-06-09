@@ -29,7 +29,11 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
         const mins = Math.floor(durationMs / 60000);
         const secs = Math.round((durationMs % 60000) / 1000);
         const duration = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
-        return { completedDate, duration };
+        // Human think time (separate from AI processing)
+        const thinkMins = thinkMs > 0 ? Math.floor(thinkMs / 60000) : 0;
+        const thinkSecs = thinkMs > 0 ? Math.round((thinkMs % 60000) / 1000) : 0;
+        const thinkStr = thinkMins > 0 ? `${thinkMins}m ${thinkSecs}s` : (thinkSecs > 0 ? `${thinkSecs}s` : '');
+        return { completedDate, duration, thinkStr };
       })()
     : null;
 
@@ -111,8 +115,8 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
         <span className="meta-date">
           #{prompt.id} • {date}
           {processingInfo && (
-            <span className="meta-processing-time" title={`AI 处理完成: ${processingInfo.completedDate}`}>
-              {' · '}⏱ {processingInfo.duration}
+            <span className="meta-processing-time" title={`AI 处理完成: ${processingInfo.completedDate}${processingInfo.thinkStr ? ' · 人处理: ' + processingInfo.thinkStr : ''}`}>
+              {' · '}⏱ {processingInfo.duration}{processingInfo.thinkStr && ` + ${processingInfo.thinkStr}`}
             </span>
           )}
           {prompt.user_label ? (

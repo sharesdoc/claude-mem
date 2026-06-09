@@ -11,6 +11,8 @@ import type { DatabaseManager } from '../../DatabaseManager.js';
 import type { Request as ExpressRequest, Response as ExpressResponse, NextFunction } from 'express';
 import type { SSEBroadcaster } from '../../SSEBroadcaster.js';
 import { shouldEmitProjectRow } from '../../../../shared/should-track-project.js';
+import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
+import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 
 /**
  * T-09 — POST /api/sync/ingest (server-only).
@@ -358,12 +360,24 @@ export class SyncRoutes extends BaseRouteHandler {
         insertedSum.push(s);
       }
 
+      // Verify & correct think-time cap: server's config is authoritative.
+      const mainSettings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+      const serverCapMin = Math.max(0, parseInt(mainSettings.CLAUDE_MEM_THINK_TIME_CAP_MINUTES, 10) || 0);
+      const clientCapMin = (p as any).think_time_cap_minutes ?? 0;
+      const capMismatch = serverCapMin !== clientCapMin;
+      if (capMismatch) {
+        logger.debug('SYNC', `Think-time cap mismatch: client=${clientCapMin}m server=${serverCapMin}m — correcting`);
+      }
+
       for (const pr of p.prompts) {
         const sourceUid = `${pr.content_session_id}:${pr.prompt_number}`;
         if (inboxHas.get(p.user_label, 'user_prompts', sourceUid)) {
           applied.prompts.skipped++;
           continue;
         }
+        const thinkTime: number = capMismatch
+          ? Math.min((pr as any).think_time_ms ?? 0, serverCapMin * 60_000)
+          : ((pr as any).think_time_ms ?? 0);
         upsertPrompt.run(
           pr.content_session_id,
           pr.prompt_number,
@@ -371,7 +385,7 @@ export class SyncRoutes extends BaseRouteHandler {
           pr.created_at,
           pr.created_at_epoch,
           (pr.completed_at_epoch ?? null) as number | null,
-          (pr.think_time_ms ?? 0) as number,
+          thinkTime,
         );
         recordInbox.run(p.user_label, 'user_prompts', sourceUid, now, pr.id);
         applied.prompts.inserted++;

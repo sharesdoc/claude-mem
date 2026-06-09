@@ -30,6 +30,8 @@ export interface IngestBatch {
   schema_version: 1;
   user_label: string;
   generated_at_epoch: number;
+  /** Client's think-time cap (minutes). Server verifies/corrects upon ingest. */
+  think_time_cap_minutes: number;
   sessions: SessionRow[];
   observations: ObservationRow[];
   summaries: SummaryRow[];
@@ -164,6 +166,7 @@ export function collectIncremental(
     schema_version: 1,
     user_label: userLabel,
     generated_at_epoch: now(),
+    think_time_cap_minutes: parseInt(process.env.CLAUDE_MEM_THINK_TIME_CAP_MINUTES ?? '3', 10) || 0,
     sessions,
     observations,
     summaries,
