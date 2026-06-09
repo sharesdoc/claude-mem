@@ -2092,10 +2092,12 @@ export class SessionStore {
    * Only sets if not already set (first result wins for restart scenarios).
    */
   updatePromptCompletedAt(contentSessionId: string, promptNumber: number, completedAtEpoch: number): void {
+    // No NULL guard — later callers (e.g. Stop hook) overwrite earlier
+    // estimates (e.g. premature SDK result messages) with the authoritative
+    // processing-complete timestamp.
     this.db.prepare(`
       UPDATE user_prompts SET completed_at_epoch = ?
       WHERE content_session_id = ? AND prompt_number = ?
-        AND completed_at_epoch IS NULL
     `).run(completedAtEpoch, contentSessionId, promptNumber);
   }
 

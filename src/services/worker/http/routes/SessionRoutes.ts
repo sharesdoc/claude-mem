@@ -289,6 +289,19 @@ export class SessionRoutes extends BaseRouteHandler {
       return;
     }
 
+    // Record completion time at Stop hook — mirrors claude-task-timer's end signal.
+    // This is the authoritative processing-complete timestamp. Overwrites any
+    // earlier SDK result timestamps (which may fire prematurely before tool calls
+    // complete). Uses the hook's own timestamp if provided, falling back to now.
+    const stopHookTimestamp = req.body.timestamp;
+    const completedAtEpoch = typeof stopHookTimestamp === 'number' ? stopHookTimestamp
+      : typeof stopHookTimestamp === 'string' ? new Date(stopHookTimestamp).getTime()
+      : Date.now();
+    const lastPromptNumber = store.getPromptNumberFromUserPrompts(contentSessionId);
+    if (lastPromptNumber > 0) {
+      store.updatePromptCompletedAt(contentSessionId, lastPromptNumber, completedAtEpoch);
+    }
+
     const cleanedLastAssistantMessage = last_assistant_message
       ? stripMemoryTagsFromPrompt(String(last_assistant_message))
       : last_assistant_message;
