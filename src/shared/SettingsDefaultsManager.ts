@@ -112,6 +112,9 @@ export interface SettingsDefaults {
   CLAUDE_MEM_WEEKLY_REPORT_ENABLED: string;    // 'true' | 'false' — daily auto-generation switch
   CLAUDE_MEM_WEEKLY_REPORT_TIME: string;        // local 'HH:MM' to refresh this week's report (default 13:00)
   CLAUDE_MEM_WEEKLY_REPORT_MODEL: string;       // Qwen model for the AI "highlights" section
+  /** Aliyun DashScope API key for Qwen weekly-report synthesis. The env var
+   *  DASHSCOPE_API_KEY (if set) always takes precedence over this file value. */
+  DASHSCOPE_API_KEY: string;
 }
 
 export class SettingsDefaultsManager {
@@ -217,6 +220,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_WEEKLY_REPORT_ENABLED: 'true',               // daily auto-generation of weekly work reports
     CLAUDE_MEM_WEEKLY_REPORT_TIME: '13:00',                 // local HH:MM to refresh this week's report
     CLAUDE_MEM_WEEKLY_REPORT_MODEL: 'qwen3-max',           // Qwen model for the AI report synthesis
+    DASHSCOPE_API_KEY: '',                                  // Aliyun DashScope key; env DASHSCOPE_API_KEY overrides this. Empty = AI synthesis disabled.
   };
 
   static getAllDefaults(): SettingsDefaults {

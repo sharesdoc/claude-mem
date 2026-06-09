@@ -1,5 +1,7 @@
 import { Database } from 'bun:sqlite';
 import { logger } from '../../../utils/logger.js';
+import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager.js';
+import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
 
 /**
  * ReportGenerator — 用户工作周报生成器 (B-周报设计文档 §5.4)。
@@ -17,6 +19,8 @@ const AI_TIMEOUT_MS = 90000;
 const MAX_PROJECTS_IN_PROMPT = 8;
 // 工作任务里只体现"值得一提"的项目:本周耗时 > 1 小时,且有具体工作内容。
 const MIN_PROJECT_MS = 60 * 60 * 1000;
+// prompt 降级提炼时,单项目最多送入 AI 的指令条数(去重后,防止 prompt 过长)。
+const MAX_PROMPTS_PER_PROJECT = 15;
 
 // 周报正文需满足的要求(供 AI 质检与按意见优化时引用)。
 const REQUIREMENTS = [
@@ -51,6 +55,14 @@ export interface GeneratedReport {
 interface ProjectAgg { project: string; prompts: number; total_ms: number; }
 interface ObsRow { project: string; type: string; title: string | null; subtitle: string | null; narrative: string | null; }
 interface SummaryRow { project: string; request: string | null; completed: string | null; learned: string | null; investigated: string | null; next_steps: string | null; }
+interface PromptRow { project: string; prompt_text: string | null; }
+
+/** prompt 降级路径:单项目本周的用户指令原文聚合(去重、限量)。 */
+interface PromptDigest {
+  project: string;
+  totalMs: number;
+  prompts: string[];
+}
 
 /** 单项目本周聚合(供拼装、AI 提示、降级共用)。 */
 interface ProjectDigest {
@@ -177,8 +189,19 @@ export class ReportGenerator {
 
     const digests = this.digestByProject(projAgg, obsRows, summRows);
 
-    // ── 正文:优先 AI 提炼,失败/无 Key 退回确定性简版 ────────────────
-    const aiBody = await this.synthesize(user, weekStart, weekEnd, stats, digests, model);
+    // ── 正文生成优先级 ────────────────────────────────────────────────
+    //   ① 用 obs/summaries 提炼(信息最完整,有重点、有结论)
+    //   ② 当本周无 obs/summaries 可炼、但有 prompt 时:降级用 prompt 原文让 AI
+    //      归纳任务清单(过去的 prompt 不会回溯生成 observation,此路保证有内容)
+    //   ③ 仍失败(无 Key / 无可用数据)→ 确定性简版(只汇总,不臆造)
+    let aiBody = await this.synthesize(user, weekStart, weekEnd, stats, digests, model);
+    if (aiBody === null && digests.length === 0 && stats.prompts > 0) {
+      const timeOf = new Map(projAgg.map(p => [p.project, p.total_ms]));
+      const promptDigests = this.digestPromptsByProject(start, end, user, timeOf);
+      if (promptDigests.length > 0) {
+        aiBody = await this.synthesizeFromPrompts(user, weekStart, weekEnd, stats, promptDigests, model);
+      }
+    }
     const body = aiBody ?? this.fallbackBody(stats, digests);
     const markdown = this.assemble(user, weekStart, weekEnd, stats, body);
 
@@ -255,11 +278,25 @@ export class ReportGenerator {
   }
 
   /**
+   * DashScope Key 解析:env `DASHSCOPE_API_KEY` 优先;缺失(或为空)则回退读
+   * settings.json 的 `DASHSCOPE_API_KEY`。两者皆空 → 返回 ''(AI 段禁用)。
+   * worker 多由 GUI 启动、不 source shell rc,故 settings.json 兜底很关键。
+   */
+  private resolveApiKey(): string {
+    const envKey = (process.env.DASHSCOPE_API_KEY ?? '').trim();
+    if (envKey) return envKey;
+    try {
+      return (SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).DASHSCOPE_API_KEY ?? '').trim();
+    } catch { return ''; }
+  }
+
+  /**
    * 用 Qwen 把原始数据提炼成结构化、限篇幅的周报正文(一~五)。
-   * 读 env DASHSCOPE_API_KEY,缺失或任何失败/超时 → 返回 null(降级)。
+   * Key 经 resolveApiKey() 解析(env 优先,settings.json 兜底);缺失或任何
+   * 失败/超时 → 返回 null(降级)。
    */
   private async synthesize(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: ProjectDigest[], model: string): Promise<string | null> {
-    const apiKey = (process.env.DASHSCOPE_API_KEY ?? '').trim();
+    const apiKey = this.resolveApiKey();
     if (!apiKey) return null;
     if (digests.length === 0) return null; // 过滤后无值得一提的项目
     if (stats.prompts === 0 && stats.obs === 0 && stats.summaries === 0) return null;
@@ -327,6 +364,85 @@ export class ReportGenerator {
     } else {
       logger.info('WORKER', 'Weekly report review: 合格', {});
     }
+    return body;
+  }
+
+  /**
+   * prompt 降级聚合:当本周无 obs/summaries 时,按项目收集用户指令(prompt)原文,
+   * 去重、过滤噪声(slash 命令 / 注入包裹文本 / 过短),按耗时排序、限量,供 AI 归纳。
+   */
+  private digestPromptsByProject(start: number, end: number, user: string, timeOf: Map<string, number>): PromptDigest[] {
+    const rows = this.db.prepare(`
+      SELECT s.project AS project, up.prompt_text AS prompt_text
+      FROM user_prompts up
+      JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+      WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ?
+        AND COALESCE(NULLIF(s.user_label, ''), 'unknown') = ? COLLATE NOCASE
+      ORDER BY up.created_at_epoch ASC
+    `).all(start, end, user) as PromptRow[];
+
+    const byProject = new Map<string, { seen: Set<string>; list: string[] }>();
+    for (const r of rows) {
+      const raw = (r.prompt_text ?? '').replace(/\s+/g, ' ').trim();
+      if (raw.length < 4) continue;          // 过短/空指令
+      if (raw.startsWith('/')) continue;     // slash 命令(/login、/clear 等)
+      if (raw.startsWith('<')) continue;     // 被注入的命令/caveat 包裹文本
+      const proj = r.project || 'unknown';
+      const bucket = byProject.get(proj) ?? { seen: new Set<string>(), list: [] };
+      const key = raw.slice(0, 60);
+      if (bucket.seen.has(key)) continue;    // 同项目内去重
+      bucket.seen.add(key);
+      if (bucket.list.length < MAX_PROMPTS_PER_PROJECT) bucket.list.push(clip(raw, 200));
+      byProject.set(proj, bucket);
+    }
+    return Array.from(byProject.entries())
+      .map(([project, b]) => ({ project, totalMs: timeOf.get(project) ?? 0, prompts: b.list }))
+      .filter(d => d.prompts.length > 0)
+      .sort((a, b) => b.totalMs - a.totalMs)
+      .slice(0, MAX_PROJECTS_IN_PROMPT);
+  }
+
+  /**
+   * prompt 降级提炼:本周只有 prompt、没有 obs/summaries 时,让 Qwen 依据用户的
+   * 真实指令**客观归纳**工作任务清单(强调"任务请求、未必全部完成",不臆造成果)。
+   * 沿用与 synthesize 相同的四章结构,便于前端与下载格式一致。失败/无 Key → null。
+   */
+  private async synthesizeFromPrompts(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: PromptDigest[], model: string): Promise<string | null> {
+    const apiKey = this.resolveApiKey();
+    if (!apiKey || digests.length === 0) return null;
+
+    const projectBlocks = digests.map(d => {
+      const lines = [`【${d.project}】 耗时 ${fmtDuration(d.totalMs)};本周指令 ${d.prompts.length} 条:`];
+      d.prompts.forEach((p, i) => lines.push(`  ${i + 1}. ${p}`));
+      return lines.join('\n');
+    }).join('\n\n');
+
+    const facts =
+      `用户:${user}\n周期:${weekStart} ~ ${weekEnd}\n` +
+      `总AI耗时:${fmtDuration(stats.totalMs)};项目数:${stats.projects};任务数(提示词):${stats.prompts};会话:${stats.sessions}\n\n` +
+      `各项目本周的用户指令(prompt 原文,已按耗时从多到少排序):\n${projectBlocks}`;
+
+    const instruction =
+      '你是工程团队的技术主管。本周该员工没有结构化的工作总结,只有他向 AI 助手发出的**真实指令(prompt)记录**。' +
+      '请据此**归纳**他本周围绕各项目开展了哪些工作、关注与排查了哪些问题,撰写一份简洁、有重点的中文周报正文。\n' +
+      '【重要·勿臆造】这些是"任务请求",不一定全部完成。请用"围绕…开展/推进/排查/调整"等客观措辞归纳,**绝不要编造指令中未出现的成果、数字或结论**。\n' +
+      '【语言】整份周报使用**简体中文**;仅专有名词、项目路径、代码标识、命令、commit 号等保留原文,其余一律用中文转述,绝不照抄英文整句。\n' +
+      '不要输出一级标题(#),直接从"## 一、"开始,严格四章、无多余章节:\n\n' +
+      '## 一、本周总体概述\n用一段话(150~250字)概括本周主要围绕哪些项目、做了哪些方向的工作。**结尾注明"(本概述依据用户的 AI 指令记录归纳,供参考)"**。\n\n' +
+      '## 二、本周工作任务\n按项目分组、**按耗时从多到少**排列。每个项目用三级标题,格式严格为 `### 项目 <完整项目路径> · 耗时X`' +
+      '(`<完整项目路径>`逐字照抄数据中的项目标识,作为唯一 ID,严禁简写/翻译/占位)。其下用要点(`- `)归纳该项目本周的工作主题' +
+      '(把多条相近指令合并为一个任务方向),**单个项目要点不超过 8 条**。**数据中每个项目都必须单独出现**。\n\n' +
+      '## 三、下周工作建议\n基于本周指令体现出的未尽事项,给出 2~4 条可执行建议。\n\n' +
+      '## 四、本周经验与教训\n给出 1~3 条提示;若指令信息不足以总结经验,可写"本周记录以任务请求为主,缺少结果性总结,建议在会话结束时补充总结以提升周报质量"。\n\n' +
+      '直接输出 Markdown 正文,不要用三个反引号代码块把整篇包起来。\n\n数据如下:\n\n' + facts;
+
+    const sys = '你是严谨的技术主管。你只能依据用户的 AI 指令(prompt)记录客观归纳工作内容,用简体中文,精炼、重点突出,绝不臆造指令中未出现的成果。';
+
+    const body = await this.callQwen(apiKey, model, [
+      { role: 'system', content: sys },
+      { role: 'user', content: instruction },
+    ]);
+    if (body) logger.info('WORKER', 'Weekly report synthesized from prompts (no obs/summaries)', { user, projects: digests.length });
     return body;
   }
 
