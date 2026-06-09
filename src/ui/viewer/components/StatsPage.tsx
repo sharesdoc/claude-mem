@@ -164,6 +164,39 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
   );
 }
 
+/* ── TrendBars: compact single-series bar chart (history per-user trends) ── */
+interface TrendPoint { label: string; value: number; }
+function TrendBars({ title, color, points, formatVal }: {
+  title: string; color: string; points: TrendPoint[]; formatVal: (v: number) => string;
+}) {
+  if (points.length === 0) return null;
+  const max = Math.max(...points.map(p => p.value), 1);
+  return (
+    <div className="stats-chart">
+      <div className="stats-chart-title">{title}</div>
+      <div style={{ display: 'flex', alignItems: 'stretch', gap: '4px', height: '150px', padding: '6px 2px', overflowX: 'auto' }}>
+        {points.map(p => {
+          const h = Math.max(2, Math.round((p.value / max) * 100));
+          return (
+            <div key={p.label} title={`${p.label}: ${formatVal(p.value)}`}
+              style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '1 0 auto', minWidth: '20px' }}>
+              <span style={{ fontSize: '8px', color: 'var(--color-text-secondary)', fontFamily: 'monospace', marginBottom: '2px', whiteSpace: 'nowrap' }}>
+                {p.value > 0 ? formatVal(p.value) : ''}
+              </span>
+              <div style={{ flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                <div style={{ width: '60%', maxWidth: '28px', height: `${h}%`, background: color, borderRadius: '2px 2px 0 0' }} />
+              </div>
+              <span style={{ fontSize: '8px', color: 'var(--color-text-muted)', fontFamily: 'monospace', marginTop: '4px', whiteSpace: 'nowrap' }}>
+                {p.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const { t } = useLocale();
 
@@ -380,6 +413,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     const activeIdx = Math.max(0, users.indexOf(activeUser));
     const activeMonths = (monthsByUser.get(activeUser) ?? []).slice().sort((a, b) => b.month.localeCompare(a.month));
     const activeWeeks = (weeksByUser.get(activeUser) ?? []).slice().sort((a, b) => b.week.localeCompare(a.week));
+    const activeColor = USER_COLORS[activeIdx % USER_COLORS.length];
+    // Chart points in chronological (oldest → newest) order; bars = AI time.
+    const weekTrend = activeWeeks.slice().reverse().map(w => ({ label: w.week.slice(5), value: w.processingMs }));
+    const monthTrend = activeMonths.slice().reverse().map(m => ({ label: m.month.slice(2), value: m.processingMs }));
 
     type HistRow = {
       prompts: number; avgPromptsPerDay: number; processingMs: number;
@@ -477,10 +514,17 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                     </button>
                   ))}
                 </span>
-                <span className="stats-scope-title" style={{ color: USER_COLORS[activeIdx % USER_COLORS.length], fontWeight: 600 }}>
-                  {activeUser}
-                </span>
               </div>
+
+              {/* Two bar charts under the name: weekly & monthly AI-time trends */}
+              {(weekTrend.length > 0 || monthTrend.length > 0) && (
+                <div className="stats-section">
+                  <div className="stats-charts-grid">
+                    <TrendBars title={t('stats.weekTrend')} color={activeColor} points={weekTrend} formatVal={formatProcessingTime} />
+                    <TrendBars title={t('stats.monthTrend')} color={activeColor} points={monthTrend} formatVal={formatProcessingTime} />
+                  </div>
+                </div>
+              )}
 
               {/* Week History (top) then Monthly History (bottom) for the selected user */}
               {renderTable(t('stats.weekHistory'), t('stats.historyWeek'), activeWeeks, r => r.week)}
