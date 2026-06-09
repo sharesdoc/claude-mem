@@ -431,10 +431,14 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     setReportsBusy(true);
     try {
       const tz = -new Date().getTimezoneOffset();
+      // 显式传入本周周一,只生成当前周的周报(不依赖后端默认值)
+      const now = new Date(); const wd = now.getDay() || 7;
+      const mon = new Date(now); mon.setDate(now.getDate() - wd + 1);
+      const week = `${mon.getFullYear()}-${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')}`;
       await authFetch('/api/reports/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, tz }),
+        body: JSON.stringify({ user, week, tz }),
       });
       await loadReports(user);
     } catch { /* surfaced via empty/unchanged list */ }
