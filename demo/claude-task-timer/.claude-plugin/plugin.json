@@ -1,0 +1,9 @@
+{
+  "name": "claude-task-timer",
+  "version": "0.1.0",
+  "description": "Record wall-clock processing time for each Claude Code user task using lifecycle hooks.",
+  "author": {
+    "name": "Johnson",
+    "email": "Johnson@mailbox.com"
+  }
+}
