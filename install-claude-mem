@@ -1180,7 +1180,7 @@ print_processing_time_status() {
   else
     printf "${YELLOW}OFF${RESET} (default)"
   fi
-  printf "  ${DIM}(env: %s, file: %s)${RESET}\n" \
+  printf "  ${DIM}(env CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME=%s, file: %s)${RESET}\n" \
     "${env_val:-(unset)}" "${file_val:-(unset)}"
   if [[ "$effective" != "true" ]]; then
     printf "  ${DIM}Enable: export CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME=true${RESET}\n"
