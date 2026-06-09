@@ -20,6 +20,9 @@ WORKER_SCRIPT="$MARKETPLACE_DIR/plugin/scripts/worker-service.cjs"
 BUILT_MARKER="$SCRIPT_DIR/plugin/scripts/worker-service.cjs"
 LOCAL_VERSION="$(node -p "require('$SCRIPT_DIR/package.json').version" 2>/dev/null || echo 13.2.0)"
 PLUGIN_CACHE_DIR="$HOME/.claude/plugins/cache/thedotmack/claude-mem/$LOCAL_VERSION"
+CODEX_MARKETPLACE_NAME="claude-mem-local"
+CODEX_PLUGIN_NAME="claude-mem"
+CODEX_PLUGIN_SELECTOR="${CODEX_PLUGIN_NAME}@${CODEX_MARKETPLACE_NAME}"
 
 # ── Colors ──────────────────────────────────────────────────────────
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
@@ -279,8 +282,19 @@ check_codex_cli() {
   command -v codex &>/dev/null
 }
 
-check_codex_plugin() {
-  check_codex_cli && codex plugin list 2>/dev/null | grep -q 'claude-mem'
+check_codex_marketplace() {
+  check_codex_cli && codex plugin marketplace list 2>/dev/null | awk -v name="$CODEX_MARKETPLACE_NAME" '$1 == name { found = 1 } END { exit(found ? 0 : 1) }'
+}
+
+check_codex_plugin_available() {
+  check_codex_cli && codex plugin list 2>/dev/null | awk -v selector="$CODEX_PLUGIN_SELECTOR" '$1 == selector { found = 1 } END { exit(found ? 0 : 1) }'
+}
+
+check_codex_plugin_installed() {
+  # Codex lists marketplace-visible plugins even when they are not installed.
+  # Require the STATUS column to be "installed" so reinstall does not skip
+  # the real `codex plugin add` step.
+  check_codex_cli && codex plugin list 2>/dev/null | awk -v selector="$CODEX_PLUGIN_SELECTOR" '$1 == selector && $2 ~ /^installed/ { found = 1 } END { exit(found ? 0 : 1) }'
 }
 
 # ── tree-sitter binary handling (local-first, proxy fallback) ───────
@@ -744,7 +758,7 @@ do_install_codex() {
   fi
 
   # Already fully installed?
-  if check_built && check_synced && check_codex_plugin && check_worker_running; then
+  if check_built && check_synced && check_codex_plugin_installed && check_worker_running; then
     local port; port=$(get_worker_port)
     ok "Codex CLI integration already installed and running"
     printf "\n"
@@ -756,26 +770,42 @@ do_install_codex() {
   do_build
   do_sync
 
-  step "Registering with Codex..."
-  if check_codex_plugin; then
-    ok "Plugin already registered with Codex"
+  step "Registering Codex marketplace..."
+  if check_codex_marketplace; then
+    ok "Marketplace already registered with Codex"
   else
     info "Running codex plugin marketplace add..."
     (cd "$SCRIPT_DIR" && codex plugin marketplace add "$SCRIPT_DIR" 2>/dev/null) || true
-    (cd "$SCRIPT_DIR" && codex plugin marketplace upgrade claude-mem-local 2>/dev/null) || true
-    (cd "$SCRIPT_DIR" && codex features enable plugin_hooks 2>/dev/null) || true
-    if check_codex_plugin; then
-      ok "Registered with Codex"
+  fi
+  (cd "$SCRIPT_DIR" && codex plugin marketplace upgrade "$CODEX_MARKETPLACE_NAME" 2>/dev/null) || true
+  (cd "$SCRIPT_DIR" && codex features enable plugin_hooks 2>/dev/null) || true
+
+  if check_codex_plugin_available; then
+    ok "Plugin available in Codex marketplace"
+  else
+    warn "Manual marketplace registration may be needed"
+    info "Run: codex plugin marketplace add $SCRIPT_DIR"
+  fi
+
+  step "Installing Codex plugin..."
+  if check_codex_plugin_installed; then
+    ok "Plugin already installed in Codex"
+  else
+    codex plugin add "$CODEX_PLUGIN_SELECTOR"
+    if check_codex_plugin_installed; then
+      ok "Plugin installed in Codex"
     else
-      warn "Manual registration may be needed"
-      info "Run: codex plugin marketplace add $SCRIPT_DIR"
+      fail "Codex plugin add completed but plugin is still not installed"
+      exit 1
     fi
   fi
 
   do_start_worker
 
   print_summary "Codex CLI — Install Summary"
-  check_codex_plugin && ok "Registered with Codex" || warn "Not registered"
+  check_codex_marketplace       && ok "Marketplace registered with Codex" || warn "Marketplace not registered"
+  check_codex_plugin_available  && ok "Plugin available in Codex"         || warn "Plugin not available"
+  check_codex_plugin_installed  && ok "Plugin installed in Codex"         || warn "Plugin not installed"
 
   printf "\n"
   printf "  ${DIM}Restart Codex CLI to load the plugin.${RESET}\n\n"
@@ -860,18 +890,19 @@ do_uninstall_codex() {
     exit 1
   fi
 
-  step "Unregistering from Codex..."
-  if check_codex_plugin; then
-    info "Removing claude-mem from Codex..."
-    codex plugin marketplace remove claude-mem-local 2>/dev/null || true
-    if check_codex_plugin; then
-      warn "May need manual removal"
+  step "Removing Codex plugin install..."
+  if check_codex_plugin_installed; then
+    info "Removing $CODEX_PLUGIN_SELECTOR from Codex..."
+    codex plugin remove "$CODEX_PLUGIN_SELECTOR" 2>/dev/null || codex plugin remove "$CODEX_PLUGIN_NAME" --marketplace "$CODEX_MARKETPLACE_NAME" 2>/dev/null || true
+    if check_codex_plugin_installed; then
+      warn "Plugin may need manual removal"
     else
-      ok "Unregistered from Codex"
+      ok "Plugin removed from Codex"
     fi
   else
-    ok "Not registered — nothing to do"
+    ok "Plugin not installed — nothing to do"
   fi
+  check_codex_marketplace && ok "Marketplace preserved for reinstall" || warn "Marketplace not registered"
 
   if [[ -d "$DATA_DIR" ]]; then
     ok "Data preserved at ${DIM}$DATA_DIR${RESET} (use ${BOLD}-d${RESET} to fully purge)"
