@@ -4,17 +4,18 @@ import { logger } from '../../../utils/logger.js';
 /**
  * ReportGenerator — 用户工作周报生成器 (B-周报设计文档 §5.4)。
  *
- * 混合生成:先用数据库数据确定性拼装中文 Markdown(项目/工作内容/成果/时间),
- * 再用 Qwen(阿里云 DashScope,OpenAI 兼容接口)补一段"本周综合分析"。
- * Qwen 凭证直接读环境变量 DASHSCOPE_API_KEY;未配置或调用失败则省略 AI 段、
- * 整份周报仍可生成(降级)。本生成器只读源表,不改采集链路。
+ * 混合生成:先用数据库数据聚合出本周 user×project 的工时与工作内容,再用
+ * Qwen(阿里云 DashScope,OpenAI 兼容接口)把原始数据**提炼**成一份有重点、
+ * 限篇幅的中文周报正文(总体概述 → 按工时罗列任务 → 项目详述 → 下周建议 →
+ * 经验教训)。Qwen 凭证直接读环境变量 DASHSCOPE_API_KEY;未配置或调用失败则
+ * 退回确定性简版(只汇总,不臆造)。本生成器只读源表,不改采集链路。
  */
 
 const DAY_MS = 86400000;
 const DASHSCOPE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
-const AI_TIMEOUT_MS = 30000;
+const AI_TIMEOUT_MS = 60000;
+const MAX_PROJECTS_IN_PROMPT = 8;
 
-/** 周报列表/卡片用的摘要统计。 */
 export interface ReportStats {
   totalMs: number;
   projects: number;
@@ -34,34 +35,30 @@ export interface GeneratedReport {
   generated_at_epoch: number;
 }
 
-interface ProjectAgg {
+interface ProjectAgg { project: string; prompts: number; total_ms: number; }
+interface ObsRow { project: string; type: string; title: string | null; subtitle: string | null; narrative: string | null; }
+interface SummaryRow { project: string; request: string | null; completed: string | null; learned: string | null; investigated: string | null; next_steps: string | null; }
+
+/** 单项目本周聚合(供拼装、AI 提示、降级共用)。 */
+interface ProjectDigest {
   project: string;
-  prompts: number;
-  total_ms: number;
-}
-interface ObsRow {
-  project: string; type: string; title: string | null;
-  subtitle: string | null; narrative: string | null;
-}
-interface SummaryRow {
-  project: string; request: string | null; completed: string | null;
-  learned: string | null; investigated: string | null; next_steps: string | null;
+  totalMs: number;
+  completed: string[];
+  learned: string[];
+  observations: Array<{ type: string; title: string }>;
 }
 
-/**
- * 给定某真实 epoch,返回其所在 ISO 周(周一起)的周一**本地**日期 'YYYY-MM-DD'。
- * 与 DataRoutes.historyWeeks 的周切分口径一致。scheduler/route 共用。
- */
+/** 给定真实 epoch,返回其所在 ISO 周(周一起)的周一**本地**日期 'YYYY-MM-DD'。 */
 export function weekMondayOf(epochMs: number, tzOffsetMs: number): string {
   const shifted = new Date(epochMs + tzOffsetMs);
-  const wd = shifted.getUTCDay(); // 0=Sun..6=Sat
+  const wd = shifted.getUTCDay();
   const dayStartWall = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate());
   const monday = dayStartWall - (wd === 0 ? 6 : wd - 1) * DAY_MS;
   const dt = new Date(monday);
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
 }
 
-/** ms → 中文耗时 "Xh Ym"。 */
+/** ms → 中文耗时 "X 小时 Y 分"。 */
 function fmtDuration(ms: number): string {
   if (!ms || ms <= 0) return '0 分钟';
   const mins = Math.round(ms / 60000);
@@ -71,7 +68,7 @@ function fmtDuration(ms: number): string {
   return m === 0 ? `${h} 小时` : `${h} 小时 ${m} 分`;
 }
 
-/** 把多行结构化文本切成去重后的要点数组(过滤空行/占位)。 */
+/** 把多行结构化文本切成去重后的要点(过滤空行/列表符号)。 */
 function toBullets(values: Array<string | null | undefined>, max: number): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -90,6 +87,11 @@ function toBullets(values: Array<string | null | undefined>, max: number): strin
   return out;
 }
 
+function clip(s: string, n: number): string {
+  const t = s.trim().replace(/\s+/g, ' ');
+  return t.length > n ? t.slice(0, n) + '…' : t;
+}
+
 /** 将生成的周报 UPSERT 进 weekly_reports(按 user_label+week_start 唯一)。 */
 export function upsertWeeklyReport(db: Database, report: GeneratedReport): void {
   db.prepare(`
@@ -105,27 +107,17 @@ export function upsertWeeklyReport(db: Database, report: GeneratedReport): void 
 export class ReportGenerator {
   constructor(private db: Database) {}
 
-  /**
-   * 生成某用户某周的周报。
-   * @param userLabel 目标用户(已 COALESCE 归一;'unknown' 表示空标签用户)
-   * @param weekStart 周一本地日期 'YYYY-MM-DD'
-   * @param tzOffsetMs 浏览器/本地时区偏移(分钟*60000),用于把本地周边界换算为真实 epoch
-   * @param model     AI 段使用的 Qwen 模型名(如 qwen-plus)
-   */
   async generate(userLabel: string, weekStart: string, tzOffsetMs: number, model: string): Promise<GeneratedReport> {
     const [y, m, d] = weekStart.split('-').map(Number);
     const wallStart = Date.UTC(y, m - 1, d);
-    const wallEnd = wallStart + 7 * DAY_MS;
     const start = wallStart - tzOffsetMs; // 真实 epoch 区间 [start, end)
-    const end = wallEnd - tzOffsetMs;
+    const end = wallStart + 7 * DAY_MS - tzOffsetMs;
     const weekEnd = this.fmtYMD(wallStart + 6 * DAY_MS);
-
     const user = userLabel || 'unknown';
 
     // ── 聚合(只读) ──────────────────────────────────────────────────
     const projAgg = this.db.prepare(`
-      SELECT s.project AS project,
-             COUNT(*) AS prompts,
+      SELECT s.project AS project, COUNT(*) AS prompts,
              COALESCE(SUM(CASE WHEN up.completed_at_epoch IS NOT NULL
                THEN (up.completed_at_epoch - up.created_at_epoch + COALESCE(up.think_time_ms, 0))
                ELSE 0 END), 0) AS total_ms
@@ -133,8 +125,7 @@ export class ReportGenerator {
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ?
         AND COALESCE(NULLIF(s.user_label, ''), 'unknown') = ? COLLATE NOCASE
-      GROUP BY s.project
-      ORDER BY total_ms DESC
+      GROUP BY s.project ORDER BY total_ms DESC
     `).all(start, end, user) as ProjectAgg[];
 
     const sessRow = this.db.prepare(`
@@ -167,26 +158,20 @@ export class ReportGenerator {
     const prompts = projAgg.reduce((s, p) => s + p.prompts, 0);
     const projects = new Set<string>([...projAgg.map(p => p.project), ...obsRows.map(o => o.project), ...summRows.map(s => s.project)]);
     const stats: ReportStats = {
-      totalMs,
-      projects: projects.size || (sessRow?.projects ?? 0),
-      prompts,
-      obs: obsRows.length,
-      summaries: summRows.length,
-      sessions: sessRow?.sessions ?? 0,
+      totalMs, projects: projects.size || (sessRow?.projects ?? 0),
+      prompts, obs: obsRows.length, summaries: summRows.length, sessions: sessRow?.sessions ?? 0,
     };
 
-    // ── 确定性拼装 Markdown ─────────────────────────────────────────
-    const highlights = await this.synthesizeHighlights(user, weekStart, weekEnd, stats, projAgg, summRows, obsRows, model);
-    const markdown = this.buildMarkdown(user, weekStart, weekEnd, stats, projAgg, obsRows, summRows, highlights);
+    const digests = this.digestByProject(projAgg, obsRows, summRows);
+
+    // ── 正文:优先 AI 提炼,失败/无 Key 退回确定性简版 ────────────────
+    const aiBody = await this.synthesize(user, weekStart, weekEnd, stats, digests, model);
+    const body = aiBody ?? this.fallbackBody(stats, digests);
+    const markdown = this.assemble(user, weekStart, weekEnd, stats, body);
 
     return {
-      user_label: user,
-      week_start: weekStart,
-      week_end: weekEnd,
-      markdown,
-      stats,
-      model: highlights ? model : '',
-      generated_at_epoch: Date.now(),
+      user_label: user, week_start: weekStart, week_end: weekEnd, markdown, stats,
+      model: aiBody ? model : '', generated_at_epoch: Date.now(),
     };
   }
 
@@ -195,130 +180,94 @@ export class ReportGenerator {
     return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
   }
 
-  /** 把每个项目的工作内容/成果/关键记录组织成结构化对象,供拼装与 AI 提示复用。 */
-  private byProject(projAgg: ProjectAgg[], obsRows: ObsRow[], summRows: SummaryRow[]) {
+  private digestByProject(projAgg: ProjectAgg[], obsRows: ObsRow[], summRows: SummaryRow[]): ProjectDigest[] {
     const names = new Set<string>([...projAgg.map(p => p.project), ...obsRows.map(o => o.project), ...summRows.map(s => s.project)]);
     const timeOf = new Map(projAgg.map(p => [p.project, p.total_ms]));
-    return Array.from(names)
-      .map(project => {
-        const ss = summRows.filter(s => s.project === project);
-        const os = obsRows.filter(o => o.project === project);
-        return {
-          project,
-          totalMs: timeOf.get(project) ?? 0,
-          completed: toBullets(ss.map(s => s.completed), 8),
-          learned: toBullets(ss.map(s => s.learned), 6),
-          observations: os.slice(0, 8).map(o => ({ type: o.type, title: (o.title || o.subtitle || o.narrative || '').trim() })).filter(o => o.title),
-          nextSteps: toBullets(ss.map(s => s.next_steps), 5),
-        };
-      })
-      .sort((a, b) => b.totalMs - a.totalMs);
+    return Array.from(names).map(project => {
+      const ss = summRows.filter(s => s.project === project);
+      const os = obsRows.filter(o => o.project === project);
+      return {
+        project,
+        totalMs: timeOf.get(project) ?? 0,
+        completed: toBullets(ss.map(s => s.completed), 12),
+        learned: toBullets(ss.map(s => s.learned), 6),
+        observations: os.slice(0, 6).map(o => ({ type: o.type, title: (o.title || o.subtitle || o.narrative || '').trim() })).filter(o => o.title),
+      };
+    }).sort((a, b) => b.totalMs - a.totalMs);
   }
 
-  private buildMarkdown(
-    user: string, weekStart: string, weekEnd: string, stats: ReportStats,
-    projAgg: ProjectAgg[], obsRows: ObsRow[], summRows: SummaryRow[], highlights: string | null,
-  ): string {
-    const projects = this.byProject(projAgg, obsRows, summRows);
+  /** 标题 + 概览统计表(确定性、事实)+ 正文(AI 或降级)。 */
+  private assemble(user: string, weekStart: string, weekEnd: string, stats: ReportStats, body: string): string {
+    const overview = [
+      `# 周报 · ${user} · ${weekStart} ~ ${weekEnd}`,
+      '',
+      `> 数据来源:claude-mem · 周期:${weekStart}(周一) ~ ${weekEnd}(周日)`,
+      '',
+      '## 概览',
+      '',
+      '| 总AI时长 | 项目 | 任务(提示词) | 观察 | 总结 | 会话 |',
+      '| --- | --- | --- | --- | --- | --- |',
+      `| ${fmtDuration(stats.totalMs)} | ${stats.projects} | ${stats.prompts} | ${stats.obs} | ${stats.summaries} | ${stats.sessions} |`,
+      '',
+    ].join('\n');
+    return `${overview}\n${body.trim()}\n`;
+  }
+
+  /** 降级:确定性简版正文(只汇总,不臆造下周建议/经验教训)。 */
+  private fallbackBody(stats: ReportStats, digests: ProjectDigest[]): string {
+    const top = digests.filter(d => d.completed.length || d.totalMs > 0).slice(0, 6);
+    const topNames = top.slice(0, 3).map(d => d.project.split('/').pop() || d.project);
     const L: string[] = [];
-    L.push(`# 周报 · ${user} · ${weekStart} ~ ${weekEnd}`);
+    L.push('## 一、本周总体概述');
     L.push('');
-    L.push(`> 数据来源:claude-mem · 周期:${weekStart}(周一) ~ ${weekEnd}(周日)`);
+    L.push(`本周在 ${stats.projects} 个项目上累计投入约 ${fmtDuration(stats.totalMs)},完成 ${stats.prompts} 项任务,产出 ${stats.obs} 条工作记录与 ${stats.summaries} 篇会话总结。` +
+      (topNames.length ? `主要精力集中在 ${topNames.join('、')} 等项目。` : '') +
+      '（未启用 AI 提炼,以下为系统自动汇总,仅供参考。）');
     L.push('');
-
-    L.push('## 一、概览');
+    L.push('## 二、本周工作任务');
     L.push('');
-    L.push('| 指标 | 数值 |');
-    L.push('| --- | --- |');
-    L.push(`| 总 AI 处理时间 | ${fmtDuration(stats.totalMs)} |`);
-    L.push(`| 涉及项目 | ${stats.projects} 个 |`);
-    L.push(`| 提示词(任务) | ${stats.prompts} |`);
-    L.push(`| 观察记录 | ${stats.obs} |`);
-    L.push(`| 会话总结 | ${stats.summaries} |`);
-    L.push(`| 会话数 | ${stats.sessions} |`);
-    L.push('');
-
-    L.push('## 二、本周综合分析');
-    L.push('');
-    L.push(highlights ? highlights.trim() : '_(未启用 AI 综合分析或暂不可用,以下为确定性汇总。)_');
-    L.push('');
-
-    L.push('## 三、按项目');
-    L.push('');
-    if (projects.length === 0) {
-      L.push('_本周无项目活动记录。_');
+    if (top.length === 0) { L.push('_本周无可汇总的工作记录。_'); L.push(''); }
+    for (const d of top) {
+      L.push(`### ${d.project}  ·  耗时 ${fmtDuration(d.totalMs)}`);
+      L.push('');
+      for (const c of d.completed.slice(0, 3)) L.push(`- ${clip(c, 80)}`);
+      if (d.completed.length === 0) L.push('- （本周该项目无会话总结记录）');
       L.push('');
     }
-    for (const p of projects) {
-      L.push(`### ${p.project}  ·  耗时 ${fmtDuration(p.totalMs)}`);
-      L.push('');
-      if (p.completed.length) {
-        L.push('**工作内容**');
-        L.push('');
-        for (const c of p.completed) L.push(`- ${c}`);
-        L.push('');
-      }
-      if (p.learned.length) {
-        L.push('**成果与发现**');
-        L.push('');
-        for (const c of p.learned) L.push(`- ${c}`);
-        L.push('');
-      }
-      if (p.observations.length) {
-        L.push('**关键记录**');
-        L.push('');
-        for (const o of p.observations) L.push(`- \`${o.type}\` ${o.title}`);
-        L.push('');
-      }
-    }
-
-    const allLearned = toBullets(summRows.map(s => s.learned), 12);
-    if (allLearned.length) {
-      L.push('## 四、学习与发现');
-      L.push('');
-      for (const c of allLearned) L.push(`- ${c}`);
-      L.push('');
-    }
-
-    const allNext = toBullets(summRows.map(s => s.next_steps), 10);
-    if (allNext.length) {
-      L.push('## 五、下一步');
-      L.push('');
-      for (const c of allNext) L.push(`- ${c}`);
-      L.push('');
-    }
-
     return L.join('\n');
   }
 
   /**
-   * 可选 AI 综合分析(Qwen / DashScope)。读 env DASHSCOPE_API_KEY,
-   * 缺失或任何失败/超时 → 返回 null(降级,周报照常输出确定性部分)。
+   * 用 Qwen 把原始数据提炼成结构化、限篇幅的周报正文(一~五)。
+   * 读 env DASHSCOPE_API_KEY,缺失或任何失败/超时 → 返回 null(降级)。
    */
-  private async synthesizeHighlights(
-    user: string, weekStart: string, weekEnd: string, stats: ReportStats,
-    projAgg: ProjectAgg[], summRows: SummaryRow[], obsRows: ObsRow[], model: string,
-  ): Promise<string | null> {
+  private async synthesize(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: ProjectDigest[], model: string): Promise<string | null> {
     const apiKey = (process.env.DASHSCOPE_API_KEY ?? '').trim();
     if (!apiKey) return null;
     if (stats.prompts === 0 && stats.obs === 0 && stats.summaries === 0) return null;
 
-    const projects = this.byProject(projAgg, obsRows, summRows);
-    const facts = [
-      `用户:${user}`,
-      `周期:${weekStart} ~ ${weekEnd}`,
-      `总AI处理时间:${fmtDuration(stats.totalMs)};项目数:${stats.projects};提示词:${stats.prompts};观察:${stats.obs};总结:${stats.summaries}`,
-      '各项目:',
-      ...projects.slice(0, 8).map(p =>
-        `- ${p.project}(耗时${fmtDuration(p.totalMs)}):` +
-        (p.completed.slice(0, 4).join(';') || '无总结') +
-        (p.learned.length ? ` | 收获:${p.learned.slice(0, 2).join(';')}` : '')),
-    ].join('\n');
+    const projectBlocks = digests.slice(0, MAX_PROJECTS_IN_PROMPT).map(d => {
+      const lines = [`【${d.project}】 耗时 ${fmtDuration(d.totalMs)}`];
+      if (d.completed.length) lines.push('完成:' + d.completed.slice(0, 10).map(c => clip(c, 160)).join(' | '));
+      if (d.learned.length) lines.push('收获:' + d.learned.slice(0, 5).map(c => clip(c, 120)).join(' | '));
+      if (d.observations.length) lines.push('记录:' + d.observations.map(o => `[${o.type}]${clip(o.title, 40)}`).join('; '));
+      return lines.join('\n');
+    }).join('\n\n');
 
-    const userPrompt =
-      '你是工程团队的技术主管,请根据以下某员工本周的真实工作数据,写一段简洁、专业、面向汇报的"本周综合分析",' +
-      '用中文 Markdown,150~300 字,突出:做了哪些重要工作、主要成果、时间精力分布、值得关注的点。' +
-      '不要罗列原始数据,不要编造未提供的信息,不要使用一级标题。\n\n数据:\n' + facts;
+    const facts =
+      `用户:${user}\n周期:${weekStart} ~ ${weekEnd}\n` +
+      `总AI耗时:${fmtDuration(stats.totalMs)};项目数:${stats.projects};任务数:${stats.prompts};观察:${stats.obs};总结:${stats.summaries};会话:${stats.sessions}\n\n` +
+      `各项目(已按耗时从多到少排序):\n${projectBlocks}`;
+
+    const instruction =
+      '你是工程团队的技术主管。请依据某员工本周的真实工作数据,撰写一份**简洁、有重点、面向汇报**的中文周报正文。' +
+      '严格遵守下面的结构与篇幅,只依据所给数据、不要编造、不要包含未提供的信息,不要输出一级标题(#),直接从"## 一、"开始:\n\n' +
+      '## 一、本周总体概述\n用**一段话(200~300字)**概括:本周主要做了什么、解决了什么问题、取得了什么成果、整体进展如何。要有结论、有重点,像写给主管看的开篇综述。\n\n' +
+      '## 二、本周工作任务\n按项目分组,**按投入工时从多到少排列**(重点项目在前、多写;次要项目少写或合并为一条)。每个项目用三级标题 `### 项目名 · 耗时X`,其下用 2~4 条要点列关键任务,**每条 2~3 句话高度提炼**,说清"做了什么+结果如何",不要罗列流水账。\n\n' +
+      '## 三、项目详述\n对最重要的项目(最多 4 个)各写一段 **100~200 字** 的小结,概述本周在该项目的工作脉络与产出;次要项目可不写。每个项目严格控制篇幅,不要超过 200 字。\n\n' +
+      '## 四、下周工作建议\n给出 3~5 条可执行的建议(基于本周进展与遗留)。\n\n' +
+      '## 五、本周经验与教训\n总结 2~4 条本周的经验或值得改进之处。\n\n' +
+      '全文要精炼克制,重点突出,避免冗长。数据如下:\n\n' + facts;
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
@@ -329,23 +278,24 @@ export class ReportGenerator {
         body: JSON.stringify({
           model,
           messages: [
-            { role: 'system', content: '你是严谨的技术主管,只依据给定数据撰写工作周报分析,不臆造。' },
-            { role: 'user', content: userPrompt },
+            { role: 'system', content: '你是严谨的技术主管,只依据给定数据撰写工作周报,语言精炼、重点突出、严格控制篇幅,绝不臆造。' },
+            { role: 'user', content: instruction },
           ],
           stream: false,
           temperature: 0.4,
+          max_tokens: 2200,
         }),
         signal: controller.signal,
       });
       if (!resp.ok) {
-        logger.warn('WORKER', 'DashScope non-2xx, skip AI highlights', { status: resp.status });
+        logger.warn('WORKER', 'DashScope non-2xx, fall back to deterministic report', { status: resp.status });
         return null;
       }
       const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
       const content = data.choices?.[0]?.message?.content?.trim();
       return content && content.length > 0 ? content : null;
     } catch (err) {
-      logger.warn('WORKER', 'DashScope call failed, skip AI highlights', {
+      logger.warn('WORKER', 'DashScope call failed, fall back to deterministic report', {
         error: err instanceof Error ? err.message : String(err),
       });
       return null;

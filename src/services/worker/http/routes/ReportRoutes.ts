@@ -169,25 +169,40 @@ export class ReportRoutes extends BaseRouteHandler {
     return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>周报 · ${esc(user)} · ${esc(week)}</title>
+<script>
+  /* 跟随 claude-mem 主题(system/light/dark);system 时跟随操作系统。 */
+  (function(){try{var p=localStorage.getItem('claude-mem-theme')||'system';
+    var dark=p==='dark'||(p!=='light'&&window.matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.setAttribute('data-theme',dark?'dark':'light');}catch(e){
+    document.documentElement.setAttribute('data-theme','light');}})();
+</script>
 <style>
-  :root { --bd:#d0d7de; --mut:#57606a; --acc:#0969da; --bg:#fff; --bg2:#f6f8fa; }
+  :root, :root[data-theme="light"] { --bg:#ffffff; --bg2:#f6f8fa; --bd:#d0d7de; --tx:#1f2328; --mut:#57606a; --acc:#0969da; --code:#eaeef2; }
+  :root[data-theme="dark"] { --bg:#161b22; --bg2:#0d1117; --bd:#30363d; --tx:#e6edf3; --mut:#8b949e; --acc:#2f81f7; --code:#262c36; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme]) { --bg:#161b22; --bg2:#0d1117; --bd:#30363d; --tx:#e6edf3; --mut:#8b949e; --acc:#2f81f7; --code:#262c36; } }
   * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.7 -apple-system,Segoe UI,Roboto,"PingFang SC","Microsoft YaHei",sans-serif; color:#1f2328; background:var(--bg2); }
-  header.top { padding:14px 20px; background:var(--bg); border-bottom:1px solid var(--bd); position:sticky; top:0; z-index:2; }
-  header.top h1 { margin:0; font-size:16px; } header.top .sub { color:var(--mut); font-size:12px; margin-top:2px; }
-  .grid { display:grid; grid-template-columns:${single ? '1fr' : '1fr 1fr'}; gap:16px; padding:16px; max-width:1400px; margin:0 auto; }
-  @media (max-width: 900px) { .grid { grid-template-columns:1fr; } }
-  .col { background:var(--bg); border:1px solid var(--bd); border-radius:8px; overflow:hidden; }
-  .col-head { display:flex; align-items:center; gap:10px; padding:10px 14px; background:var(--bg2); border-bottom:1px solid var(--bd); position:sticky; top:0; }
+  html, body { height:100%; }
+  body { margin:0; min-height:100vh; font:14px/1.7 -apple-system,Segoe UI,Roboto,"PingFang SC","Microsoft YaHei",sans-serif; color:var(--tx); background:var(--bg2); }
+  header.top { padding:14px 22px; background:var(--bg); border-bottom:1px solid var(--bd); position:sticky; top:0; z-index:2; }
+  header.top h1 { margin:0; font-size:16px; color:var(--tx); } header.top .sub { color:var(--mut); font-size:12px; margin-top:3px; }
+  /* 占满浏览器窗口、四周留白、随窗口自适应 */
+  .grid { display:grid; grid-template-columns:${single ? '1fr' : '1fr 1fr'}; gap:18px; padding:18px; width:100%; }
+  @media (max-width: 820px) { .grid { grid-template-columns:1fr; } }
+  .col { background:var(--bg); border:1px solid var(--bd); border-radius:10px; overflow:hidden; align-self:start; }
+  .col-head { display:flex; align-items:center; gap:10px; padding:11px 16px; background:var(--bg2); border-bottom:1px solid var(--bd); position:sticky; top:50px; z-index:1; }
   .col-tag { font-weight:600; color:var(--acc); } .col-week { color:var(--mut); font-size:12px; }
-  .dl { margin-left:auto; font-size:12px; text-decoration:none; color:#fff; background:var(--acc); padding:4px 10px; border-radius:6px; }
-  .empty { padding:32px 16px; color:var(--mut); text-align:center; }
-  article.md { padding:8px 18px 24px; }
+  .dl { margin-left:auto; font-size:12px; text-decoration:none; color:#fff; background:var(--acc); padding:5px 12px; border-radius:6px; }
+  .empty { padding:40px 16px; color:var(--mut); text-align:center; }
+  article.md { padding:6px 20px 26px; }
   .md h1 { font-size:20px; border-bottom:1px solid var(--bd); padding-bottom:8px; }
-  .md h2 { font-size:16px; margin-top:24px; } .md h3 { font-size:14px; margin-top:18px; }
-  .md table { border-collapse:collapse; } .md th,.md td { border:1px solid var(--bd); padding:5px 10px; }
-  .md code { background:var(--bg2); padding:1px 5px; border-radius:4px; font-size:12px; }
-  .md ul { padding-left:20px; }
+  .md h2 { font-size:16px; margin-top:26px; border-bottom:1px solid var(--bd); padding-bottom:5px; }
+  .md h3 { font-size:14px; margin-top:18px; color:var(--acc); }
+  .md table { border-collapse:collapse; width:100%; } .md th,.md td { border:1px solid var(--bd); padding:6px 10px; text-align:left; }
+  .md th { background:var(--bg2); }
+  .md code { background:var(--code); padding:1px 5px; border-radius:4px; font-size:12px; }
+  .md blockquote { margin:8px 0; padding:2px 12px; color:var(--mut); border-left:3px solid var(--bd); }
+  .md ul { padding-left:20px; } .md li { margin:3px 0; }
+  .md a { color:var(--acc); }
 </style></head>
 <body>
   <header class="top"><h1>📋 工作周报 · ${esc(user)}</h1><div class="sub">左:上周(${esc(prevWeek)}) · 右:本周(${esc(week)})${single ? ' · 上周无记录,仅显示本周' : ''}</div></header>
