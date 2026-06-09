@@ -91,6 +91,8 @@ import { SearchRoutes } from './worker/http/routes/SearchRoutes.js';
 import { SettingsRoutes } from './worker/http/routes/SettingsRoutes.js';
 import { LogsRoutes } from './worker/http/routes/LogsRoutes.js';
 import { MemoryRoutes } from './worker/http/routes/MemoryRoutes.js';
+import { ReportRoutes } from './worker/http/routes/ReportRoutes.js';
+import { ReportScheduler } from './worker/reports/ReportScheduler.js';
 import { UsersRoutes } from './worker/http/routes/UsersRoutes.js';
 import { SyncRoutes } from './worker/http/routes/SyncRoutes.js';
 import { SyncStatusRoutes } from './worker/http/routes/SyncStatusRoutes.js';
@@ -174,6 +176,7 @@ export class WorkerService implements WorkerRef {
 
   private chromaMcpManager: ChromaMcpManager | null = null;
   private transcriptWatcher: TranscriptWatcher | null = null;
+  private reportScheduler: ReportScheduler | null = null;
 
   // T-13 / T-06: Lazily-assigned SyncAgent. Stays undefined when sync is
   // disabled or role=server; callers MUST use `?.scheduleSoon()` so the
@@ -323,6 +326,7 @@ export class WorkerService implements WorkerRef {
     const adminSessions = new AdminSessionStore();
     const statsSettings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
     this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime, adminSessions, isServerMode, (statsSettings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim()));
+    this.server.registerRoutes(new ReportRoutes(this.dbManager, isServerMode, (statsSettings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim(), isServerMode ? adminSessions : undefined));
     this.server.registerRoutes(new SettingsRoutes(this.settingsManager));
     this.server.registerRoutes(new LogsRoutes());
     this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem'));
@@ -419,6 +423,14 @@ export class WorkerService implements WorkerRef {
         }
       } catch (error) {
         logger.error('SYNC', 'SyncAgent bootstrap failed', {}, error as Error);
+      }
+
+      // Weekly work report scheduler (daily, default 13:00) — never blocks exit.
+      try {
+        this.reportScheduler = new ReportScheduler(this.dbManager);
+        this.reportScheduler.start();
+      } catch (error) {
+        logger.error('WORKER', 'ReportScheduler bootstrap failed', {}, error as Error);
       }
 
       // Defer worktree adoption until core init (migrations, pragma setup,
@@ -950,6 +962,10 @@ export class WorkerService implements WorkerRef {
       this.transcriptWatcher.stop();
       this.transcriptWatcher = null;
       logger.info('TRANSCRIPT', 'Transcript watcher stopped');
+    }
+    if (this.reportScheduler) {
+      this.reportScheduler.stop();
+      this.reportScheduler = null;
     }
 
     await performGracefulShutdown({

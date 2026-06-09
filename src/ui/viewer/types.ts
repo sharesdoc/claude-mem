@@ -193,3 +193,14 @@ export interface AnalyticsResponse {
     projects: number; sessions: number; bizDays: number;
   }>;
 }
+
+/** 周报列表项(GET /api/reports/list 返回)。 */
+export interface WeeklyReportItem {
+  week_start: string;
+  week_end: string;
+  generated_at_epoch: number;
+  stats: {
+    totalMs: number; projects: number; prompts: number;
+    obs: number; summaries: number; sessions: number;
+  } | null;
+}

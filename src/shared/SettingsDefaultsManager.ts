@@ -107,6 +107,11 @@ export interface SettingsDefaults {
   CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: string;
   CLAUDE_MEM_SERVER_REQUIRE_TLS: string;
   CLAUDE_MEM_SYNC_ACCESS_TOKEN: string;        // client-side copy of the shared secret
+
+  // ── Weekly work report ──────────────────────────────────────────────
+  CLAUDE_MEM_WEEKLY_REPORT_ENABLED: string;    // 'true' | 'false' — daily auto-generation switch
+  CLAUDE_MEM_WEEKLY_REPORT_TIME: string;        // local 'HH:MM' to refresh this week's report (default 13:00)
+  CLAUDE_MEM_WEEKLY_REPORT_MODEL: string;       // Qwen model for the AI "highlights" section
 }
 
 export class SettingsDefaultsManager {
@@ -208,6 +213,10 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: '1000',
     CLAUDE_MEM_SERVER_REQUIRE_TLS: 'false',
     CLAUDE_MEM_SYNC_ACCESS_TOKEN: '',                        // client copy of the same shared secret
+
+    CLAUDE_MEM_WEEKLY_REPORT_ENABLED: 'true',               // daily auto-generation of weekly work reports
+    CLAUDE_MEM_WEEKLY_REPORT_TIME: '13:00',                 // local HH:MM to refresh this week's report
+    CLAUDE_MEM_WEEKLY_REPORT_MODEL: 'qwen-plus',            // Qwen model for the AI highlights section
   };
 
   static getAllDefaults(): SettingsDefaults {

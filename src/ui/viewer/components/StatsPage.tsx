@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AnalyticsResponse } from '../types';
+import { AnalyticsResponse, WeeklyReportItem } from '../types';
 import { useLocale } from '../hooks/useLocale';
 import { authFetch } from '../utils/api';
 
@@ -223,6 +223,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   // null → fall back to the first (most-active) user.
   const [historyUser, setHistoryUser] = useState<string | null>(null);
 
+  // ── Weekly reports (History view) ────────────────────────────────
+  const [historyReports, setHistoryReports] = useState<WeeklyReportItem[]>([]);
+  const [reportsBusy, setReportsBusy] = useState(false);
+
   // scope: GLOBAL time range — drives EVERY section on the page. Persisted.
   const [scope, setScope] = useState<Scope>(() => {
     try {
@@ -361,6 +365,48 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   // matches the active Today/Week/Month tab (not the monthly chart range).
   const bizDays = Math.max(analytics?.summaryBusinessDays ?? 1, 1);
 
+  // History view: active user (mirrors the history-branch derivation) drives the
+  // weekly-report list fetch. Sorted by total AI time desc, zero-activity dropped.
+  const historyUsers = useMemo(() => {
+    if (!analytics) return [] as string[];
+    const act = (r: { prompts: number; obs: number; summaries: number; sessions: number }) =>
+      !(r.prompts === 0 && r.obs === 0 && r.summaries === 0 && r.sessions === 0);
+    const ms = new Map<string, number>();
+    const set = new Set<string>();
+    for (const m of (analytics.historyMonths ?? [])) if (act(m)) { set.add(m.user_label); ms.set(m.user_label, (ms.get(m.user_label) ?? 0) + m.processingMs); }
+    for (const w of (analytics.historyWeeks ?? [])) if (act(w)) { set.add(w.user_label); if (!ms.has(w.user_label)) ms.set(w.user_label, w.processingMs); }
+    return Array.from(set).sort((a, b) => (ms.get(b) ?? 0) - (ms.get(a) ?? 0));
+  }, [analytics]);
+  const historyActiveUser = (historyUser && historyUsers.includes(historyUser)) ? historyUser : historyUsers[0];
+
+  const loadReports = useCallback(async (user: string | undefined) => {
+    if (!user) { setHistoryReports([]); return; }
+    try {
+      const resp = await authFetch('/api/reports/list?user=' + encodeURIComponent(user));
+      if (resp.ok) { const d = await resp.json() as { reports: WeeklyReportItem[] }; setHistoryReports(d.reports ?? []); }
+      else setHistoryReports([]);
+    } catch { setHistoryReports([]); }
+  }, []);
+
+  useEffect(() => {
+    if (scope !== 'history') return;
+    void loadReports(historyActiveUser);
+  }, [scope, historyActiveUser, loadReports]);
+
+  const refreshThisWeek = useCallback(async (user: string) => {
+    setReportsBusy(true);
+    try {
+      const tz = -new Date().getTimezoneOffset();
+      await authFetch('/api/reports/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, tz }),
+      });
+      await loadReports(user);
+    } catch { /* surfaced via empty/unchanged list */ }
+    finally { setReportsBusy(false); }
+  }, [loadReports]);
+
   const svgPadding = { top: 16, right: 8, bottom: 32, left: 42 };
   const svgW = chartWidth;
   const svgH = 220;
@@ -403,13 +449,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     const weeksByUser = groupByUser(allWeeks);
 
     // Union of users with any activity, sorted by total AI time (desc).
-    const totalMsOf = (u: string) =>
-      ((monthsByUser.get(u) ?? []).reduce((s, m) => s + m.processingMs, 0))
-      || ((weeksByUser.get(u) ?? []).reduce((s, w) => s + w.processingMs, 0));
-    const users = Array.from(new Set([...monthsByUser.keys(), ...weeksByUser.keys()]))
-      .sort((a, b) => totalMsOf(b) - totalMsOf(a));
-
-    const activeUser = (historyUser && users.includes(historyUser)) ? historyUser : users[0];
+    // Lifted to component scope (historyUsers/historyActiveUser) so the weekly
+    // report list fetch stays in lockstep with the selected tab.
+    const users = historyUsers;
+    const activeUser = historyActiveUser;
     const activeIdx = Math.max(0, users.indexOf(activeUser));
     const activeMonths = (monthsByUser.get(activeUser) ?? []).slice().sort((a, b) => b.month.localeCompare(a.month));
     const activeWeeks = (weeksByUser.get(activeUser) ?? []).slice().sort((a, b) => b.week.localeCompare(a.week));
@@ -529,6 +572,56 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
               {/* Week History (top) then Monthly History (bottom) for the selected user */}
               {renderTable(t('stats.weekHistory'), t('stats.historyWeek'), activeWeeks, r => r.week)}
               {renderTable(t('stats.historyTitle'), t('stats.historyMonth'), activeMonths, r => r.month)}
+
+              {/* Weekly reports — click to open a full report page in a new tab */}
+              <div className="stats-section">
+                <div className="stats-section-title">
+                  {t('stats.weeklyReports')}
+                  <button type="button" className="stats-tab" style={{ marginLeft: 12 }}
+                    disabled={reportsBusy}
+                    onClick={() => activeUser && void refreshThisWeek(activeUser)}>
+                    {reportsBusy ? '…' : t('stats.refreshThisWeek')}
+                  </button>
+                </div>
+                {historyReports.length === 0 ? (
+                  <div className="stats-no-data-banner">{t('stats.noReports')}</div>
+                ) : (
+                  <div className="stats-user-table-wrap">
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                      {historyReports.map(r => {
+                        const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
+                        const urlOf = (path: string) => {
+                          const q = new URLSearchParams({ user: activeUser, week: r.week_start });
+                          if (tokenQ) q.set('token', tokenQ);
+                          return `${path}?${q.toString()}`;
+                        };
+                        return (
+                          <div key={r.week_start} style={{
+                            display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
+                            border: '1px solid var(--color-border-primary)', borderRadius: 6,
+                          }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontWeight: 600 }}>{r.week_start} ~ {r.week_end}</div>
+                              <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
+                                {t('stats.reportGenerated')}: {new Date(r.generated_at_epoch).toLocaleString()}
+                                {r.stats && ` · ${formatProcessingTime(r.stats.totalMs)} · ${r.stats.projects} ${t('stats.projects')}`}
+                              </div>
+                            </div>
+                            <button type="button" className="stats-tab is-active"
+                              onClick={() => window.open(urlOf('/report'), '_blank')}>
+                              {t('stats.openReport')}
+                            </button>
+                            <button type="button" className="stats-tab"
+                              onClick={() => window.open(urlOf('/api/reports/download'), '_blank')}>
+                              {t('stats.downloadReport')}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
             </>
           )}
 

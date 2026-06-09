@@ -108,6 +108,7 @@ export class SessionStore {
     this.ensureUserLabelColumns();
     this.ensurePromptCompletedAtColumn();
     this.ensureThinkTimeColumn();
+    this.ensureWeeklyReportsTable();
   }
 
   /**
@@ -326,6 +327,39 @@ export class SessionStore {
     }
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(41, new Date().toISOString());
+  }
+
+  /**
+   * v42 — weekly_reports table (B-周报设计文档 §3.2).
+   *
+   * Stores one generated weekly work report per (user_label, week_start).
+   * Derived/aggregated snapshot of observations/summaries/prompts/sessions —
+   * not part of the capture pipeline. UPSERT on regeneration via the unique
+   * index. No physical FK (app-layer logical link by user_label + week_start).
+   */
+  private ensureWeeklyReportsTable(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(42) as SchemaVersion | undefined;
+    if (applied) {
+      const exists = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='weekly_reports'").get() as TableNameRow | undefined;
+      if (exists) return;
+    }
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS weekly_reports (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_label          TEXT    NOT NULL,
+        week_start          TEXT    NOT NULL,
+        week_end            TEXT    NOT NULL,
+        markdown            TEXT    NOT NULL,
+        stats               TEXT,
+        model               TEXT,
+        generated_at_epoch  INTEGER NOT NULL
+      )
+    `);
+    this.db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_weekly_reports_user_week ON weekly_reports(user_label, week_start)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_weekly_reports_user_week_desc ON weekly_reports(user_label, week_start DESC)');
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(42, new Date().toISOString());
   }
 
   /**
