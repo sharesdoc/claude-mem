@@ -51,6 +51,7 @@ export interface UserPrompt {
   user_label?: string | null;
   created_at_epoch: number;
   completed_at_epoch?: number | null;
+  think_time_ms?: number;
   content_hash?: string | null;
 }
 

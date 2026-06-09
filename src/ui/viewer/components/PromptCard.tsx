@@ -23,7 +23,8 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
 
   const processingInfo = (showProcessingTime && prompt.completed_at_epoch)
     ? (() => {
-        const durationMs = prompt.completed_at_epoch - prompt.created_at_epoch;
+        const thinkMs = prompt.think_time_ms ?? 0;
+        const durationMs = prompt.completed_at_epoch - prompt.created_at_epoch + thinkMs;
         const completedDate = formatDate(prompt.completed_at_epoch);
         const mins = Math.floor(durationMs / 60000);
         const secs = Math.round((durationMs % 60000) / 1000);

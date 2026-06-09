@@ -107,6 +107,7 @@ export class SessionStore {
     this.addApiKeysUserLabelColumn();
     this.ensureUserLabelColumns();
     this.ensurePromptCompletedAtColumn();
+    this.ensureThinkTimeColumn();
   }
 
   /**
@@ -306,6 +307,25 @@ export class SessionStore {
     }
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(40, new Date().toISOString());
+  }
+
+  /**
+   * v41 — think_time_ms on user_prompts.
+   *
+   * User thinking/editing time between tasks. Gap between previous prompt's
+   * completion and this prompt's creation is "think time". Capped at
+   * CLAUDE_MEM_THINK_TIME_CAP_MINUTES (default 3 min). 0 = disabled.
+   */
+  private ensureThinkTimeColumn(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(41) as SchemaVersion | undefined;
+    if (applied) return;
+
+    const cols = this.db.query('PRAGMA table_info(user_prompts)').all() as TableColumnInfo[];
+    if (!cols.some(c => c.name === 'think_time_ms')) {
+      this.db.run('ALTER TABLE user_prompts ADD COLUMN think_time_ms INTEGER NOT NULL DEFAULT 0');
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(41, new Date().toISOString());
   }
 
   /**
@@ -2058,7 +2078,7 @@ export class SessionStore {
     return row.id;
   }
 
-  saveUserPrompt(contentSessionId: string, promptNumber: number, promptText: string, submittedAtEpoch?: number): number {
+  saveUserPrompt(contentSessionId: string, promptNumber: number, promptText: string, submittedAtEpoch?: number, thinkTimeMs: number = 0): number {
     const now = new Date();
     // Prefer the hook event's own timestamp (accurate user submission time).
     // Fall back to Date.now() for paths without hook context (e.g. cursor, redo loops).
@@ -2066,11 +2086,11 @@ export class SessionStore {
 
     const stmt = this.db.prepare(`
       INSERT INTO user_prompts
-      (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch)
-      VALUES (?, ?, ?, ?, ?)
+      (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, think_time_ms)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
 
-    const result = stmt.run(contentSessionId, promptNumber, promptText, now.toISOString(), nowEpoch);
+    const result = stmt.run(contentSessionId, promptNumber, promptText, now.toISOString(), nowEpoch, thinkTimeMs);
     return result.lastInsertRowid as number;
   }
 
@@ -2091,6 +2111,14 @@ export class SessionStore {
    * Called when the SDK signals processing is done (result message).
    * Only sets if not already set (first result wins for restart scenarios).
    */
+  getPromptCompletedAt(contentSessionId: string, promptNumber: number): number | null {
+    const row = this.db.prepare(`
+      SELECT completed_at_epoch FROM user_prompts
+      WHERE content_session_id = ? AND prompt_number = ?
+    `).get(contentSessionId, promptNumber) as { completed_at_epoch: number | null } | undefined;
+    return row?.completed_at_epoch ?? null;
+  }
+
   updatePromptCompletedAt(contentSessionId: string, promptNumber: number, completedAtEpoch: number): void {
     // No NULL guard — later callers (e.g. Stop hook) overwrite earlier
     // estimates (e.g. premature SDK result messages) with the authoritative

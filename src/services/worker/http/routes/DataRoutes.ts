@@ -760,7 +760,7 @@ export class DataRoutes extends BaseRouteHandler {
     // Uses Stop hook timestamp (authoritative) with SDK result as fallback.
     const userProcessingTimeRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
-             SUM(up.completed_at_epoch - up.created_at_epoch) AS total_ms,
+             SUM((up.completed_at_epoch - up.created_at_epoch + COALESCE(up.think_time_ms, 0))) AS total_ms,
              COUNT(*) AS prompt_count
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
@@ -779,7 +779,7 @@ export class DataRoutes extends BaseRouteHandler {
     const dailyTimeByUser = db.prepare(`
       SELECT CAST((up.created_at_epoch + ?) / ${bucketDivisor} AS INTEGER) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
-             SUM(up.completed_at_epoch - up.created_at_epoch) AS total_ms
+             SUM((up.completed_at_epoch - up.created_at_epoch + COALESCE(up.think_time_ms, 0))) AS total_ms
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       WHERE up.completed_at_epoch IS NOT NULL
@@ -866,7 +866,7 @@ export class DataRoutes extends BaseRouteHandler {
     // ── per-project processing time (exact, from SDK result message) ──
     const projectTimeRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
-             SUM(up.completed_at_epoch - up.created_at_epoch) AS total_ms,
+             SUM((up.completed_at_epoch - up.created_at_epoch + COALESCE(up.think_time_ms, 0))) AS total_ms,
              COUNT(*) AS prompt_count
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
@@ -976,7 +976,7 @@ export class DataRoutes extends BaseRouteHandler {
         // ── Per-user processing time (exact, from SDK result message) ──
         const timeRows = db.prepare(`
           SELECT ${RESOLVE_USER} AS user_label,
-                 COALESCE(SUM(up.completed_at_epoch - up.created_at_epoch), 0) AS total_ms
+                 COALESCE(SUM((up.completed_at_epoch - up.created_at_epoch + COALESCE(up.think_time_ms, 0))), 0) AS total_ms
           FROM user_prompts up
           JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
           WHERE up.completed_at_epoch IS NOT NULL

@@ -451,7 +451,22 @@ export class SessionRoutes extends BaseRouteHandler {
       return;
     }
 
-    store.saveUserPrompt(contentSessionId, promptNumber, cleanedPrompt, submittedAtEpoch);
+    // Compute think time: gap from previous prompt completion to now, capped.
+    let thinkTimeMs = 0;
+    if (promptNumber > 1) {
+      const prevCompleted = store.getPromptCompletedAt(contentSessionId, promptNumber - 1);
+      if (prevCompleted != null) {
+        const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+        const capMinutes = Math.max(0, parseInt(settings.CLAUDE_MEM_THINK_TIME_CAP_MINUTES, 10) || 0);
+        if (capMinutes > 0) {
+          const nowEpoch = submittedAtEpoch ?? Date.now();
+          const gapMs = Math.max(0, nowEpoch - prevCompleted);
+          thinkTimeMs = Math.min(gapMs, capMinutes * 60_000);
+        }
+      }
+    }
+
+    store.saveUserPrompt(contentSessionId, promptNumber, cleanedPrompt, submittedAtEpoch, thinkTimeMs);
 
     const contextInjected = this.sessionManager.getSession(sessionDbId) !== undefined;
 
