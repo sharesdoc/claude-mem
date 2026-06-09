@@ -144,6 +144,7 @@ export interface UserPrompt {
   created_at: string;
   created_at_epoch: number;
   completed_at_epoch?: number | null;
+  think_time_ms?: number;
 }
 
 export interface DBSession {
