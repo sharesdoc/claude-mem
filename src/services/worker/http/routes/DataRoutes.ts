@@ -755,9 +755,9 @@ export class DataRoutes extends BaseRouteHandler {
 
     const uniqueUsers = uniqueUsersRows.map(r => r.user_label);
 
-    // ── per-user AI processing time (prompt→next prompt, capped) ────────
+    // ── per-user AI processing time ─────────────────────────────────────
     // Table-scoped (since): feeds the User Summary table (Today/Week/Month).
-    // Uses exact completion time from SDK result message (v40).
+    // Uses Stop hook timestamp (authoritative) with SDK result as fallback.
     const userProcessingTimeRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
              SUM(up.completed_at_epoch - up.created_at_epoch) AS total_ms,

@@ -194,11 +194,7 @@ export class ClaudeProvider {
       'TodoWrite'       
     ];
 
-    // Snapshot the prompt number BEFORE SDK processing starts. During redo loops
-    // or rapid consecutive submissions, the next prompt may be submitted before
-    // the result for this one arrives, incrementing session.lastPromptNumber
-    // and causing the completion timestamp to be written to the wrong prompt.
-    const pendingPromptNumber = session.lastPromptNumber;
+    // Snapshot prompt# before SDK starts — prevents race with rapid submissions.
 
     const messageGenerator = this.createMessageGenerator(session, cwdTracker);
 
@@ -396,13 +392,11 @@ export class ClaudeProvider {
         }
 
         if (message.type === 'result' && message.subtype === 'success') {
-          // Capture wall-clock completion time. The SDK's result message marks
-          // when processing finished; Date.now() here is the correct end time.
-          // Uses pendingPromptNumber (captured before SDK started) to avoid
-          // race conditions with rapid consecutive submissions (e.g. redo loops).
+          // Initial completion estimate. The Stop hook later overwrites this
+          // with the authoritative timestamp (aligned with claude-task-timer).
           this.dbManager.getSessionStore().updatePromptCompletedAt(
             session.contentSessionId,
-            pendingPromptNumber,
+            session.lastPromptNumber,
             Date.now()
           );
         }
