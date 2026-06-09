@@ -1165,6 +1165,29 @@ print_chroma_summary() {
   fi
 }
 
+print_processing_time_status() {
+  local settings_file="$DATA_DIR/settings.json"
+  local env_val="${CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME:-}"
+  local file_val=""
+  if [[ -f "$settings_file" ]]; then
+    file_val="$(node -e "try{console.log(require('$settings_file').CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME||'')}catch(e){console.log('')}" 2>/dev/null || echo "")"
+  fi
+
+  local effective="${env_val:-${file_val:-false}}"
+  printf "${BOLD}Prompt processing time display:${RESET} "
+  if [[ "$effective" == "true" ]]; then
+    printf "${GREEN}ON${RESET}"
+  else
+    printf "${YELLOW}OFF${RESET} (default)"
+  fi
+  printf "  ${DIM}(env: %s, file: %s)${RESET}\n" \
+    "${env_val:-(unset)}" "${file_val:-(unset)}"
+  if [[ "$effective" != "true" ]]; then
+    printf "  ${DIM}Enable: export CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME=true${RESET}\n"
+    printf "  ${DIM}    or add \"CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME\": \"true\" to %s${RESET}\n" "$settings_file"
+  fi
+}
+
 # ── Server info generator ───────────────────────────────────────────
 get_lan_ip() {
   # Collect all IPv4 addresses from every interface, then pick the best
@@ -1595,6 +1618,7 @@ try {
       done
       [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
       print_chroma_summary
+      print_processing_time_status
       warn_worker_needs_restart "$_worker_was_running" "$_had_settings_changes" "$raw_target"
       ;;
     -u)
@@ -1637,6 +1661,7 @@ try {
       done
       [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
       print_chroma_summary
+      print_processing_time_status
       ;;
     -d)
       if [[ -z "$raw_target" ]]; then
