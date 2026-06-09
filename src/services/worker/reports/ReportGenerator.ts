@@ -338,7 +338,8 @@ export class ReportGenerator {
       const resp = await fetch(DASHSCOPE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ model, messages, stream: false, temperature: 0.4, max_tokens: 6000 }),
+        // qwen3-max 输出上限为 65536(DashScope 限制 max_tokens ≤ 65536),取最大值放开。
+        body: JSON.stringify({ model, messages, stream: false, temperature: 0.4, max_tokens: 65536 }),
         signal: controller.signal,
       });
       if (!resp.ok) { logger.warn('WORKER', 'DashScope non-2xx', { status: resp.status }); return null; }

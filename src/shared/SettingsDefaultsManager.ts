@@ -216,7 +216,7 @@ export class SettingsDefaultsManager {
 
     CLAUDE_MEM_WEEKLY_REPORT_ENABLED: 'true',               // daily auto-generation of weekly work reports
     CLAUDE_MEM_WEEKLY_REPORT_TIME: '13:00',                 // local HH:MM to refresh this week's report
-    CLAUDE_MEM_WEEKLY_REPORT_MODEL: 'qwen-plus',            // Qwen model for the AI highlights section
+    CLAUDE_MEM_WEEKLY_REPORT_MODEL: 'qwen3-max',           // Qwen model for the AI report synthesis
   };
 
   static getAllDefaults(): SettingsDefaults {
