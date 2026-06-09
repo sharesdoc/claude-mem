@@ -1188,6 +1188,30 @@ print_processing_time_status() {
   fi
 }
 
+backfill_missing_settings() {
+  local file="$DATA_DIR/settings.json"
+  if [[ ! -f "$file" ]]; then return; fi
+
+  node -e "
+    const fs = require('fs');
+    const file = process.argv[1];
+    let raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    // Keys that should always exist with defaults
+    const defaults = {
+      CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME: 'false',
+      CLAUDE_MEM_THINK_TIME_CAP_MINUTES: '3',
+    };
+    let changed = false;
+    for (const [k, v] of Object.entries(defaults)) {
+      if (!(k in raw)) { raw[k] = v; changed = true; }
+    }
+    if (changed) {
+      fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n');
+      console.log('  \x1b[2m→\x1b[0m Backfilled missing settings defaults');
+    }
+  " "$file" 2>/dev/null || true
+}
+
 # ── Server info generator ───────────────────────────────────────────
 get_lan_ip() {
   # Collect all IPv4 addresses from every interface, then pick the best
@@ -1609,6 +1633,7 @@ try {
       apply_allowed_origins "$allowed_origins"
       apply_chroma_default
       [[ "${CHROMA_CHANGED:-0}" == "1" ]] && _had_settings_changes="1"
+      backfill_missing_settings
       # 逐个目标执行安装
       for target in "${targets[@]}"; do
         case "$target" in
