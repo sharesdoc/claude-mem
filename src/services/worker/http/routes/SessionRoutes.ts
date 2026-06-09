@@ -334,6 +334,13 @@ export class SessionRoutes extends BaseRouteHandler {
 
     const project = req.body.project || 'unknown';
     const rawPrompt = typeof req.body.prompt === 'string' ? req.body.prompt : undefined;
+    // Use the hook event's own timestamp for accurate processing time measurement.
+    // Date.now() in saveUserPrompt is the hook handler execution time, which can
+    // lag seconds behind the actual user submission due to hook dispatch delay.
+    const hookTimestamp = req.body.timestamp;
+    const submittedAtEpoch = typeof hookTimestamp === 'number' ? hookTimestamp
+      : typeof hookTimestamp === 'string' ? new Date(hookTimestamp).getTime()
+      : undefined;
     const platformSource = normalizePlatformSource(req.body.platformSource);
     const customTitle = req.body.customTitle || undefined;
 
@@ -431,7 +438,7 @@ export class SessionRoutes extends BaseRouteHandler {
       return;
     }
 
-    store.saveUserPrompt(contentSessionId, promptNumber, cleanedPrompt);
+    store.saveUserPrompt(contentSessionId, promptNumber, cleanedPrompt, submittedAtEpoch);
 
     const contextInjected = this.sessionManager.getSession(sessionDbId) !== undefined;
 

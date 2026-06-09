@@ -2058,9 +2058,11 @@ export class SessionStore {
     return row.id;
   }
 
-  saveUserPrompt(contentSessionId: string, promptNumber: number, promptText: string): number {
+  saveUserPrompt(contentSessionId: string, promptNumber: number, promptText: string, submittedAtEpoch?: number): number {
     const now = new Date();
-    const nowEpoch = now.getTime();
+    // Prefer the hook event's own timestamp (accurate user submission time).
+    // Fall back to Date.now() for paths without hook context (e.g. cursor, redo loops).
+    const nowEpoch = submittedAtEpoch ?? now.getTime();
 
     const stmt = this.db.prepare(`
       INSERT INTO user_prompts
