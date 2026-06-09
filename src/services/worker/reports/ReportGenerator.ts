@@ -13,7 +13,7 @@ import { logger } from '../../../utils/logger.js';
 
 const DAY_MS = 86400000;
 const DASHSCOPE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
-const AI_TIMEOUT_MS = 60000;
+const AI_TIMEOUT_MS = 90000;
 const MAX_PROJECTS_IN_PROMPT = 8;
 // 工作任务里只体现"值得一提"的项目:本周耗时 > 1 小时,且有具体工作内容。
 const MIN_PROJECT_MS = 60 * 60 * 1000;
@@ -279,40 +279,87 @@ export class ReportGenerator {
       '关键工作要点不要遗漏,但也不要堆砌流水账;**单个项目的任务要点最多不超过 10 条**,次要的合并或省略。\n\n' +
       '## 三、下周工作建议\n给出 3~5 条可执行的建议(基于本周进展与遗留)。\n\n' +
       '## 四、本周经验与教训\n总结 2~4 条本周的经验或值得改进之处。\n\n' +
-      '全文要精炼克制,重点突出,避免冗长。数据如下:\n\n' + facts;
+      '全文要精炼克制,重点突出,避免冗长。\n' +
+      '【输出前请自查】务必确保:① 四个章节(一、二、三、四)齐全,且**没有**多余章节(如"项目详述");' +
+      '② "本周工作任务"下每个项目标题严格为 `### 项目 <完整项目路径> · 耗时X`;' +
+      '③ 单个项目的任务要点不超过 10 条;④ 全文简体中文(仅专有名词/路径/代码/命令/commit 保留原文);' +
+      '⑤ 直接输出 Markdown 正文,不要用三个反引号代码块把整篇包起来。\n\n数据如下:\n\n' + facts;
 
+    const sys = '你是严谨的技术主管,只依据给定数据撰写工作周报。全文必须使用简体中文,把英文工作记录转述为中文(仅保留专有名词/名称/路径/代码标识/命令/commit);语言精炼、重点突出、严格控制篇幅,绝不臆造。';
+
+    let body = await this.callQwen(apiKey, model, [
+      { role: 'system', content: sys },
+      { role: 'user', content: instruction },
+    ]);
+    if (!body) return null;
+
+    // ── 生成后自检:核查是否符合结构/格式要求;有问题就带着问题让模型修正,最多 2 轮 ──
+    let issues = this.validateBody(body);
+    for (let attempt = 0; issues.length > 0 && attempt < 2; attempt++) {
+      logger.info('WORKER', 'Weekly report self-check found issues, repairing', { attempt: attempt + 1, issues });
+      const repair =
+        '你上一版周报正文存在以下不符合要求的问题,请**逐一修正**,在保持内容真实、不新增未提供信息的前提下,' +
+        '严格按要求重新输出**完整正文**(从"## 一、"开始,不要任何解释,不要用代码块包裹):\n\n问题清单:\n' +
+        issues.map((s, i) => `${i + 1}. ${s}`).join('\n') + '\n\n上一版正文:\n' + body;
+      const fixed = await this.callQwen(apiKey, model, [
+        { role: 'system', content: sys },
+        { role: 'user', content: repair },
+      ]);
+      if (!fixed) break;
+      body = fixed;
+      issues = this.validateBody(body);
+    }
+    if (issues.length) logger.warn('WORKER', 'Weekly report still has issues after repair attempts', { issues });
+    return body;
+  }
+
+  /** 调用 Qwen/DashScope chat/completions;失败/超时返回 null。 */
+  private async callQwen(apiKey: string, model: string, messages: Array<{ role: string; content: string }>): Promise<string | null> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
     try {
       const resp = await fetch(DASHSCOPE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model,
-          messages: [
-            { role: 'system', content: '你是严谨的技术主管,只依据给定数据撰写工作周报。全文必须使用简体中文,把英文工作记录转述为中文(仅保留专有名词/名称/路径/代码标识/命令/commit);语言精炼、重点突出、严格控制篇幅,绝不臆造。' },
-            { role: 'user', content: instruction },
-          ],
-          stream: false,
-          temperature: 0.4,
-          max_tokens: 2200,
-        }),
+        body: JSON.stringify({ model, messages, stream: false, temperature: 0.4, max_tokens: 6000 }),
         signal: controller.signal,
       });
-      if (!resp.ok) {
-        logger.warn('WORKER', 'DashScope non-2xx, fall back to deterministic report', { status: resp.status });
-        return null;
-      }
+      if (!resp.ok) { logger.warn('WORKER', 'DashScope non-2xx', { status: resp.status }); return null; }
       const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
       const content = data.choices?.[0]?.message?.content?.trim();
       return content && content.length > 0 ? content : null;
     } catch (err) {
-      logger.warn('WORKER', 'DashScope call failed, fall back to deterministic report', {
-        error: err instanceof Error ? err.message : String(err),
-      });
+      logger.warn('WORKER', 'DashScope call failed', { error: err instanceof Error ? err.message : String(err) });
       return null;
     } finally {
       clearTimeout(timer);
     }
+  }
+
+  /** 核查 AI 周报正文是否符合结构/格式/篇幅要求,返回问题清单(空数组=合格)。 */
+  private validateBody(body: string): string[] {
+    const issues: string[] = [];
+    if (!/##\s*一/.test(body)) issues.push('缺少"## 一、本周总体概述"章节');
+    if (!/##\s*二/.test(body)) issues.push('缺少"## 二、本周工作任务"章节');
+    if (!/##\s*三/.test(body)) issues.push('缺少"## 三、下周工作建议"章节');
+    if (!/##\s*四/.test(body)) issues.push('缺少"## 四、本周经验与教训"章节');
+    if (/##\s*五/.test(body) || body.includes('项目详述')) issues.push('包含多余章节(如"项目详述"或第五章),请删除,只保留一~四');
+    if (body.includes('数据未提供') || body.includes('未提供具体')) issues.push('出现"数据未提供"之类占位——这类没有具体内容的项目应直接省略,不要写进周报');
+    if (/```/.test(body)) issues.push('整篇被代码块(三个反引号)包裹了,请直接输出 Markdown 正文');
+
+    // 取"## 二"到"## 三"之间作为本周工作任务段,逐项目校验
+    const m = body.match(/##\s*二[\s\S]*?(?=\n##\s*三|$)/);
+    const sec2 = m ? m[0] : '';
+    const blocks = sec2.split(/\n(?=###\s)/).slice(1);
+    if (blocks.length === 0) issues.push('"本周工作任务"下没有列出任何项目');
+    for (const blk of blocks) {
+      const head = (blk.match(/^###\s.*/) || [''])[0].trim();
+      if (!/^###\s*项目\s+\S/.test(head)) issues.push(`项目标题格式不符,应为"### 项目 <完整项目路径> · 耗时X":${head}`);
+      else if (!head.includes('耗时')) issues.push(`项目标题缺少耗时信息:${head}`);
+      const bullets = (blk.match(/^-\s/gm) || []).length;
+      if (bullets === 0) issues.push(`项目标题"${head}"下没有任务要点`);
+      if (bullets > 10) issues.push(`项目"${head}"任务要点超过10条(当前${bullets}条),请精简到10条以内`);
+    }
+    return issues;
   }
 }
