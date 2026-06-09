@@ -74,6 +74,10 @@ function shellTemplateManifest(buildShellCommand) {
     host: 'codex-cli', requireFile: 'bun-runner.js', requireFileSecondary: 'worker-service.cjs',
     trailingCommand: ccTrailing(...tail), notFoundMessage: 'claude-mem: plugin scripts not found',
   });
+  const codexQuietStartHook = () => buildShellCommand({
+    host: 'codex-cli', requireFile: 'bun-runner.js', requireFileSecondary: 'worker-service.cjs',
+    trailingCommand: [...ccTrailing('start'), '>/dev/null'], notFoundMessage: 'claude-mem: plugin scripts not found',
+  });
 
   return {
     'plugin/hooks/hooks.json': {
@@ -100,7 +104,7 @@ function shellTemplateManifest(buildShellCommand) {
           trailingCommand: ['node', '"$_P/scripts/version-check.js"'],
           notFoundMessage: 'claude-mem: version-check.js not found',
         }),
-        'SessionStart.0.1': codexHook(['start']),
+        'SessionStart.0.1': codexQuietStartHook(),
         'SessionStart.0.2': codexHook(['hook', 'codex', 'context']),
         'UserPromptSubmit.0.0': codexHook(['hook', 'codex', 'session-init']),
         'PreToolUse.0.0': codexHook(['hook', 'codex', 'file-context']),
