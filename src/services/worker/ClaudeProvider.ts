@@ -396,28 +396,14 @@ export class ClaudeProvider {
         }
 
         if (message.type === 'result' && message.subtype === 'success') {
-          // Use the SDK's own timing (duration_ms) — same source as Claude Code's
-          // "✻ Baked for 34s". Reconstruct end time from prompt creation + SDK duration.
-          // Use the captured prompt number (not session.lastPromptNumber) to avoid
+          // Capture wall-clock completion time. The SDK's result message marks
+          // when processing finished; Date.now() here is the correct end time.
+          // Uses pendingPromptNumber (captured before SDK started) to avoid
           // race conditions with rapid consecutive submissions (e.g. redo loops).
-          const durationMs = (message as any).duration_ms;
-          let completedAt: number;
-          if (typeof durationMs === 'number' && durationMs > 0) {
-            const createdEpoch = this.dbManager.getSessionStore().getPromptCreatedAt(
-              session.contentSessionId, pendingPromptNumber
-            );
-            if (createdEpoch != null) {
-              completedAt = createdEpoch + durationMs;
-            } else {
-              completedAt = Date.now();
-            }
-          } else {
-            completedAt = Date.now();
-          }
           this.dbManager.getSessionStore().updatePromptCompletedAt(
             session.contentSessionId,
             pendingPromptNumber,
-            completedAt
+            Date.now()
           );
         }
       }

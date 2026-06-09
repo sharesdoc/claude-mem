@@ -2097,14 +2097,6 @@ export class SessionStore {
     `).run(completedAtEpoch, contentSessionId, promptNumber);
   }
 
-  getPromptCreatedAt(contentSessionId: string, promptNumber: number): number | null {
-    const row = this.db.prepare(`
-      SELECT created_at_epoch FROM user_prompts
-      WHERE content_session_id = ? AND prompt_number = ?
-    `).get(contentSessionId, promptNumber) as { created_at_epoch: number } | undefined;
-    return row?.created_at_epoch ?? null;
-  }
-
   getMaxPromptNumber(contentSessionId: string): number | null {
     const row = this.db.prepare(`
       SELECT MAX(prompt_number) AS n FROM user_prompts WHERE content_session_id = ?
