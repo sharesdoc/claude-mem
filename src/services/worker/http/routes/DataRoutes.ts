@@ -911,6 +911,22 @@ export class DataRoutes extends BaseRouteHandler {
       sessions: number;       // distinct session count for that user
       bizDays: number;        // business days in the month (same for all users)
     }> = [];
+    // ── Weekly history (scope=history): last 26 ISO weeks (Monday-start) ────
+    // Same per-user aggregation as historyMonths, but each row is one calendar
+    // week. Week label = the Monday of that week, "YYYY-MM-DD".
+    const historyWeeks: Array<{
+      week: string;           // Monday of the week, "2024-01-08"
+      user_label: string;
+      prompts: number;
+      avgPromptsPerDay: number;
+      processingMs: number;
+      avgTimePerDay: number;
+      obs: number;
+      summaries: number;
+      projects: number;
+      sessions: number;
+      bizDays: number;        // business days in the week (same for all users)
+    }> = [];
     if (scope === 'history') {
       const now = new Date(Date.now() + tzOffsetMs);
       const endYear = now.getUTCFullYear();
@@ -927,22 +943,26 @@ export class DataRoutes extends BaseRouteHandler {
 
       const RESOLVE_USER = `COALESCE(NULLIF(s.user_label, ''), 'unknown')`;
 
-      const monthInfo = (ym: string) => {
-        const [y, m] = ym.split('-').map(Number);
-        const start = Date.UTC(y, m - 1, 1) - tzOffsetMs;
-        const end = Date.UTC(y, m, 1) - tzOffsetMs; // exclusive
+      // Count business days (Mon–Fri) in a wall-clock-UTC [start,end) range.
+      // Inputs are UTC-midnight epochs whose UTC fields represent local wall time.
+      const countBizDays = (wallStartMs: number, wallEndMs: number): number => {
         let bizDays = 0;
-        {
-          const cur = new Date(Date.UTC(y, m - 1, 1));
-          const stop = new Date(Date.UTC(y, m, 1));
-          while (cur < stop) {
-            const d = cur.getUTCDay();
-            if (d !== 0 && d !== 6) bizDays++;
-            cur.setUTCDate(cur.getUTCDate() + 1);
-          }
+        const cur = new Date(wallStartMs);
+        const stop = new Date(wallEndMs);
+        while (cur < stop) {
+          const d = cur.getUTCDay();
+          if (d !== 0 && d !== 6) bizDays++;
+          cur.setUTCDate(cur.getUTCDate() + 1);
         }
-        if (bizDays === 0) bizDays = 1;
+        return bizDays || 1;
+      };
 
+      type RangeAgg = { prompts: number; obs: number; summaries: number; processingMs: number; projects: number; sessions: number };
+      const blankAgg = (): RangeAgg => ({ prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 });
+
+      // Aggregate per-user metrics over a real-epoch [start,end) window.
+      // Shared by both the monthly and weekly history builders.
+      const aggregateRange = (start: number, end: number): Map<string, RangeAgg> => {
         // ── Per-user prompts ──
         const promptsRows = db.prepare(`
           SELECT ${RESOLVE_USER} AS user_label, COUNT(*) AS n
@@ -1007,41 +1027,45 @@ export class DataRoutes extends BaseRouteHandler {
           GROUP BY user_label
         `).all(start, end, project || null, project || null, userLabel || null, userLabel || null) as Array<{ user_label: string; n: number }>;
 
-        // ── Merge per-user data for this month ──
-        const userMap = new Map<string, { prompts: number; obs: number; summaries: number; processingMs: number; projects: number; sessions: number }>();
+        // ── Merge per-user data for this window ──
+        const userMap = new Map<string, RangeAgg>();
         for (const r of promptsRows) {
-          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          const e = userMap.get(r.user_label) || blankAgg();
           e.prompts = r.n;
           userMap.set(r.user_label, e);
         }
         for (const r of obsRows) {
-          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          const e = userMap.get(r.user_label) || blankAgg();
           e.obs = r.n;
           userMap.set(r.user_label, e);
         }
         for (const r of summsRows) {
-          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          const e = userMap.get(r.user_label) || blankAgg();
           e.summaries = r.n;
           userMap.set(r.user_label, e);
         }
         for (const r of timeRows) {
-          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          const e = userMap.get(r.user_label) || blankAgg();
           e.processingMs = r.total_ms;
           userMap.set(r.user_label, e);
         }
         for (const r of projRows) {
-          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          const e = userMap.get(r.user_label) || blankAgg();
           e.projects = r.n;
           userMap.set(r.user_label, e);
         }
         for (const r of sessRows) {
-          const e = userMap.get(r.user_label) || { prompts: 0, obs: 0, summaries: 0, processingMs: 0, projects: 0, sessions: 0 };
+          const e = userMap.get(r.user_label) || blankAgg();
           e.sessions = r.n;
           userMap.set(r.user_label, e);
         }
+        return userMap;
+      };
 
-        return Array.from(userMap.entries()).map(([user_label, d]) => ({
-          month: ym,
+      // Build one period's rows (month or week) keyed by a period label.
+      const periodRows = <K extends string>(periodKey: K, label: string, start: number, end: number, bizDays: number) =>
+        Array.from(aggregateRange(start, end).entries()).map(([user_label, d]) => ({
+          [periodKey]: label,
           user_label,
           prompts: d.prompts,
           avgPromptsPerDay: Math.round(d.prompts / bizDays),
@@ -1053,12 +1077,33 @@ export class DataRoutes extends BaseRouteHandler {
           sessions: d.sessions,
           bizDays,
         }));
-      };
 
+      // ── Monthly rows: each calendar month in the 36-month window ──
       for (const ym of monthLabels) {
-        const rows = monthInfo(ym);
-        for (const row of rows) {
-          historyMonths.push(row);
+        const [y, m] = ym.split('-').map(Number);
+        const start = Date.UTC(y, m - 1, 1) - tzOffsetMs;
+        const end = Date.UTC(y, m, 1) - tzOffsetMs; // exclusive
+        const bizDays = countBizDays(Date.UTC(y, m - 1, 1), Date.UTC(y, m, 1));
+        for (const row of periodRows('month', ym, start, end, bizDays)) {
+          historyMonths.push(row as typeof historyMonths[number]);
+        }
+      }
+
+      // ── Weekly rows: last 26 ISO weeks (Monday-start), per-user ──
+      // thisMondayWall = wall-clock-UTC midnight of the current week's Monday.
+      const thisMondayWall = Date.UTC(cy, cm, cd) - (cdow === 0 ? 6 : cdow - 1) * 86400000;
+      const fmtYMD = (wallMs: number): string => {
+        const dt = new Date(wallMs);
+        return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, '0')}-${String(dt.getUTCDate()).padStart(2, '0')}`;
+      };
+      for (let i = 25; i >= 0; i--) {
+        const wallStart = thisMondayWall - i * 7 * 86400000;
+        const wallEnd = wallStart + 7 * 86400000;
+        const start = wallStart - tzOffsetMs;
+        const end = wallEnd - tzOffsetMs; // exclusive
+        const bizDays = countBizDays(wallStart, wallEnd);
+        for (const row of periodRows('week', fmtYMD(wallStart), start, end, bizDays)) {
+          historyWeeks.push(row as typeof historyWeeks[number]);
         }
       }
     }
@@ -1147,6 +1192,7 @@ export class DataRoutes extends BaseRouteHandler {
       granularity,
       chartBuckets,
       historyMonths,
+      historyWeeks,
     });
   });
 

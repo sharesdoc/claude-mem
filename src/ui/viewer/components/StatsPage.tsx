@@ -186,6 +186,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   // projectTab: switches the project-ranking section (prompts vs AI time)
   const [projectTab, setProjectTab] = useState<'prompts' | 'time'>('time');
 
+  // historyUser: which person's tab is selected in the History view.
+  // null → fall back to the first (most-active) user.
+  const [historyUser, setHistoryUser] = useState<string | null>(null);
+
   // scope: GLOBAL time range — drives EVERY section on the page. Persisted.
   const [scope, setScope] = useState<Scope>(() => {
     try {
@@ -343,25 +347,96 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const isEmpty = (a.totalObservations ?? 0) === 0 && (a.totalSessions ?? 0) === 0;
   const isAllProjects = currentFilter === '';
 
-  // ── History view (scope=history): per-user monthly tables ──────────
+  // ── History view (scope=history): per-user tabs → week + month tables ──
   if (scope === 'history') {
     const allMonths = analytics!.historyMonths ?? [];
+    const allWeeks = analytics!.historyWeeks ?? [];
 
-    // Group entries by user_label, filter zero-activity months, sort users by total AI time
-    const grouped = new Map<string, typeof allMonths>();
-    for (const m of allMonths) {
-      if (m.prompts === 0 && m.obs === 0 && m.summaries === 0 && m.sessions === 0) continue;
-      const arr = grouped.get(m.user_label);
-      if (arr) arr.push(m);
-      else grouped.set(m.user_label, [m]);
+    const hasActivity = (r: { prompts: number; obs: number; summaries: number; sessions: number }) =>
+      !(r.prompts === 0 && r.obs === 0 && r.summaries === 0 && r.sessions === 0);
+
+    // Group rows by user_label, dropping zero-activity periods.
+    function groupByUser<T extends { user_label: string; prompts: number; obs: number; summaries: number; sessions: number }>(rows: T[]) {
+      const g = new Map<string, T[]>();
+      for (const r of rows) {
+        if (!hasActivity(r)) continue;
+        const arr = g.get(r.user_label);
+        if (arr) arr.push(r); else g.set(r.user_label, [r]);
+      }
+      return g;
     }
-    const historyByUser = Array.from(grouped.entries())
-      .map(([user, months]) => ({
-        user,
-        months: months.sort((a, b) => b.month.localeCompare(a.month)), // newest first
-        totalMs: months.reduce((s, m) => s + m.processingMs, 0),
-      }))
-      .sort((a, b) => b.totalMs - a.totalMs);
+
+    const monthsByUser = groupByUser(allMonths);
+    const weeksByUser = groupByUser(allWeeks);
+
+    // Union of users with any activity, sorted by total AI time (desc).
+    const totalMsOf = (u: string) =>
+      ((monthsByUser.get(u) ?? []).reduce((s, m) => s + m.processingMs, 0))
+      || ((weeksByUser.get(u) ?? []).reduce((s, w) => s + w.processingMs, 0));
+    const users = Array.from(new Set([...monthsByUser.keys(), ...weeksByUser.keys()]))
+      .sort((a, b) => totalMsOf(b) - totalMsOf(a));
+
+    const activeUser = (historyUser && users.includes(historyUser)) ? historyUser : users[0];
+    const activeIdx = Math.max(0, users.indexOf(activeUser));
+    const activeMonths = (monthsByUser.get(activeUser) ?? []).slice().sort((a, b) => b.month.localeCompare(a.month));
+    const activeWeeks = (weeksByUser.get(activeUser) ?? []).slice().sort((a, b) => b.week.localeCompare(a.week));
+
+    type HistRow = {
+      prompts: number; avgPromptsPerDay: number; processingMs: number;
+      obs: number; summaries: number; sessions: number; projects: number; bizDays: number;
+    };
+    // Shared table renderer for both the week and the month sections.
+    function renderTable<T extends HistRow>(title: string, periodHeader: string, rows: T[], periodOf: (r: T) => string) {
+      if (rows.length === 0) return null;
+      const totalMs = rows.reduce((s, r) => s + r.processingMs, 0);
+      return (
+        <div className="stats-section">
+          <div className="stats-section-title">{title}</div>
+          <div className="stats-user-table-wrap">
+            <table className="stats-user-table" style={{ fontSize: '12px' }}>
+              <thead><tr>
+                <th>{periodHeader}</th>
+                <th className="stats-num-col">{t('stats.prompts')}</th>
+                <th className="stats-num-col">{t('stats.dailyAvgPrompts')}</th>
+                <th className="stats-num-col">{t('stats.totalTime')}</th>
+                <th className="stats-num-col">{t('stats.dailyAvgTime')}</th>
+                <th className="stats-num-col">{t('stats.observations')}</th>
+                <th className="stats-num-col">{t('stats.summaries')}</th>
+                <th className="stats-num-col">{t('stats.historySessions')}</th>
+                <th className="stats-num-col">{t('stats.projects')}</th>
+              </tr></thead>
+              <tbody>
+                {rows.map(r => (
+                  <tr key={periodOf(r)}>
+                    <td>{periodOf(r)}</td>
+                    <td className="stats-num-col">{formatNumber(r.prompts)}</td>
+                    <td className="stats-num-col">{formatNumber(r.avgPromptsPerDay)}</td>
+                    <td className="stats-num-col">{formatProcessingTime(r.processingMs)}</td>
+                    <td className="stats-num-col">{formatDailyAvg(r.processingMs, r.bizDays)}</td>
+                    <td className="stats-num-col">{formatNumber(r.obs)}</td>
+                    <td className="stats-num-col">{formatNumber(r.summaries)}</td>
+                    <td className="stats-num-col">{formatNumber(r.sessions)}</td>
+                    <td className="stats-num-col">{formatNumber(r.projects)}</td>
+                  </tr>
+                ))}
+                {/* Per-user total row */}
+                <tr style={{ borderTop: '2px solid var(--color-border-primary)' }}>
+                  <td style={{ fontWeight: 600 }}>{t('stats.userSummary')}</td>
+                  <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatNumber(rows.reduce((s, r) => s + r.prompts, 0))}</td>
+                  <td className="stats-num-col">-</td>
+                  <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatProcessingTime(totalMs)}</td>
+                  <td className="stats-num-col">-</td>
+                  <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatNumber(rows.reduce((s, r) => s + r.obs, 0))}</td>
+                  <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatNumber(rows.reduce((s, r) => s + r.summaries, 0))}</td>
+                  <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatNumber(rows.reduce((s, r) => s + r.sessions, 0))}</td>
+                  <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatNumber(Math.max(...rows.map(r => r.projects), 0))}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      );
+    }
 
     return (
     <div className="feed">
@@ -379,64 +454,39 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
               ))}
             </span>
             <span className="stats-scope-title">
-              {t('stats.historyTitle')}
+              {t('stats.scope_history')}
               {!isAllProjects && `: ${currentFilter}`}
             </span>
           </div>
 
-          {historyByUser.length === 0 && (
+          {users.length === 0 && (
             <div className="stats-no-data-banner">{t('stats.noData')}</div>
           )}
 
-          {historyByUser.map(({ user, months, totalMs }, idx) => (
-            <div className="stats-section" key={user}>
-              <div className="stats-section-title">
-                <span style={{ color: USER_COLORS[idx % USER_COLORS.length], fontWeight: 600 }}>{user}</span>
+          {users.length > 0 && (
+            <>
+              {/* Per-user tabs — one tab per person, under the scope bar */}
+              <div className="stats-section">
+                <span className="stats-tabs">
+                  {users.map((u, idx) => (
+                    <button key={u} type="button"
+                      className={`stats-tab${u === activeUser ? ' is-active' : ''}`}
+                      onClick={() => setHistoryUser(u)}
+                      style={u === activeUser ? undefined : { color: USER_COLORS[idx % USER_COLORS.length] }}>
+                      {u}
+                    </button>
+                  ))}
+                </span>
+                <span className="stats-scope-title" style={{ color: USER_COLORS[activeIdx % USER_COLORS.length], fontWeight: 600 }}>
+                  {activeUser}
+                </span>
               </div>
-              <div className="stats-user-table-wrap">
-                <table className="stats-user-table" style={{ fontSize: '12px' }}>
-                  <thead><tr>
-                    <th>{t('stats.historyMonth')}</th>
-                    <th className="stats-num-col">{t('stats.prompts')}</th>
-                    <th className="stats-num-col">{t('stats.dailyAvgPrompts')}</th>
-                    <th className="stats-num-col">{t('stats.totalTime')}</th>
-                    <th className="stats-num-col">{t('stats.dailyAvgTime')}</th>
-                    <th className="stats-num-col">{t('stats.observations')}</th>
-                    <th className="stats-num-col">{t('stats.summaries')}</th>
-                    <th className="stats-num-col">{t('stats.historySessions')}</th>
-                    <th className="stats-num-col">{t('stats.projects')}</th>
-                  </tr></thead>
-                  <tbody>
-                    {months.map(m => (
-                      <tr key={m.month}>
-                        <td>{m.month}</td>
-                        <td className="stats-num-col">{formatNumber(m.prompts)}</td>
-                        <td className="stats-num-col">{formatNumber(m.avgPromptsPerDay)}</td>
-                        <td className="stats-num-col">{formatProcessingTime(m.processingMs)}</td>
-                        <td className="stats-num-col">{formatDailyAvg(m.processingMs, m.bizDays)}</td>
-                        <td className="stats-num-col">{formatNumber(m.obs)}</td>
-                        <td className="stats-num-col">{formatNumber(m.summaries)}</td>
-                        <td className="stats-num-col">{formatNumber(m.sessions)}</td>
-                        <td className="stats-num-col">{formatNumber(m.projects)}</td>
-                      </tr>
-                    ))}
-                    {/* Per-user total row */}
-                    <tr style={{ borderTop: '2px solid var(--color-border-primary)' }}>
-                      <td style={{ fontWeight: 600 }}>{t('stats.userSummary')}</td>
-                      <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatNumber(months.reduce((s, m) => s + m.prompts, 0))}</td>
-                      <td className="stats-num-col">-</td>
-                      <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatProcessingTime(totalMs)}</td>
-                      <td className="stats-num-col">-</td>
-                      <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatNumber(months.reduce((s, m) => s + m.obs, 0))}</td>
-                      <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatNumber(months.reduce((s, m) => s + m.summaries, 0))}</td>
-                      <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatNumber(months.reduce((s, m) => s + m.sessions, 0))}</td>
-                      <td className="stats-num-col" style={{ fontWeight: 600 }}>{formatNumber(Math.max(...months.map(m => m.projects), 0))}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ))}
+
+              {/* Week History (top) then Monthly History (bottom) for the selected user */}
+              {renderTable(t('stats.weekHistory'), t('stats.historyWeek'), activeWeeks, r => r.week)}
+              {renderTable(t('stats.historyTitle'), t('stats.historyMonth'), activeMonths, r => r.month)}
+            </>
+          )}
 
         </div>
       </div>

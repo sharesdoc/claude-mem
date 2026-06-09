@@ -184,4 +184,12 @@ export interface AnalyticsResponse {
     obs: number; summaries: number;
     projects: number; sessions: number; bizDays: number;
   }>;
+  /** 周度历史记录 — 按人分组(scope=history 时返回,每人每周一条,最近26周)。 */
+  historyWeeks: Array<{
+    week: string; user_label: string;
+    prompts: number; avgPromptsPerDay: number;
+    processingMs: number; avgTimePerDay: number;
+    obs: number; summaries: number;
+    projects: number; sessions: number; bizDays: number;
+  }>;
 }
