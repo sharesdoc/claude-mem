@@ -1,0 +1,32 @@
+{
+  "name": "codex-task-timer",
+  "version": "0.1.0",
+  "description": "Record wall-clock processing time for each interactive Codex task using lifecycle hooks.",
+  "author": {
+    "name": "Johnson",
+    "email": "Johnson@mailbox.com"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "timer",
+    "hooks",
+    "productivity"
+  ],
+  "hooks": "./hooks/codex-hooks.json",
+  "interface": {
+    "displayName": "Codex Task Timer",
+    "shortDescription": "Records elapsed time for each interactive Codex task.",
+    "longDescription": "Codex Task Timer listens to Codex lifecycle hooks and writes one JSONL timing record for each completed interactive turn.",
+    "developerName": "Johnson",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Show the latest Codex task timing record.",
+      "Summarize today's Codex task durations."
+    ],
+    "brandColor": "#0E7C86"
+  }
+}
