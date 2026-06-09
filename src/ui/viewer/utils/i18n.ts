@@ -154,7 +154,7 @@ export const translations: Record<Locale, Dict> = {
     'prompt.copied': 'Copied',
     'prompt.copiedMsg': 'Prompt is copied!',
     'prompt.delete': 'Delete prompt',
-    'prompt.cancelled': 'Task cancelled or abnormal',
+    'prompt.cancelled': 'Task status unclear',
     'prompt.thinkTime': 'Human',
 
     'welcome.title': 'Welcome to claude-mem',
@@ -351,7 +351,7 @@ export const translations: Record<Locale, Dict> = {
     'prompt.copied': '已复制',
     'prompt.copiedMsg': '提示词已复制！',
     'prompt.delete': '删除提示词',
-    'prompt.cancelled': '任务取消或者异常',
+    'prompt.cancelled': '任务状态不明确',
     'prompt.thinkTime': '人处理',
 
     'welcome.title': '欢迎使用 claude-mem',
