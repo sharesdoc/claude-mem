@@ -15,6 +15,8 @@ const DAY_MS = 86400000;
 const DASHSCOPE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
 const AI_TIMEOUT_MS = 60000;
 const MAX_PROJECTS_IN_PROMPT = 8;
+// 工作任务里只体现"值得一提"的项目:本周耗时 > 1 小时,且有具体工作内容。
+const MIN_PROJECT_MS = 60 * 60 * 1000;
 
 export interface ReportStats {
   totalMs: number;
@@ -193,7 +195,10 @@ export class ReportGenerator {
         learned: toBullets(ss.map(s => s.learned), 6),
         observations: os.slice(0, 6).map(o => ({ type: o.type, title: (o.title || o.subtitle || o.narrative || '').trim() })).filter(o => o.title),
       };
-    }).sort((a, b) => b.totalMs - a.totalMs);
+    })
+    // 排除:本周耗时 ≤ 1 小时、或没有具体工作内容(无总结/收获/观察)的项目。
+    .filter(d => d.totalMs > MIN_PROJECT_MS && (d.completed.length > 0 || d.learned.length > 0 || d.observations.length > 0))
+    .sort((a, b) => b.totalMs - a.totalMs);
   }
 
   /** 标题 + 概览统计表(确定性、事实)+ 正文(AI 或降级)。 */
@@ -245,6 +250,7 @@ export class ReportGenerator {
   private async synthesize(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: ProjectDigest[], model: string): Promise<string | null> {
     const apiKey = (process.env.DASHSCOPE_API_KEY ?? '').trim();
     if (!apiKey) return null;
+    if (digests.length === 0) return null; // 过滤后无值得一提的项目
     if (stats.prompts === 0 && stats.obs === 0 && stats.summaries === 0) return null;
 
     const projectBlocks = digests.slice(0, MAX_PROJECTS_IN_PROMPT).map(d => {

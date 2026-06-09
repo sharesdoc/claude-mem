@@ -164,34 +164,68 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
   );
 }
 
-/* ── TrendBars: compact single-series bar chart (history per-user trends) ── */
+/* ── TrendBars: single-series SVG bar chart with axes + gridlines.
+   Mirrors the LineChart look (Y-axis labels, horizontal gridlines, X labels). ── */
 interface TrendPoint { label: string; value: number; }
 function TrendBars({ title, color, points, formatVal }: {
   title: string; color: string; points: TrendPoint[]; formatVal: (v: number) => string;
 }) {
   if (points.length === 0) return null;
   const max = Math.max(...points.map(p => p.value), 1);
+  const svgW = 600, svgH = 220;
+  const pad = { top: 16, right: 8, bottom: 32, left: 46 };
+  const plotW = svgW - pad.left - pad.right;
+  const plotH = svgH - pad.top - pad.bottom;
+  const n = points.length;
+  const band = plotW / Math.max(n, 1);
+  const barW = Math.max(2, Math.min(28, band * 0.5));
+  const step = Math.max(1, Math.ceil(n / 12)); // subsample x labels when crowded
+
   return (
     <div className="stats-chart">
       <div className="stats-chart-title">{title}</div>
-      <div style={{ display: 'flex', alignItems: 'stretch', gap: '4px', height: '150px', padding: '6px 2px', overflowX: 'auto' }}>
-        {points.map(p => {
-          const h = Math.max(2, Math.round((p.value / max) * 100));
-          return (
-            <div key={p.label} title={`${p.label}: ${formatVal(p.value)}`}
-              style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: '1 0 auto', minWidth: '20px' }}>
-              <span style={{ fontSize: '8px', color: 'var(--color-text-secondary)', fontFamily: 'monospace', marginBottom: '2px', whiteSpace: 'nowrap' }}>
-                {p.value > 0 ? formatVal(p.value) : ''}
-              </span>
-              <div style={{ flex: 1, width: '100%', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-                <div style={{ width: '60%', maxWidth: '28px', height: `${h}%`, background: color, borderRadius: '2px 2px 0 0' }} />
-              </div>
-              <span style={{ fontSize: '8px', color: 'var(--color-text-muted)', fontFamily: 'monospace', marginTop: '4px', whiteSpace: 'nowrap' }}>
-                {p.label}
-              </span>
-            </div>
-          );
-        })}
+      <div className="stats-line-chart">
+        <svg width={svgW} height={svgH} viewBox={`0 0 ${svgW} ${svgH}`} preserveAspectRatio="xMidYMid meet">
+          {/* Y-axis gridlines + labels */}
+          {[0, 0.25, 0.5, 0.75, 1].map(fr => {
+            const y = pad.top + plotH * (1 - fr);
+            return (
+              <g key={`g-${fr}`}>
+                <line x1={pad.left} y1={y} x2={svgW - pad.right} y2={y}
+                  stroke="var(--color-border-primary)" strokeWidth="0.5" />
+                <text x={pad.left - 6} y={y + 4} textAnchor="end"
+                  fill="var(--color-text-muted)" fontSize="9" fontFamily="monospace">
+                  {fr === 0 ? '0' : formatVal(Math.round(max * fr))}
+                </text>
+              </g>
+            );
+          })}
+          {/* Bars + value labels + X-axis labels */}
+          {points.map((p, i) => {
+            const cx = pad.left + (i + 0.5) * band;
+            const bh = p.value > 0 ? Math.max(1, (p.value / max) * plotH) : 0;
+            const by = pad.top + plotH - bh;
+            return (
+              <g key={p.label}>
+                {p.value > 0 && (
+                  <rect x={cx - barW / 2} y={by} width={barW} height={bh} fill={color} rx="1" />
+                )}
+                {p.value > 0 && (
+                  <text x={cx} y={by - 3} textAnchor="middle"
+                    fill="var(--color-text-secondary)" fontSize="8" fontFamily="monospace">
+                    {formatVal(p.value)}
+                  </text>
+                )}
+                {i % step === 0 && (
+                  <text x={cx} y={svgH - 6} textAnchor="middle"
+                    fill="var(--color-text-muted)" fontSize="8" fontFamily="monospace">
+                    {p.label}
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
       </div>
     </div>
   );
