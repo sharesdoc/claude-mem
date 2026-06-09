@@ -3451,6 +3451,15 @@
       color: var(--color-text-primary);
       border-color: var(--color-border-hover);
     }
+    /* 生成周报中:按钮 disabled 时给出明确视觉反馈(变暗 + 禁止光标),并取消 hover 高亮。 */
+    .stats-tab:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .stats-tab:disabled:hover {
+      color: var(--color-text-muted);
+      border-color: var(--color-border-primary);
+    }
     .stats-tab.is-active {
       background: var(--color-accent-primary);
       color: var(--color-text-button);
