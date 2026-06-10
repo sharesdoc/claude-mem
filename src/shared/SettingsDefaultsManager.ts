@@ -54,7 +54,7 @@ export interface SettingsDefaults {
   CLAUDE_MEM_TIER_SUMMARY_MODEL: string;     
   CLAUDE_MEM_CHROMA_ENABLED: string;
   /** Show AI processing completion time + duration on prompt cards in viewer. */
-  CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME: string;
+  CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME: string; // 0=off, 1=AI time only, 2=AI+human
   /** Max think-time minutes to include in AI processing time (0=disabled). */
   CLAUDE_MEM_THINK_TIME_CAP_MINUTES: string; 
   CLAUDE_MEM_CHROMA_MODE: string;      
@@ -168,7 +168,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_TIER_SIMPLE_MODEL: 'haiku', // Portable tier alias — works across Direct API, Bedrock, Vertex, Azure (see #1463)
     CLAUDE_MEM_TIER_SUMMARY_MODEL: '',                // Empty = use default model for summaries
     CLAUDE_MEM_CHROMA_ENABLED: 'true',         // Set to 'false' to disable Chroma and use SQLite-only search
-    CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME: 'false', // Default off — enable via env var or settings.json
+    CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME: '0', // 0=off, 1=AI time only, 2=AI+human think time
     CLAUDE_MEM_THINK_TIME_CAP_MINUTES: '3',           // Max think time (minutes) to include in AI processing time. 0 = disabled
     CLAUDE_MEM_CHROMA_MODE: 'local',           // 'local' uses persistent chroma-mcp via uvx, 'remote' connects to existing server
     CLAUDE_MEM_CHROMA_HOST: '127.0.0.1',

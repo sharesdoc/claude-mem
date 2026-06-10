@@ -8,8 +8,8 @@ interface PromptCardProps {
   prompt: UserPrompt;
   /** Called with the prompt id after it is deleted from the database. */
   onDeleted?: (id: number) => void;
-  /** When true and prompt has completed_at_epoch, show processing time + duration. */
-  showProcessingTime?: boolean;
+  /** 0=off, 1=AI time only, 2=AI+human think time. */
+  showProcessingTime?: number; // 0=off, 1=AI only, 2=AI+human
 }
 
 const COPIED_DURATION_MS = 2000;
@@ -21,7 +21,8 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const date = formatDate(prompt.created_at_epoch);
 
-  const processingInfo = (showProcessingTime && prompt.completed_at_epoch)
+  const level = showProcessingTime ?? 0;
+	  const processingInfo = (level > 0 && prompt.completed_at_epoch)
     ? (() => {
         const thinkMs = prompt.think_time_ms ?? 0;
         const aiMs = prompt.completed_at_epoch - prompt.created_at_epoch;
@@ -33,7 +34,7 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
         // Human think time
         const hMins = thinkMs > 0 ? Math.floor(thinkMs / 60000) : 0;
         const hSecs = thinkMs > 0 ? Math.round((thinkMs % 60000) / 1000) : 0;
-        const hStr = (hMins > 0 || hSecs > 0) ? `H${hMins}m${hSecs}s` : '';
+        const hStr = level >= 2 && (hMins > 0 || hSecs > 0) ? `H${hMins}m${hSecs}s` : '';
         return { completedDate, aiStr, hStr };
       })()
     : null;
@@ -119,7 +120,7 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
             <span className="meta-processing-time" title={`${processingInfo.completedDate}`}>
               {' · '}⏱ {processingInfo.hStr && `${processingInfo.hStr} + `}{processingInfo.aiStr}
             </span>
-          ) : (showProcessingTime && !prompt.completed_at_epoch) ? (
+          ) : (level > 0 && !prompt.completed_at_epoch) ? (
             <span className="meta-processing-time meta-cancelled"> · {t('prompt.cancelled')}</span>
           ) : null}
           {(prompt.user_label || prompt.user_name) && (

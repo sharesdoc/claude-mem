@@ -333,7 +333,7 @@ export function App() {
               onPromptDeleted={handlePromptDeleted}
               isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
               hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore}
-              showProcessingTime={settings.CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME !== 'false'}
+              showProcessingTime={parseInt(settings.CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME ?? '0', 10) || (settings.CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME === 'true' ? 2 : 0)}
             />
           )}
         </div>

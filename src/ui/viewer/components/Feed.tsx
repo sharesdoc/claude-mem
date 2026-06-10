@@ -15,7 +15,7 @@ interface FeedProps {
   onPromptDeleted?: (id: number) => void;
   isLoading: boolean;
   hasMore: boolean;
-  showProcessingTime?: boolean;
+  showProcessingTime?: number; // 0=off, 1=AI time only, 2=AI+human think time
 }
 
 export function Feed({ observations, summaries, prompts, onLoadMore, onPromptDeleted, isLoading, hasMore, showProcessingTime }: FeedProps) {
