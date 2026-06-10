@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# statistics-user-info — 统计指定用户在 N 天内的任务用时信息
+#
+# 用法:
+#   statistics-user-info -h                       显示帮助
+#   statistics-user-info -n "Zhan San"             统计今天(默认1天)
+#   statistics-user-info -n "张三" -d 3            统计最近3天
+
+DB_DIR="${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}"
+DB_PATH="$DB_DIR/claude-mem.db"
+
+# ── 工具函数 ───────────────────────────────────────────────────────────────
+fmt_dur() {  # ms → 中文耗时
+  local ms=${1:-0} h m s
+  if (( ms <= 0 )); then echo "0s"; return; fi
+  s=$(( (ms / 1000) % 60 ))
+  m=$(( (ms / 60000) % 60 ))
+  h=$(( ms / 3600000 ))
+  if (( h > 0 )); then printf '%dh%dm%ds' "$h" "$m" "$s"
+  elif (( m > 0 )); then printf '%dm%ds' "$m" "$s"
+  else printf '%ds' "$s"
+  fi
+}
+fmt_pct() {  # part total → " 12%"
+  local part=$1 total=$2
+  if (( total <= 0 )); then printf '   -'; else printf '%3d%%' "$((part * 100 / total))"; fi
+}
+rpad() { printf "%-${2}s" "$1"; }
+lpad() { printf "%${2}s" "$1"; }
+
+# ── CLI 解析 ───────────────────────────────────────────────────────────────
+NAME=""; DAYS=1; HELP=false
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) HELP=true ;;
+    -n|--name) NAME="${2:-}"; shift ;;
+    -d|--days) DAYS="${2:-1}"; shift ;;
+    -*) echo "未知选项: $1"; exit 1 ;;
+    *) [[ -z "$NAME" ]] && NAME="$1" || DAYS="$1" ;;
+  esac
+  shift
+done
+
+if $HELP || [[ -z "$NAME" ]]; then
+  [[ -z "$NAME" ]] && ! $HELP && echo "错误: 缺少 -n <用户名>"$'\n'
+  echo "statistics-user-info — 统计用户任务用时"
+  echo ""
+  echo "用法:"
+  echo "  statistics-user-info [OPTIONS]"
+  echo ""
+  echo "选项:"
+  echo "  -h, --help              显示此帮助"
+  echo "  -n, --name <username>   目标用户名(必填)"
+  echo "  -d, --days <N>          统计最近 N 天(默认 1 = 今天)"
+  echo ""
+  echo "示例:"
+  echo "  statistics-user-info -n \"Zhan San\"          今天"
+  echo '  statistics-user-info -n "张三" -d 3          最近3天'
+  echo '  statistics-user-info -n "Wang Wu" -d 7       最近7天'
+  echo ""
+  echo "输出:"
+  echo "  ① 概览:任务数/总AI/总H/项目数/日均"
+  echo "  ② 按项目:各项目任务数/AI/H/合计/占比/平均"
+  echo "  ③ 汇总行"
+  exit 0
+fi
+
+# ── 时间窗口 ───────────────────────────────────────────────────────────────
+NOW_S=$(date +%s)
+SINCE_EPOCH=$(( (NOW_S - DAYS * 86400) * 1000 ))  # 毫秒
+UNTIL_EPOCH=$(( NOW_S * 1000 ))
+
+echo ""
+echo "数据库: $DB_PATH"
+echo "用户: $NAME    范围: 最近 $DAYS 天 ($(date -r $((SINCE_EPOCH/1000)) '+%Y-%m-%d') ~ $(date '+%Y-%m-%d'))"
+echo ""
+
+# ── 查询 ───────────────────────────────────────────────────────────────────
+ROWS=$(sqlite3 -separator $'\t' "$DB_PATH" "
+  SELECT s.project, up.prompt_text,
+         up.created_at_epoch,
+         up.completed_at_epoch,
+         COALESCE(up.think_time_ms, 0)
+  FROM user_prompts up
+  JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+  WHERE up.created_at_epoch >= $SINCE_EPOCH AND up.created_at_epoch <= $UNTIL_EPOCH
+    AND COALESCE(NULLIF(s.user_label, ''), 'unknown') = '$NAME' COLLATE NOCASE
+  ORDER BY up.created_at_epoch ASC
+")
+
+# 按项目聚合
+declare -A P_AI P_H P_CNT P_DONE
+TOTAL=0; TOTAL_AI=0; TOTAL_H=0; COMPLETED=0; PROJ_ORDER=""
+while IFS=$'\t' read -r proj _ created completed think; do
+  [[ -z "$proj" ]] && proj="(unknown)"
+  TOTAL=$((TOTAL + 1))
+  P_CNT["$proj"]=$(( ${P_CNT["$proj"]:-0} + 1 ))
+  if [[ "$completed" != "" && "$completed" != "null" && "$completed" -gt 0 ]] 2>/dev/null; then
+    COMPLETED=$((COMPLETED + 1))
+    P_DONE["$proj"]=$(( ${P_DONE["$proj"]:-0} + 1 ))
+    local_ai=$(( completed - created ))
+    (( local_ai < 0 )) && local_ai=0
+    P_AI["$proj"]=$(( ${P_AI["$proj"]:-0} + local_ai ))
+    P_H["$proj"]=$(( ${P_H["$proj"]:-0} + think ))
+    TOTAL_AI=$((TOTAL_AI + local_ai))
+    TOTAL_H=$((TOTAL_H + think))
+  fi
+  # 记录项目顺序(首次出现)
+  [[ -z "${P_CNT[$proj]:-}" || ${P_CNT[$proj]} -eq 1 ]] && PROJ_ORDER+="$proj"$'\n'
+done <<<"$ROWS"
+
+TOTAL_TIME=$((TOTAL_AI + TOTAL_H))
+
+# 按合计耗时降序排序项目
+PROJ_SORTED=$(for proj in $PROJ_ORDER; do
+  tt=$(( ${P_AI[$proj]:-0} + ${P_H[$proj]:-0} ))
+  echo "$tt $proj"
+done | sort -rn | cut -d' ' -f2-)
+
+# ── 概览 ───────────────────────────────────────────────────────────────────
+echo "═══ 概览 ═══"
+echo "  任务总数:   $TOTAL"
+if (( TOTAL > 0 )); then
+  echo "  已完成:     $COMPLETED ($(( COMPLETED * 100 / TOTAL ))%)"
+else
+  echo "  已完成:     0 (0%)"
+fi
+echo "  AI 耗时:    $(fmt_dur $TOTAL_AI)"
+echo "  人类思考:   $(fmt_dur $TOTAL_H)"
+echo "  总耗时:     $(fmt_dur $TOTAL_TIME)"
+echo "  涉及项目:   $(echo "$PROJ_ORDER" | grep -c .)"
+echo "  日均任务:   $(awk "BEGIN {printf \"%.1f\", $TOTAL/$DAYS}")"
+echo "  日均耗时:   $(fmt_dur $(( TOTAL_TIME / DAYS )))"
+echo ""
+
+# ── 按项目 ─────────────────────────────────────────────────────────────────
+echo "═══ 按项目 ═══"
+if [[ -z "$PROJ_ORDER" ]]; then
+  echo "  (无数据)"
+else
+  printf "%-62s %6s %5s %11s %10s %11s %4s %11s\n" \
+    "项目" "#任务" "完成" "AI耗时" "H耗时" "合计" "占比" "平均/任务"
+  printf '%*s\n' 120 '' | tr ' ' '─'
+
+  while IFS= read -r proj; do
+    cnt=${P_CNT[$proj]:-0}; done_cnt=${P_DONE[$proj]:-0}
+    ai=${P_AI[$proj]:-0}; h=${P_H[$proj]:-0}
+    tt=$((ai + h))
+    pct=$(fmt_pct $tt $TOTAL_TIME)
+    if (( done_cnt > 0 )); then avg=$(fmt_dur $(( tt / done_cnt ))); else avg="-"; fi
+    # 截断过长项目名
+    pname="$proj"
+    ((${#pname} > 60)) && pname="${pname:0:58}.."
+    printf "%-62s %6s %5s %11s %10s %11s %4s %11s\n" \
+      "$pname" "$cnt" "$done_cnt" "$(fmt_dur $ai)" "$(fmt_dur $h)" "$(fmt_dur $tt)" "$pct" "$avg"
+  done <<<"$PROJ_SORTED"
+fi
+
+echo '────────────────────────────────────────────────────────────'
+echo "  汇总: $TOTAL 任务 / $(fmt_dur $TOTAL_AI) AI + $(fmt_dur $TOTAL_H) H = $(fmt_dur $TOTAL_TIME)"
+echo ""
