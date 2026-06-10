@@ -222,15 +222,26 @@ check_synced() {
   # worker; any drift → not synced → do_sync re-runs.
   [[ -f "$SCRIPT_DIR/plugin/scripts/worker-service.cjs" ]] || return 0   # no local build to compare against → trust existence
 
-  # 比对关键文件集而非单个 worker:hooks.json / bun-runner / package.json 漂移
-  # 同样会让运行态与本地构建脱节(rev R-003),单文件 cmp 发现不了。
+  # 比对关键文件集而非单个 worker:hooks.json / bun-runner 漂移同样会让运行态
+  # 与本地构建脱节(rev R-003),单文件 cmp 发现不了。
+  # 注意 package.json 不能字节比对:do_sync 会先 patch(摘 tree-sitter-cli 的
+  # postinstall)再同步、之后恢复本地副本,部署副本与本地【故意】不同——字节
+  # 比对会在每次安装后误报 "Sync failed"。对它只比对 version 字段,版本漂移
+  # (如上游 13.5.5 覆盖本地 13.2.0 的事故)仍能被发现。
   local rel src
-  for rel in scripts/worker-service.cjs scripts/bun-runner.js hooks/hooks.json package.json; do
+  for rel in scripts/worker-service.cjs scripts/bun-runner.js hooks/hooks.json; do
     src="$SCRIPT_DIR/plugin/$rel"
     [[ -f "$src" ]] || continue   # 本地构建里就没有 → 跳过该文件
     cmp -s "$src" "$MARKETPLACE_DIR/plugin/$rel" || return 1
     cmp -s "$src" "$PLUGIN_CACHE_DIR/$rel" || return 1
   done
+
+  _pkgver() { node -p "require('$(windows_native_path "$1")').version" 2>/dev/null || echo "unreadable:$1"; }
+  local v_local v_mp v_cache
+  v_local="$(_pkgver "$SCRIPT_DIR/plugin/package.json")"
+  v_mp="$(_pkgver "$MARKETPLACE_DIR/plugin/package.json")"
+  v_cache="$(_pkgver "$PLUGIN_CACHE_DIR/package.json")"
+  [[ "$v_local" == "$v_mp" && "$v_local" == "$v_cache" ]] || return 1
   return 0
 }
 
