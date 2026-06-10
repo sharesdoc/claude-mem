@@ -712,9 +712,20 @@ do_start_worker() {
 # from the previous build running. Stop any existing worker first, then start.
 # do_stop_worker is a no-op when nothing is running, so this is safe even on a
 # first install. Cross-platform: both helpers use is_windows_shell-aware kill.
+#
+# Idempotent per script run: multi-target installs (-i/-r both) call this once
+# per target, but all targets share the same build/sync output and the same
+# single worker instance — a second stop+start would reload identical code and
+# just waste a cold boot (10s+ on Windows/MSYS). Restart once, then skip.
+_WORKER_RELOADED=0
 do_restart_worker() {
+  if [[ "$_WORKER_RELOADED" == "1" ]]; then
+    ok "Worker already reloaded onto this build (skipping duplicate restart)"
+    return
+  fi
   do_stop_worker
   do_start_worker
+  _WORKER_RELOADED=1
 }
 
 do_stop_worker() {
