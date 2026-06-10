@@ -375,13 +375,17 @@ export class SyncRoutes extends BaseRouteHandler {
           continue;
         }
         const thinkTime: number = Math.min((pr as any).think_time_ms ?? 0, serverCapMin * 60_000);
+        // 旧客户端未升级时缺少 completed_at_epoch(迁移40新增),若不兜底则落库为 NULL,
+        // stats 查询的 WHERE completed_at_epoch IS NOT NULL 会将该客户端所有任务排除,
+        // 导致统计为 0。用 created_at_epoch 兜底:该任务的 AI 段计为 0,但不被丢弃。
+        const completedEpoch: number | null = (pr.completed_at_epoch ?? pr.created_at_epoch) as number | null;
         upsertPrompt.run(
           pr.content_session_id,
           pr.prompt_number,
           pr.prompt_text,
           pr.created_at,
           pr.created_at_epoch,
-          (pr.completed_at_epoch ?? null) as number | null,
+          completedEpoch,
           thinkTime,
         );
         recordInbox.run(p.user_label, 'user_prompts', sourceUid, now, pr.id);
