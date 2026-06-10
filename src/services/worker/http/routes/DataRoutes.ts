@@ -302,13 +302,26 @@ export class DataRoutes extends BaseRouteHandler {
           p.processing_time_display = 'cancelled';
           continue;
         }
+        const fmtAi = (ms: number): string => {
+          if (ms <= 0) return 'A0s';
+          const h = Math.floor(ms / 3600000);
+          const m = Math.floor((ms % 3600000) / 60000);
+          const s = Math.round((ms % 60000) / 1000);
+          if (h > 0) return `A${h}h${m}m${s}s`;
+          if (m > 0) return `A${m}m${s}s`;
+          return `A${s}s`;
+        };
+        const fmtHuman = (ms: number): string => {
+          const h = Math.floor(Math.max(0, ms) / 3600000);
+          const m = Math.floor((Math.max(0, ms) % 3600000) / 60000);
+          const s = Math.round((Math.max(0, ms) % 60000) / 1000);
+          if (h > 0) return `H${h}h${m}m${s}s`;
+          return `H${m}m${s}s`; // level≥2 始终显示 H(保 H0m0s)
+        };
         const aiMs = Math.max(0, p.completed_at_epoch - p.created_at_epoch);
-        const aiM = Math.floor(aiMs / 60000), aiS = Math.round((aiMs % 60000) / 1000);
-        const aiStr = aiM > 0 ? `A${aiM}m${aiS}s` : `A${aiS}s`;
+        const aiStr = fmtAi(aiMs);
         if (level >= 2) {
-          const hMs = (p.think_time_ms ?? 0);
-          const hM = hMs > 0 ? Math.floor(hMs / 60000) : 0, hS = hMs > 0 ? Math.round((hMs % 60000) / 1000) : 0;
-          const hStr = `H${hM}m${hS}s`; // level≥2 时始终显示 H,即使为 0
+          const hStr = fmtHuman(p.think_time_ms ?? 0);
           p.processing_time_display = `${hStr} + ${aiStr}`;
         } else {
           p.processing_time_display = aiStr;
