@@ -291,8 +291,10 @@ export class DataRoutes extends BaseRouteHandler {
     // 服务端预计算 processing_time_display,前端只渲染不判断。
     let level = 0;
     try {
-      level = parseInt((SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME ?? '0'), 10) || 0;
-      if (level === 0 && SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME === 'true') level = 2; // 向下兼容
+      const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+      const raw = settings.CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME ?? '0';
+      level = parseInt(raw, 10) || 0;
+      if (level === 0 && raw === 'true') level = 2; // 向下兼容旧值
     } catch { /* use default 0 */ }
     if (level > 0) {
       for (const p of result.items as any[]) {
@@ -300,7 +302,7 @@ export class DataRoutes extends BaseRouteHandler {
           p.processing_time_display = 'cancelled';
           continue;
         }
-        const aiMs = p.completed_at_epoch - p.created_at_epoch;
+        const aiMs = Math.max(0, p.completed_at_epoch - p.created_at_epoch);
         const aiM = Math.floor(aiMs / 60000), aiS = Math.round((aiMs % 60000) / 1000);
         const aiStr = aiM > 0 ? `A${aiM}m${aiS}s` : `A${aiS}s`;
         if (level >= 2) {
