@@ -99,7 +99,9 @@ for (const { sid, sess_completed } of sessions) {
   let fixed = 0;
   for (const p of prompts) {
     const newCompleted = nextCreated.get(p.prompt_number) ?? sess_completed;
-    updatePrompt.run(newCompleted, sid, p.prompt_number);
+    // 兜底:会话被重复使用(新 prompt 创建时间晚于 session completed_at_epoch)时,
+    // completed 不应早于 created,取 MAX 避免负数耗时。
+    updatePrompt.run(Math.max(newCompleted, p.created_at_epoch), sid, p.prompt_number);
     fixed++;
   }
 
