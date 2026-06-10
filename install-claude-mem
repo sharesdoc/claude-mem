@@ -10,6 +10,15 @@ set -euo pipefail
 #   -d            DOES delete $DATA_DIR (after typed YES confirmation).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# 定义必须先于 _early_native:它在第 33 行 LOCAL_VERSION 求值时即被调用,
+# 若定义在后面,非 Windows 平台会触发一条 "command not found" stderr 噪音
+# (if 条件容错使行为仍正确,但噪音误导排障)。
+is_windows_shell() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 # MSYS2→Windows 路径转换(轻量版,脚本顶部 LOCAL_VERSION 使用)
 # 用 cygpath -m(正斜杠 C:/...)而非 -w(反斜杠 C:\...):这些路径会被嵌入
 # node 的 JS 字符串字面量(require('...') / const path='...'),反斜杠会被 JS
@@ -211,10 +220,17 @@ check_synced() {
   # running forever and client→server sync silently never worked. Require the
   # deployed worker to be byte-identical to the freshly-built local plugin
   # worker; any drift → not synced → do_sync re-runs.
-  local src="$SCRIPT_DIR/plugin/scripts/worker-service.cjs"
-  [[ -f "$src" ]] || return 0   # no local build to compare against → trust existence
-  cmp -s "$src" "$WORKER_SCRIPT" || return 1
-  cmp -s "$src" "$PLUGIN_CACHE_DIR/scripts/worker-service.cjs" || return 1
+  [[ -f "$SCRIPT_DIR/plugin/scripts/worker-service.cjs" ]] || return 0   # no local build to compare against → trust existence
+
+  # 比对关键文件集而非单个 worker:hooks.json / bun-runner / package.json 漂移
+  # 同样会让运行态与本地构建脱节(rev R-003),单文件 cmp 发现不了。
+  local rel src
+  for rel in scripts/worker-service.cjs scripts/bun-runner.js hooks/hooks.json package.json; do
+    src="$SCRIPT_DIR/plugin/$rel"
+    [[ -f "$src" ]] || continue   # 本地构建里就没有 → 跳过该文件
+    cmp -s "$src" "$MARKETPLACE_DIR/plugin/$rel" || return 1
+    cmp -s "$src" "$PLUGIN_CACHE_DIR/$rel" || return 1
+  done
   return 0
 }
 
@@ -258,12 +274,7 @@ check_worker_running() {
   curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 2 --max-time 3 2>/dev/null
 }
 
-is_windows_shell() {
-  case "$(uname -s)" in
-    MINGW*|MSYS*|CYGWIN*) return 0 ;;
-    *) return 1 ;;
-  esac
-}
+# is_windows_shell 已前移到脚本顶部(_early_native 之前)定义。
 # MSYS2->Windows 路径转换(solutions.md问题1)。
 # 用 cygpath -m(正斜杠 C:/Users/...)而非 -w(反斜杠 C:\Users\...):本函数的
 # 输出全部用于嵌入 node 的 JS 字符串字面量(require('$path') / const path='$file'),

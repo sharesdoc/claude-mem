@@ -7,7 +7,7 @@ const os = require('os');
 // ── 跨平台目录同步(Windows无rsync时的Node.js实现,solutions.md问题2) ──
 const _isWin = process.platform === 'win32';
 function syncDir(src, dest, excludes) {
-  const {mkdirSync,readdirSync,statSync,copyFileSync,unlinkSync,rmdirSync,rmSync} = require('fs');
+  const {mkdirSync,readdirSync,statSync,copyFileSync,unlinkSync,rmdirSync,rmSync,renameSync} = require('fs');
   function matchGlob(pattern, rel) {
     const re = pattern.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*\*\//g,'(?:.+/)?').replace(/\*/g,'[^/]*').replace(/\?/g,'[^/]');
     return new RegExp('(^|/)'+re+'($|/)').test(rel);
@@ -19,7 +19,17 @@ function syncDir(src, dest, excludes) {
       const s=path.join(src,n),d=path.join(dst,n);
       if(skip(path.relative(path.dirname(src),s),ex)) continue;
       if(statSync(s).isDirectory()) cp(s,d,ex);
-      else { mkdirSync(path.dirname(d),{recursive:true}); copyFileSync(s,d); }
+      else {
+        mkdirSync(path.dirname(d),{recursive:true});
+        // 按文件原子替换:先写临时副本再 rename 覆盖。dest 树被运行中的 worker
+        // 与 Claude Code hooks 热读取,直接 copyFileSync 中途被杀会留下截断的
+        // worker-service.cjs;同卷 renameSync 是原子的(Windows 走 MoveFileEx
+        // REPLACE_EXISTING)。rename 因目标被占用等失败时回退旧式直写,保证
+        // 同步可靠性优先、原子性尽力而为。
+        const t=d+'.tmp~';
+        try { copyFileSync(s,t); renameSync(t,d); }
+        catch(e){ try{rmSync(t,{force:true});}catch{} copyFileSync(s,d); }
+      }
     }
   }
   function clean(src,dst,ex) {
@@ -66,6 +76,20 @@ function resolveBun() {
 }
 const BUN = resolveBun();
 const bunInstall = (cwd) => execSync(`"${BUN}" install`, { cwd, stdio: 'inherit' });
+
+// 同步落地后断言关键运行时文件完整(与本地构建字节数一致)。中途死掉的同步
+// 必须在这里响亮地失败,而不是留下一棵 hooks/worker 会去加载的半残部署树。
+const CRITICAL_FILES = ['scripts/worker-service.cjs', 'scripts/bun-runner.js', 'hooks/hooks.json', 'package.json'];
+function verifyCriticalFiles(srcPluginDir, destPluginDir) {
+  const fs = require('fs');
+  for (const rel of CRITICAL_FILES) {
+    const s = path.join(srcPluginDir, rel);
+    const d = path.join(destPluginDir, rel);
+    if (!fs.existsSync(s)) continue; // 本地构建里就没有 → 不校验
+    if (!fs.existsSync(d)) throw new Error(`critical file missing after sync: ${d}`);
+    if (fs.statSync(s).size !== fs.statSync(d).size) throw new Error(`critical file size mismatch after sync: ${d}`);
+  }
+}
 
 // Reject obviously invalid ports before they reach http.request, which would
 // throw with a confusing error like "RangeError: Port should be > 0 and < 65536".
@@ -196,6 +220,7 @@ try {
 
   rsyncExec('.', path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'thedotmack'),
     ['.git','bun.lock','package-lock.json','scripts/package.json','scripts/node_modules'].concat(gitignoreExcludes));
+  verifyCriticalFiles(path.join(rootDir, 'plugin'), path.join(INSTALLED_PATH, 'plugin'));
 
   console.log('Running bun install in marketplace...');
   bunInstall(path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'thedotmack'));
@@ -208,6 +233,7 @@ try {
 
   console.log(`Syncing to cache folder (version ${version})...`);
   rsyncExec(path.join(rootDir, 'plugin'), CACHE_VERSION_PATH, ['.git'].concat(pluginGitignoreExcludes));
+  verifyCriticalFiles(path.join(rootDir, 'plugin'), CACHE_VERSION_PATH);
 
   console.log(`Running bun install in cache folder (version ${version})...`);
   bunInstall(CACHE_VERSION_PATH);
@@ -216,61 +242,71 @@ try {
     const INSTALLED_CACHE_PATH = path.join(CACHE_BASE_PATH, installedMismatch.installedVersion);
     console.log(`Mirroring to installed-version cache (${installedMismatch.installedVersion}) for hot reload...`);
     rsyncExec(path.join(rootDir, 'plugin'), INSTALLED_CACHE_PATH, ['.git'].concat(pluginGitignoreExcludes));
+    verifyCriticalFiles(path.join(rootDir, 'plugin'), INSTALLED_CACHE_PATH);
     console.log(`Running bun install in installed-version cache (${installedMismatch.installedVersion})...`);
     bunInstall(INSTALLED_CACHE_PATH);
   }
 
   console.log('\x1b[32m%s\x1b[0m', 'Sync complete!');
 
-  // When the caller (install-claude-mem) owns the worker lifecycle it sets
-  // CLAUDE_MEM_SYNC_NO_RESTART=1 and does its own deterministic stop+start.
-  // Firing this async restart in that case only races the caller and has been
-  // observed leaving the worker stopped. Skip it cleanly.
+  // worker 接管策略三选一(if/else 结构,不用模块顶层 return —— CJS 包装下
+  // 虽合法,但日后转 ESM/被 import 即 SyntaxError):
+  // 1) CLAUDE_MEM_SYNC_NO_RESTART=1:调用方(install-claude-mem)自管生命周期,
+  //    异步重启只会与其竞争,实测会把 worker 留在停止态 → 干净跳过。
+  // 2) --restart-worker:确定性 stop+start(bun worker-service.cjs restart),
+  //    worker 已死时端口本空闲、直接启动。供 build-and-sync 使用 —— 替代旧的
+  //    npm 脚本尾段 `sleep 1 && (cd ~/...)`,后者在 Windows cmd.exe 下必败
+  //    (sleep 非 cmd 命令、~ 不展开),曾把已停止的 worker 永久留死。
+  // 3) 默认:向运行中的 worker 发异步 /api/admin/restart(手动 sync 场景)。
   if (process.env.CLAUDE_MEM_SYNC_NO_RESTART === '1') {
     console.log('ℹ Skipping worker restart trigger (caller manages worker lifecycle)');
-    return;
-  }
-
-  console.log('\n🔄 Triggering worker restart...');
-  const http = require('http');
-  const dataDir = process.env.CLAUDE_MEM_DATA_DIR || path.join(os.homedir(), '.claude-mem');
-  const settingsPath = path.join(dataDir, 'settings.json');
-  let settingsPort = null;
-  if (existsSync(settingsPath)) {
-    try {
-      const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
-      settingsPort = parseWorkerPort(settings.CLAUDE_MEM_WORKER_PORT);
-    } catch {
-      // fall through to env / default
+  } else if (process.argv.includes('--restart-worker')) {
+    console.log('\n🔄 Restarting worker (deterministic stop+start)...');
+    const workerCjs = path.join(INSTALLED_PATH, 'plugin', 'scripts', 'worker-service.cjs');
+    execSync(`"${BUN}" "${workerCjs}" restart`, { stdio: 'inherit' });
+    console.log('\x1b[32m%s\x1b[0m', '✓ Worker restarted onto the freshly-synced build');
+  } else {
+    console.log('\n🔄 Triggering worker restart...');
+    const http = require('http');
+    const dataDir = process.env.CLAUDE_MEM_DATA_DIR || path.join(os.homedir(), '.claude-mem');
+    const settingsPath = path.join(dataDir, 'settings.json');
+    let settingsPort = null;
+    if (existsSync(settingsPath)) {
+      try {
+        const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+        settingsPort = parseWorkerPort(settings.CLAUDE_MEM_WORKER_PORT);
+      } catch {
+        // fall through to env / default
+      }
     }
+    const uid = typeof process.getuid === 'function' ? process.getuid() : 77;
+    const defaultPort = 37700 + (uid % 100);
+    const workerPort =
+      parseWorkerPort(process.env.CLAUDE_MEM_WORKER_PORT) ??
+      settingsPort ??
+      defaultPort;
+    const req = http.request({
+      hostname: '127.0.0.1',
+      port: workerPort,
+      path: '/api/admin/restart',
+      method: 'POST',
+      timeout: 2000
+    }, (res) => {
+      if (res.statusCode === 200) {
+        console.log('\x1b[32m%s\x1b[0m', `✓ Worker restart triggered on port ${workerPort}`);
+      } else {
+        console.log('\x1b[33m%s\x1b[0m', `ℹ Worker restart on port ${workerPort} returned status ${res.statusCode}`);
+      }
+    });
+    req.on('error', () => {
+      console.log('\x1b[33m%s\x1b[0m', `ℹ No worker reachable on port ${workerPort}; run with --restart-worker for a deterministic start.`);
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      console.log('\x1b[33m%s\x1b[0m', `ℹ Worker restart on port ${workerPort} timed out`);
+    });
+    req.end();
   }
-  const uid = typeof process.getuid === 'function' ? process.getuid() : 77;
-  const defaultPort = 37700 + (uid % 100);
-  const workerPort =
-    parseWorkerPort(process.env.CLAUDE_MEM_WORKER_PORT) ??
-    settingsPort ??
-    defaultPort;
-  const req = http.request({
-    hostname: '127.0.0.1',
-    port: workerPort,
-    path: '/api/admin/restart',
-    method: 'POST',
-    timeout: 2000
-  }, (res) => {
-    if (res.statusCode === 200) {
-      console.log('\x1b[32m%s\x1b[0m', `✓ Worker restart triggered on port ${workerPort}`);
-    } else {
-      console.log('\x1b[33m%s\x1b[0m', `ℹ Worker restart on port ${workerPort} returned status ${res.statusCode}`);
-    }
-  });
-  req.on('error', () => {
-    console.log('\x1b[33m%s\x1b[0m', `ℹ No worker reachable on port ${workerPort}; the next worker:restart step will start one.`);
-  });
-  req.on('timeout', () => {
-    req.destroy();
-    console.log('\x1b[33m%s\x1b[0m', `ℹ Worker restart on port ${workerPort} timed out`);
-  });
-  req.end();
 
 } catch (error) {
   console.error('\x1b[31m%s\x1b[0m', 'Sync failed:', error.message);
