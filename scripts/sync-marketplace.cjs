@@ -4,6 +4,41 @@ const { execSync } = require('child_process');
 const { existsSync, readFileSync } = require('fs');
 const path = require('path');
 const os = require('os');
+// ── 跨平台目录同步(Windows无rsync时的Node.js实现,solutions.md问题2) ──
+const _isWin = process.platform === 'win32';
+function syncDir(src, dest, excludes) {
+  const {mkdirSync,readdirSync,statSync,copyFileSync,unlinkSync,rmdirSync} = require('fs');
+  function matchGlob(pattern, rel) {
+    const re = pattern.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*\*\//g,'(?:.+/)?').replace(/\*/g,'[^/]*').replace(/\?/g,'[^/]');
+    return new RegExp('(^|/)'+re+'($|/)').test(rel);
+  }
+  function skip(rel,ex) { return ex.some(p=>matchGlob(p,rel))||rel==='.git'; }
+  function cp(src,dst,ex) {
+    mkdirSync(dst,{recursive:true});
+    for(const n of readdirSync(src)){
+      const s=path.join(src,n),d=path.join(dst,n);
+      if(skip(path.relative(path.dirname(src),s),ex)) continue;
+      if(statSync(s).isDirectory()) cp(s,d,ex);
+      else { mkdirSync(path.dirname(d),{recursive:true}); copyFileSync(s,d); }
+    }
+  }
+  function clean(src,dst,ex) {
+    if(!existsSync(dst)) return;
+    for(const n of readdirSync(dst)){
+      const s=path.join(src,n),d=path.join(dst,n);
+      if(skip(path.relative(path.dirname(src),d),ex)) continue;
+      if(!existsSync(s)){ if(statSync(d).isDirectory()){ readdirSync(d).forEach(x=>unlinkSync(path.join(d,x))); rmdirSync(d); } else unlinkSync(d); }
+      else if(statSync(d).isDirectory()) clean(s,d,ex);
+    }
+  }
+  cp(src,dest,excludes); clean(src,dest,excludes);
+}
+function rsyncExec(src, dest, excludes) {
+  if(_isWin){ syncDir(src,dest,excludes); return; }
+  execSync('rsync -av --delete '+excludes.map(e=>'--exclude='+e).join(' ')+' "'+src+'/" "'+dest+'/"',{stdio:'inherit'});
+}
+
+
 
 const INSTALLED_PATH = path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'thedotmack');
 const CACHE_BASE_PATH = path.join(os.homedir(), '.claude', 'plugins', 'cache', 'thedotmack', 'claude-mem');
@@ -135,15 +170,13 @@ try {
   const rootDir = path.join(__dirname, '..');
   const gitignoreExcludes = getGitignoreExcludes(rootDir);
 
-  execSync(
-    `rsync -av --delete --exclude=.git --exclude=bun.lock --exclude=package-lock.json --exclude=scripts/package.json --exclude=scripts/node_modules ${gitignoreExcludes} ./ ~/.claude/plugins/marketplaces/thedotmack/`,
-    { stdio: 'inherit' }
-  );
+  rsyncExec('.', path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'thedotmack'),
+    ['.git','bun.lock','package-lock.json','scripts/package.json','scripts/node_modules'].concat(gitignoreExcludes));
 
   console.log('Running bun install in marketplace...');
   execSync(
-    'cd ~/.claude/plugins/marketplaces/thedotmack/ && bun install',
-    { stdio: 'inherit' }
+    'bun install',
+    { cwd: path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'thedotmack'), stdio: 'inherit' }
   );
 
   const version = getPluginVersion();
@@ -153,10 +186,7 @@ try {
   const pluginGitignoreExcludes = getGitignoreExcludes(pluginDir);
 
   console.log(`Syncing to cache folder (version ${version})...`);
-  execSync(
-    `rsync -av --delete --exclude=.git ${pluginGitignoreExcludes} plugin/ "${CACHE_VERSION_PATH}/"`,
-    { stdio: 'inherit' }
-  );
+  rsyncExec(path.join(rootDir, 'plugin'), CACHE_VERSION_PATH, ['.git'].concat(pluginGitignoreExcludes));
 
   console.log(`Running bun install in cache folder (version ${version})...`);
   execSync(`bun install`, { cwd: CACHE_VERSION_PATH, stdio: 'inherit' });
@@ -164,10 +194,7 @@ try {
   if (installedMismatch && installedMismatch.installedVersion !== version) {
     const INSTALLED_CACHE_PATH = path.join(CACHE_BASE_PATH, installedMismatch.installedVersion);
     console.log(`Mirroring to installed-version cache (${installedMismatch.installedVersion}) for hot reload...`);
-    execSync(
-      `rsync -av --delete --exclude=.git ${pluginGitignoreExcludes} plugin/ "${INSTALLED_CACHE_PATH}/"`,
-      { stdio: 'inherit' }
-    );
+    rsyncExec(path.join(rootDir, 'plugin'), INSTALLED_CACHE_PATH, ['.git'].concat(pluginGitignoreExcludes));
     console.log(`Running bun install in installed-version cache (${installedMismatch.installedVersion})...`);
     execSync(`bun install`, { cwd: INSTALLED_CACHE_PATH, stdio: 'inherit' });
   }

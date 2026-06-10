@@ -10,6 +10,15 @@ set -euo pipefail
 #   -d            DOES delete $DATA_DIR (after typed YES confirmation).
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# MSYS2→Windows 路径转换(轻量版,脚本顶部 LOCAL_VERSION 使用)
+_early_native() {
+  if [[ "$(uname -s 2>/dev/null)" == *"_NT"* ]] || is_windows_shell; then
+    cygpath -w "$1" 2>/dev/null || echo "$1"
+  else
+    echo "$1"
+  fi
+}
+
 MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/thedotmack"
 CLAUDE_SETTINGS="$HOME/.claude/settings.json"
 KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
@@ -18,7 +27,7 @@ DATA_DIR="${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}"
 PID_FILE="$DATA_DIR/worker.pid"
 WORKER_SCRIPT="$MARKETPLACE_DIR/plugin/scripts/worker-service.cjs"
 BUILT_MARKER="$SCRIPT_DIR/plugin/scripts/worker-service.cjs"
-LOCAL_VERSION="$(node -p "require('$SCRIPT_DIR/package.json').version" 2>/dev/null || echo 13.2.0)"
+LOCAL_VERSION="$(node -p "require('$(_early_native "$SCRIPT_DIR/package.json")').version" 2>/dev/null || echo 13.2.0)"
 PLUGIN_CACHE_DIR="$HOME/.claude/plugins/cache/thedotmack/claude-mem/$LOCAL_VERSION"
 CODEX_MARKETPLACE_NAME="claude-mem-local"
 CODEX_PLUGIN_NAME="claude-mem"
@@ -238,6 +247,14 @@ is_windows_shell() {
     *) return 1 ;;
   esac
 }
+# MSYS2->Windows原生路径转换(solutions.md问题1)
+windows_native_path() {
+  if [[ "$(uname -s 2>/dev/null)" == *"_NT"* ]] || is_windows_shell; then
+    cygpath -w "$1" 2>/dev/null || echo "$1"
+  else
+    echo "$1"
+  fi
+}
 
 find_pid_listening_on_port() {
   local port="$1"
@@ -350,7 +367,7 @@ ensure_treesitter_binary() {
   # specific) — falls back to a known recent version if parsing fails.
   local ts_version
   ts_version="$(node -p "
-    const v = require('$SCRIPT_DIR/plugin/package.json').dependencies['tree-sitter-cli'];
+    const v = require('$(windows_native_path "$SCRIPT_DIR/plugin/package.json")').dependencies['tree-sitter-cli'];
     v.replace(/^[^0-9]+/, '');
   " 2>/dev/null || echo '0.26.8')"
 
@@ -930,7 +947,7 @@ apply_sync_settings() {
     return 0
   fi
 
-  local file="$DATA_DIR/settings.json"
+  local file="$(windows_native_path "$DATA_DIR/settings.json")"
   mkdir -p "$DATA_DIR"
   if [[ ! -f "$file" ]]; then
     printf '{"env":{}}\n' > "$file"
@@ -1006,7 +1023,7 @@ EOF
 apply_allowed_origins() {
   local origins="${1:-}"
   [[ -z "$origins" ]] && return 0
-  local file="$DATA_DIR/settings.json"
+  local file="$(windows_native_path "$DATA_DIR/settings.json")"
   mkdir -p "$DATA_DIR"
   [[ -f "$file" ]] || printf '{}\n' > "$file"
 
@@ -1047,7 +1064,7 @@ apply_admin_password() {
   local password="${1:-}"
   if [[ -z "$password" ]]; then return 0; fi
 
-  local file="$DATA_DIR/settings.json"
+  local file="$(windows_native_path "$DATA_DIR/settings.json")"
   mkdir -p "$DATA_DIR"
   if [[ ! -f "$file" ]]; then
     printf '{"env":{}}\n' > "$file"
@@ -1138,7 +1155,7 @@ detect_chroma_compatibility() {
 # be using the old chroma mode in memory.
 apply_chroma_default() {
   detect_chroma_compatibility
-  local file="$DATA_DIR/settings.json"
+  local file="$(windows_native_path "$DATA_DIR/settings.json")"
   local enabled
   if [[ "$CHROMA_COMPATIBLE" == "1" ]]; then enabled="true"; else enabled="false"; fi
 
@@ -1220,7 +1237,7 @@ print_processing_time_status() {
 }
 
 backfill_missing_settings() {
-  local file="$DATA_DIR/settings.json"
+  local file="$(windows_native_path "$DATA_DIR/settings.json")"
   if [[ ! -f "$file" ]]; then return; fi
 
   node -e "
