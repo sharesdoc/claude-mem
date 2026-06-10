@@ -505,15 +505,22 @@ register_plugin_local() {
   local now
   now="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
 
-  # 1) known_marketplaces.json — autoUpdate:false 防止 Claude Code 自动从 upstream 拉取覆盖
+  # 1) known_marketplaces.json — 必须用 directory 本地源，而非 github 源。
+  #    踩坑记录：github 源 + autoUpdate:false 拦不住覆盖——Claude Code 在会话启动/
+  #    插件协调时仍会从 github (thedotmack/claude-mem，已发布的更高版本)拉取并覆盖
+  #    本地 sync 进来的内容，导致 marketplace 版本 != 本地编译的 worker 版本，
+  #    触发 hook 每次 checkVersionMatch 失败→反复杀 worker。directory 源直接读本地
+  #    目录、永不从远端同步，从根上杜绝版本错位复发。
+  local mp_native
+  mp_native="$(windows_native_path "$MARKETPLACE_DIR")"
   json_patch "$KNOWN_MARKETPLACES" \
     ".\"thedotmack\" = {
-       source: { source: \"github\", repo: \"thedotmack/claude-mem\" },
-       installLocation: \"$MARKETPLACE_DIR\",
+       source: { source: \"directory\", path: \"$mp_native\" },
+       installLocation: \"$mp_native\",
        lastUpdated: \"$now\",
        autoUpdate: false
      }"
-  ok "Marketplace registered (autoUpdate=false → 不会被 upstream 覆盖)"
+  ok "Marketplace registered (directory 本地源 → 永不被 upstream github 覆盖)"
 
   # 2) installed_plugins.json
   json_patch "$INSTALLED_PLUGINS" \
