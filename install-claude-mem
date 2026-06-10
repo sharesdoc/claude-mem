@@ -511,41 +511,66 @@ json_patch() {
   rm -f "$tmp"
 }
 
+# 无 claude CLI 时的注册回退:手写 canonical 形态 —— directory 源指向项目根
+# (含 .claude-plugin/marketplace.json),路径经 windows_native_path 规整;
+# installed_plugins 指向版本化 cache。所有路径均由 $SCRIPT_DIR/$HOME 推导,
+# 不写死任何用户目录。
+register_plugin_json_fallback() {
+  local now="$1"
+  local root_native
+  root_native="$(windows_native_path "$SCRIPT_DIR")"
+  json_patch "$KNOWN_MARKETPLACES" \
+    ".\"thedotmack\" = {
+       source: { source: \"directory\", path: \"$root_native\" },
+       installLocation: \"$root_native\",
+       lastUpdated: \"$now\"
+     }"
+  json_patch "$INSTALLED_PLUGINS" \
+    "(.version //= 2) | (.plugins //= {}) |
+     .plugins[\"claude-mem@thedotmack\"] = [{
+       scope: \"user\",
+       installPath: \"$(windows_native_path "$PLUGIN_CACHE_DIR")\",
+       version: \"$LOCAL_VERSION\",
+       installedAt: \"$now\",
+       lastUpdated: \"$now\"
+     }]"
+  ok "Marketplace + plugin registered via JSON patch (v$LOCAL_VERSION, directory 本地源)"
+}
+
 register_plugin_local() {
   require_jq
   local now
   now="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
 
-  # 1) known_marketplaces.json — 必须用 directory 本地源，而非 github 源。
-  #    踩坑记录：github 源 + autoUpdate:false 拦不住覆盖——Claude Code 在会话启动/
-  #    插件协调时仍会从 github (thedotmack/claude-mem，已发布的更高版本)拉取并覆盖
-  #    本地 sync 进来的内容，导致 marketplace 版本 != 本地编译的 worker 版本，
-  #    触发 hook 每次 checkVersionMatch 失败→反复杀 worker。directory 源直接读本地
-  #    目录、永不从远端同步，从根上杜绝版本错位复发。
-  local mp_native
-  mp_native="$(windows_native_path "$MARKETPLACE_DIR")"
-  json_patch "$KNOWN_MARKETPLACES" \
-    ".\"thedotmack\" = {
-       source: { source: \"directory\", path: \"$mp_native\" },
-       installLocation: \"$mp_native\",
-       lastUpdated: \"$now\",
-       autoUpdate: false
-     }"
-  ok "Marketplace registered (directory 本地源 → 永不被 upstream github 覆盖)"
+  # 1) marketplace 注册 — 必须用 directory 本地源，而非 github 源。
+  #    踩坑记录1：github 源 + autoUpdate:false 拦不住覆盖——Claude Code 在会话
+  #    启动/插件协调时仍会从 github(已发布的更高版本)拉取并覆盖本地 sync 的
+  #    内容，导致版本错位 → hook 每次 checkVersionMatch 失败反复杀 worker。
+  #    踩坑记录2：手拼 known_marketplaces.json 条目即使 schema 看似正确，也可能
+  #    在 Claude Code 重启时被校验丢弃(实测 directory 源指向 marketplaces/ 镜像
+  #    目录的手写条目被整体清除，连带 installed_plugins 清空)。canonical 形态是
+  #    directory 源指向【项目根目录】(含 .claude-plugin/marketplace.json)。
+  #    因此优先走官方 CLI(claude plugin marketplace add)让 Claude Code 自己写
+  #    注册表；无 claude CLI 时才回退手写 canonical 形态。
+  local cli_registered=0
+  if command -v claude >/dev/null 2>&1; then
+    info "Registering via claude CLI (canonical, restart-safe)..."
+    if (cd "$SCRIPT_DIR" && claude plugin marketplace add "$SCRIPT_DIR" >/dev/null 2>&1); then
+      if claude plugin install claude-mem@thedotmack >/dev/null 2>&1; then
+        cli_registered=1
+        ok "Marketplace + plugin registered via claude CLI (directory 本地源)"
+      else
+        warn "claude plugin install failed — falling back to direct JSON patch"
+      fi
+    else
+      warn "claude CLI marketplace add failed — falling back to direct JSON patch"
+    fi
+  fi
+  if [[ "$cli_registered" != "1" ]]; then
+    register_plugin_json_fallback "$now"
+  fi
 
-  # 2) installed_plugins.json
-  json_patch "$INSTALLED_PLUGINS" \
-    "(.version //= 2) | (.plugins //= {}) |
-     .plugins[\"claude-mem@thedotmack\"] = [{
-       scope: \"user\",
-       installPath: \"$PLUGIN_CACHE_DIR\",
-       version: \"$LOCAL_VERSION\",
-       installedAt: \"$now\",
-       lastUpdated: \"$now\"
-     }]"
-  ok "Plugin recorded (v$LOCAL_VERSION)"
-
-  # 3) settings.json — 启用插件 + 禁用 Claude Code 内置 auto-memory
+  # 2) settings.json — 启用插件 + 禁用 Claude Code 内置 auto-memory
   json_patch "$CLAUDE_SETTINGS" \
     "(.enabledPlugins //= {}) |
      .enabledPlugins[\"claude-mem@thedotmack\"] = true |

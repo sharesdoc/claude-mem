@@ -1,4 +1,5 @@
 import path from "path";
+import os from "os";
 import { readFileSync, existsSync, writeFileSync, renameSync, mkdirSync } from "fs";
 import { execSync } from "child_process";
 import { spawnHidden } from "./spawn.js";
@@ -143,6 +144,19 @@ function resolveWorkerScriptPath(): string | null {
 
 function resolveBunRuntime(): string | null {
   if (process.env.BUN && existsSync(process.env.BUN)) return process.env.BUN;
+
+  // 规范安装位回退(跨平台/跨用户,绝不写死某个用户目录):hook 进程继承的
+  // PATH 经常缺 ~/.bun/bin —— Windows 安装器只写用户级 PATH(已运行的进程
+  // 看不到),macOS 非登录 shell 不读 ~/.zprofile。没有这层回退,worker 的
+  // lazy-spawn 会报 "Bun runtime not found on PATH" 并让 worker 永久死亡,
+  // 除非用户手动设置 BUN 环境变量。
+  const home = os.homedir();
+  const canonical = process.platform === 'win32'
+    ? [path.join(home, '.bun', 'bin', 'bun.exe'), path.join(home, '.bun', 'bin', 'bun')]
+    : [path.join(home, '.bun', 'bin', 'bun'), '/usr/local/bin/bun', '/opt/homebrew/bin/bun'];
+  for (const candidate of canonical) {
+    if (existsSync(candidate)) return candidate;
+  }
 
   try {
     const cmd = process.platform === 'win32' ? 'where bun' : 'which bun';

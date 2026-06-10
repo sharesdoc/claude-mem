@@ -162,12 +162,23 @@ export function collectIncremental(
   const observations = redactObservations(observationsRaw, denyList);
   const summaries = redactSummaries(summariesRaw, denyList);
 
+  // 引用闭包(FK 自愈):observations/summaries/prompts 引用到、但不在本批
+  // sessions 里的会话行,无视水位强制带上。否则会卡死:会话行先以
+  // memory_session_id=NULL 创建、几秒后才 UPDATE 回填;若 5s 一次的 tick 恰好
+  // 在回填前把该行推走,水位越过它、永不重推,服务端该行 memory_session_id
+  // 永远是 NULL → 之后推其 observations 必 "FOREIGN KEY constraint failed",
+  // 整批事务回滚、同一批次每 tick 重试到永远。带上引用会话后,服务端 upsert
+  // 的 COALESCE 会补上 memory_session_id,FK 即通,卡死批次自愈。
+  // 注意 nextLocalIds.sessions 仍按水位窗口内的 sessions 计算(闭包补带的是
+  // 旧行,不得推进水位)。
+  const allSessions = withReferencedSessions(db, sessions, observations, summaries, prompts);
+
   const batch: IngestBatch = {
     schema_version: 1,
     user_label: userLabel,
     generated_at_epoch: now(),
     think_time_cap_minutes: parseInt(process.env.CLAUDE_MEM_THINK_TIME_CAP_MINUTES ?? '3', 10) || 0,
-    sessions,
+    sessions: allSessions,
     observations,
     summaries,
     prompts,
@@ -181,6 +192,69 @@ export function collectIncremental(
   };
 
   return { batch, nextLocalIds };
+}
+
+const SESSION_COLS = `id, content_session_id, memory_session_id, project, platform_source, user_prompt,
+         custom_title, started_at, started_at_epoch, completed_at, completed_at_epoch,
+         status, user_name, user_label`;
+
+/**
+ * 把本批数据行引用到的会话补进 sessions 列表(按 content_session_id 去重),
+ * 保证批次的引用闭包:observations/summaries 经 memory_session_id、prompts 经
+ * content_session_id 引用 sdk_sessions。补带行均为水位以下的旧行,数量上限为
+ * 本批引用的去重会话数(实际通常只有零星几条,不会顶到服务端 maxBatch)。
+ */
+function withReferencedSessions(
+  db: Database,
+  sessions: SessionRow[],
+  observations: ObservationRow[],
+  summaries: SummaryRow[],
+  prompts: PromptRow[],
+): SessionRow[] {
+  const haveMem = new Set<string>();
+  const haveContent = new Set<string>();
+  for (const s of sessions) {
+    if (s.memory_session_id) haveMem.add(s.memory_session_id);
+    haveContent.add(s.content_session_id);
+  }
+
+  const needMem = new Set<string>();
+  for (const o of observations) {
+    if (o.memory_session_id && !haveMem.has(o.memory_session_id)) needMem.add(o.memory_session_id);
+  }
+  for (const s of summaries) {
+    if (s.memory_session_id && !haveMem.has(s.memory_session_id)) needMem.add(s.memory_session_id);
+  }
+  const needContent = new Set<string>();
+  for (const p of prompts) {
+    if (p.content_session_id && !haveContent.has(p.content_session_id)) needContent.add(p.content_session_id);
+  }
+
+  if (needMem.size === 0 && needContent.size === 0) return sessions;
+
+  const byMem = db.query<SessionRow, [string]>(
+    `SELECT ${SESSION_COLS} FROM sdk_sessions WHERE memory_session_id = ?`
+  );
+  const byContent = db.query<SessionRow, [string]>(
+    `SELECT ${SESSION_COLS} FROM sdk_sessions WHERE content_session_id = ?`
+  );
+
+  const extras: SessionRow[] = [];
+  for (const id of needMem) {
+    const row = byMem.get(id);
+    if (row && !haveContent.has(row.content_session_id)) {
+      extras.push(row);
+      haveContent.add(row.content_session_id);
+    }
+  }
+  for (const id of needContent) {
+    const row = byContent.get(id);
+    if (row && !haveContent.has(row.content_session_id)) {
+      extras.push(row);
+      haveContent.add(row.content_session_id);
+    }
+  }
+  return extras.length === 0 ? sessions : sessions.concat(extras);
 }
 
 function lastId(rows: Array<{ id: number }>, fallback: number): number {
