@@ -28,6 +28,13 @@ export interface SyncState {
     observations: number;
     summaries: number;
     prompts: number;
+    /**
+     * 完成时间水位(epoch ms):已推送上游的 user_prompts 完成回填的最大
+     * completed_at_epoch。prompt 行先插入(completed_at_epoch=NULL)后回填,
+     * 仅按 id 水位推送会把回填永远漏掉 → 服务端显示 "Task status unclear"。
+     * 旧 state 文件缺该字段时归零,触发一次全量完成回填重推(服务端幂等更新)。
+     */
+    prompt_completions: number;
   };
   failures: {
     consecutive: number;
@@ -39,7 +46,7 @@ const ZERO_STATE: SyncState = Object.freeze({
   upstream_url: '',
   last_sync_at: 0,
   last_success_at: 0,
-  watermark: Object.freeze({ sessions: 0, observations: 0, summaries: 0, prompts: 0 }),
+  watermark: Object.freeze({ sessions: 0, observations: 0, summaries: 0, prompts: 0, prompt_completions: 0 }),
   failures: Object.freeze({ consecutive: 0, last_error: null }),
 }) as SyncState;
 
@@ -109,8 +116,8 @@ function normaliseState(input: Partial<SyncState> | null | undefined): SyncState
   const base = zeroState();
   if (!input || typeof input !== 'object') return base;
 
-  const wm = input.watermark ?? {};
-  const failures = input.failures ?? {};
+  const wm: Partial<SyncState['watermark']> = input.watermark ?? {};
+  const failures: Partial<SyncState['failures']> = input.failures ?? {};
 
   return {
     upstream_url: typeof input.upstream_url === 'string' ? input.upstream_url : base.upstream_url,
@@ -121,6 +128,7 @@ function normaliseState(input: Partial<SyncState> | null | undefined): SyncState
       observations: numeric(wm.observations),
       summaries: numeric(wm.summaries),
       prompts: numeric(wm.prompts),
+      prompt_completions: numeric(wm.prompt_completions),
     },
     failures: {
       consecutive: numeric(failures.consecutive),

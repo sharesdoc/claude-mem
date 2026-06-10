@@ -276,6 +276,14 @@ export class SyncRoutes extends BaseRouteHandler {
         (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
+    // 完成时间回填:prompt 行首推时多半还在执行中(completed_at_epoch=NULL),
+    // 客户端按完成水位重推同一行,这里只补全完成字段(后到的为权威值,与客户
+    // 端 updatePromptCompletedAt 语义一致),不重插。
+    const backfillPromptCompletion = db.prepare(`
+      UPDATE user_prompts
+      SET completed_at_epoch = ?, think_time_ms = ?
+      WHERE content_session_id = ? AND prompt_number = ?
+    `);
 
     const now = Date.now();
     const tx = db.transaction((p: SyncIngestPayload) => {
@@ -371,6 +379,16 @@ export class SyncRoutes extends BaseRouteHandler {
       for (const pr of p.prompts) {
         const sourceUid = `${pr.content_session_id}:${pr.prompt_number}`;
         if (inboxHas.get(p.user_label, 'user_prompts', sourceUid)) {
+          // 行已落库 — 若本次带有完成时间,则是完成回填重推,补全后再跳过,
+          // 否则服务端永远显示 "Task status unclear"。
+          if (pr.completed_at_epoch != null) {
+            backfillPromptCompletion.run(
+              pr.completed_at_epoch,
+              Math.min((pr as any).think_time_ms ?? 0, serverCapMin * 60_000),
+              pr.content_session_id,
+              pr.prompt_number,
+            );
+          }
           applied.prompts.skipped++;
           continue;
         }

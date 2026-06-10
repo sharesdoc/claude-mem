@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import express from 'express';
 import { Database } from 'bun:sqlite';
-import { ClaudeMemDatabase } from '../src/services/sqlite/Database.js';
+import { SessionStore } from '../src/services/sqlite/SessionStore.js';
 import { SyncRoutes } from '../src/services/worker/http/routes/SyncRoutes.js';
 import type { DatabaseManager } from '../src/services/worker/DatabaseManager.js';
 
@@ -21,7 +21,9 @@ afterEach(() => {
 });
 
 function buildDb(): Database {
-  return new ClaudeMemDatabase(':memory:').db;
+  // SessionStore 跑全量迁移链(user_label/completed_at_epoch/think_time_ms 等
+  // 列由迁移补齐),裸 ClaudeMemDatabase 的基础 schema 缺这些列。
+  return new SessionStore(':memory:').db;
 }
 
 function fakeManager(db: Database): DatabaseManager {
@@ -200,6 +202,46 @@ describe('POST /api/sync/ingest', () => {
       const session = db.prepare("SELECT memory_session_id FROM sdk_sessions WHERE content_session_id = 'c-late-memory'")
         .get() as { memory_session_id: string };
       expect(session.memory_session_id).toBe('m-late-memory');
+    } finally {
+      await close();
+    }
+  });
+
+  it('backfills completion fields when a deduped prompt is re-pushed with completed_at_epoch', async () => {
+    const db = buildDb();
+    const { url, close } = await spinUp(db);
+    try {
+      const session = {
+        id: 1, content_session_id: 'c1', memory_session_id: 'm1', project: 'p', platform_source: 'claude',
+        user_prompt: null, custom_title: null, started_at: '2026', started_at_epoch: 1000,
+        completed_at: null, completed_at_epoch: null, status: 'active', user_name: 'alice', user_label: 'alice',
+      };
+      const prompt = {
+        id: 1, content_session_id: 'c1', prompt_number: 1, prompt_text: 'hi',
+        created_at: '2026', created_at_epoch: 1000,
+      };
+
+      // 首推:prompt 还在执行中
+      const first = await fetch(`${url}/api/sync/ingest`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(basePayload({ sessions: [session], prompts: [{ ...prompt, completed_at_epoch: null, think_time_ms: 0 }] })),
+      });
+      expect(first.status).toBe(200);
+      expect((await first.json()).applied.prompts.inserted).toBe(1);
+
+      // 完成回填重推:同一行带上完成时间
+      const second = await fetch(`${url}/api/sync/ingest`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(basePayload({ sessions: [session], prompts: [{ ...prompt, completed_at_epoch: 91000, think_time_ms: 5000 }] })),
+      });
+      expect(second.status).toBe(200);
+      expect((await second.json()).applied.prompts.skipped).toBe(1);
+
+      const rows = db.prepare("SELECT completed_at_epoch, think_time_ms FROM user_prompts WHERE content_session_id = 'c1' AND prompt_number = 1")
+        .all() as Array<{ completed_at_epoch: number | null; think_time_ms: number }>;
+      expect(rows).toHaveLength(1); // 不重插
+      expect(rows[0].completed_at_epoch).toBe(91000);
+      expect(rows[0].think_time_ms).toBe(5000);
     } finally {
       await close();
     }

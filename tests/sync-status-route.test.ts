@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import express from 'express';
 import { Database } from 'bun:sqlite';
-import { ClaudeMemDatabase } from '../src/services/sqlite/Database.js';
+import { SessionStore } from '../src/services/sqlite/SessionStore.js';
 import { SyncStatusRoutes } from '../src/services/worker/http/routes/SyncStatusRoutes.js';
 import type { DatabaseManager } from '../src/services/worker/DatabaseManager.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
@@ -49,7 +49,8 @@ async function spinUp(db: Database): Promise<{ url: string; close: () => Promise
   const app = express();
   const settingsPath = join(tmpRoot, 'settings.json');
   const statePath = join(tmpRoot, 'sync-state.json');
-  new SyncStatusRoutes(mgr, () => settingsPath, () => statePath).setupRoutes(app);
+  // 第 2 参是 syncAgentAccessor(此处不需要),settings/state 路径在 3/4 位
+  new SyncStatusRoutes(mgr, undefined, () => settingsPath, () => statePath).setupRoutes(app);
   const server = app.listen(0);
   await new Promise<void>(r => server.on('listening', () => r()));
   const port = (server.address() as { port: number }).port;
@@ -61,7 +62,7 @@ async function spinUp(db: Database): Promise<{ url: string; close: () => Promise
 
 describe('GET /api/sync/status', () => {
   it('reports zero lag when watermark matches max(id) for every table', async () => {
-    const db = new ClaudeMemDatabase(':memory:').db;
+    const db = new SessionStore(':memory:').db;
     seedDb(db);
     writeFileSync(join(tmpRoot, 'sync-state.json'), JSON.stringify({
       upstream_url: 'http://mem.test',
@@ -83,7 +84,7 @@ describe('GET /api/sync/status', () => {
   });
 
   it('reports non-zero lag when watermark trails max(id)', async () => {
-    const db = new ClaudeMemDatabase(':memory:').db;
+    const db = new SessionStore(':memory:').db;
     seedDb(db);
     writeFileSync(join(tmpRoot, 'sync-state.json'), JSON.stringify({
       upstream_url: 'http://mem.test',
@@ -103,7 +104,7 @@ describe('GET /api/sync/status', () => {
   });
 
   it('returns zero state when sync-state.json is missing', async () => {
-    const db = new ClaudeMemDatabase(':memory:').db;
+    const db = new SessionStore(':memory:').db;
     const { url, close } = await spinUp(db);
     try {
       const body = await fetch(`${url}/api/sync/status`).then(r => r.json());

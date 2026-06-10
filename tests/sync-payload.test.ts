@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { ClaudeMemDatabase } from '../src/services/sqlite/Database.js';
+import { SessionStore } from '../src/services/sqlite/SessionStore.js';
 import { collectIncremental } from '../src/services/sync/payload.js';
 import { zeroState } from '../src/services/sync/sync-state.js';
 
@@ -50,7 +50,9 @@ function seed() {
 }
 
 beforeEach(() => {
-  db = new ClaudeMemDatabase(':memory:').db;
+  // SessionStore 跑全量迁移链(user_label/completed_at_epoch/think_time_ms 等
+  // 列由迁移补齐),裸 ClaudeMemDatabase 的基础 schema 缺这些列。
+  db = new SessionStore(':memory:').db;
   seed();
 });
 
@@ -81,13 +83,16 @@ describe('collectIncremental', () => {
   it('respects per-table watermark (skips rows with id <= wm)', () => {
     const { batch, nextLocalIds } = collectIncremental(
       db,
-      { sessions: 1, observations: 3, summaries: 0, prompts: 0 },
+      { sessions: 1, observations: 3, summaries: 0, prompts: 0, prompt_completions: 0 },
       200,
       [],
       'johnson',
     );
 
-    expect(batch.sessions.map(s => s.id)).toEqual([2]);
+    // 水位窗口内只有 session 2;session 1(c1)是被 obs/prompt 引用闭包补带的
+    // 旧行,会出现在批次里但不得推进水位。
+    expect(batch.sessions.map(s => s.id).sort()).toEqual([1, 2]);
+    expect(nextLocalIds.sessions).toBe(2);
     expect(batch.observations.map(o => o.id)).toEqual([4, 5]);
     expect(nextLocalIds.observations).toBe(5);
   });
@@ -159,7 +164,7 @@ describe('collectIncremental', () => {
   });
 
   it('returns empty batch + unchanged watermark when no new rows', () => {
-    const wm = { sessions: 99, observations: 99, summaries: 99, prompts: 99 };
+    const wm = { sessions: 99, observations: 99, summaries: 99, prompts: 99, prompt_completions: 99 };
     const { batch, nextLocalIds } = collectIncremental(db, wm, 200, [], 'johnson');
     expect(batch.sessions).toHaveLength(0);
     expect(batch.observations).toHaveLength(0);
@@ -170,5 +175,65 @@ describe('collectIncremental', () => {
     const { batch } = collectIncremental(db, zeroState().watermark, 200, [], 'johnson');
     const ids = batch.observations.map(o => o.id);
     expect(ids).toEqual([...ids].sort((a, b) => a - b));
+  });
+});
+
+describe('prompt completion backfill', () => {
+  it('re-collects a prompt whose completion landed after the id watermark passed it', () => {
+    // 首推:prompt 还在执行中(completed_at_epoch=NULL)
+    const first = collectIncremental(db, zeroState().watermark, 200, [], 'johnson');
+    expect(first.batch.prompts).toHaveLength(1);
+    expect(first.batch.prompts[0].completed_at_epoch).toBeNull();
+    expect(first.nextLocalIds.prompt_completions).toBe(0);
+
+    // 任务结束,本地回填完成时间(id 水位已越过该行)
+    db.prepare('UPDATE user_prompts SET completed_at_epoch = ? WHERE id = 1').run(1700000090000);
+
+    const second = collectIncremental(db, first.nextLocalIds, 200, [], 'johnson');
+    expect(second.batch.prompts.map(p => p.id)).toEqual([1]);
+    expect(second.batch.prompts[0].completed_at_epoch).toBe(1700000090000);
+    expect(second.nextLocalIds.prompts).toBe(1);
+    expect(second.nextLocalIds.prompt_completions).toBe(1700000090000);
+
+    // 回填行也要带上引用闭包的会话行,服务端 FK 才一定通
+    expect(second.batch.sessions.some(s => s.content_session_id === 'c1')).toBe(true);
+
+    // 推完即止,不会无限重推
+    const third = collectIncremental(db, second.nextLocalIds, 200, [], 'johnson');
+    expect(third.batch.prompts).toHaveLength(0);
+  });
+
+  it('fresh prompts already completed at first push advance the completion watermark', () => {
+    db.prepare('UPDATE user_prompts SET completed_at_epoch = ? WHERE id = 1').run(1700000090000);
+    const { batch, nextLocalIds } = collectIncremental(db, zeroState().watermark, 200, [], 'johnson');
+    expect(batch.prompts).toHaveLength(1);
+    expect(nextLocalIds.prompt_completions).toBe(1700000090000);
+
+    const again = collectIncremental(db, nextLocalIds, 200, [], 'johnson');
+    expect(again.batch.prompts).toHaveLength(0);
+  });
+
+  it('caps backfill batches and resumes from the completion watermark', () => {
+    const ins = db.prepare(`
+      INSERT INTO user_prompts (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch)
+      VALUES ('c1', ?, 'p', '2026-05-17T00:00:00Z', ?, ?)
+    `);
+    ins.run(2, 1700000001000, 1700000020000);
+    ins.run(3, 1700000002000, 1700000030000);
+    db.prepare('UPDATE user_prompts SET completed_at_epoch = ? WHERE id = 1').run(1700000010000);
+
+    // 三行均已越过 id 水位(prompts: 3),完成水位从 0 起步,batchSize=2
+    let wm = { sessions: 99, observations: 99, summaries: 99, prompts: 3, prompt_completions: 0 };
+    const pushedIds: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const { batch, nextLocalIds } = collectIncremental(db, wm, 2, [], 'johnson');
+      if (batch.prompts.length === 0) break;
+      pushedIds.push(...batch.prompts.map(p => p.id));
+      // 完成水位单调推进,id 水位不动
+      expect(nextLocalIds.prompt_completions).toBeGreaterThan(wm.prompt_completions);
+      expect(nextLocalIds.prompts).toBe(3);
+      wm = nextLocalIds;
+    }
+    expect(pushedIds.sort((a, b) => a - b)).toEqual([1, 2, 3]);
   });
 });

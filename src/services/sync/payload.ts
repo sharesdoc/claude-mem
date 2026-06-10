@@ -159,6 +159,19 @@ export function collectIncremental(
     LIMIT ?
   `).all(watermark.prompts, limit);
 
+  // 完成时间回填(任务状态自愈):prompt 行在提交时插入(completed_at_epoch=NULL),
+  // 任务结束后才 UPDATE 回填。id 水位只看新行,几乎必然在回填前就把行推走 →
+  // 服务端该行 completed_at_epoch 永远 NULL → viewer 显示 "Task status unclear"。
+  // 这里按完成时间二级水位(prompt_completions)重推已越过 id 水位、且完成时间
+  // 新于上次推送的行;服务端按 (content_session_id, prompt_number) 幂等补全。
+  const { backfills: promptBackfills, nextCompletions } = collectPromptCompletionBackfills(
+    db,
+    watermark.prompts,
+    watermark.prompt_completions,
+    limit,
+    prompts,
+  );
+
   const observations = redactObservations(observationsRaw, denyList);
   const summaries = redactSummaries(summariesRaw, denyList);
 
@@ -171,7 +184,9 @@ export function collectIncremental(
   // 的 COALESCE 会补上 memory_session_id,FK 即通,卡死批次自愈。
   // 注意 nextLocalIds.sessions 仍按水位窗口内的 sessions 计算(闭包补带的是
   // 旧行,不得推进水位)。
-  const allSessions = withReferencedSessions(db, sessions, observations, summaries, prompts);
+  // 回填行 id 均 <= id 水位、新行 id 均 > id 水位,二者不会重复。
+  const allPrompts = [...prompts, ...promptBackfills];
+  const allSessions = withReferencedSessions(db, sessions, observations, summaries, allPrompts);
 
   const batch: IngestBatch = {
     schema_version: 1,
@@ -181,7 +196,7 @@ export function collectIncremental(
     sessions: allSessions,
     observations,
     summaries,
-    prompts,
+    prompts: allPrompts,
   };
 
   const nextLocalIds: SyncState['watermark'] = {
@@ -189,9 +204,59 @@ export function collectIncremental(
     observations: lastId(observationsRaw, watermark.observations),
     summaries: lastId(summariesRaw, watermark.summaries),
     prompts: lastId(prompts, watermark.prompts),
+    prompt_completions: nextCompletions,
   };
 
   return { batch, nextLocalIds };
+}
+
+/**
+ * 收集需要重推的"完成回填"prompt 行,并计算下一个完成时间水位。
+ *
+ * 取已越过 id 水位(idWatermark)、completed_at_epoch 晚于完成水位
+ * (completionWatermark)的行,按完成时间升序限量收集。水位推进规则:
+ *  - 命中 limit(可能还有更多):水位只推进到本批最后一行的完成时间,且为
+ *    避免同毫秒并列行被 `>` 过滤器跳过,裁掉与最后一行同完成时间的尾部并列
+ *    行留到下个 tick(全批同毫秒时保留,否则无法推进);本批新行即使带有
+ *    更新的完成时间也不得越过该边界,否则会跳过未收完的剩余回填。
+ *  - 未命中 limit(已收完):可一并吸收本批新行自带的完成时间,避免这些行
+ *    下个 tick 被无谓重推。
+ */
+function collectPromptCompletionBackfills(
+  db: Database,
+  idWatermark: number,
+  completionWatermark: number,
+  limit: number,
+  freshPrompts: PromptRow[],
+): { backfills: PromptRow[]; nextCompletions: number } {
+  let backfills = db.query<PromptRow, [number, number, number]>(`
+    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms
+    FROM user_prompts
+    WHERE id <= ? AND completed_at_epoch IS NOT NULL AND completed_at_epoch > ?
+    ORDER BY completed_at_epoch ASC, id ASC
+    LIMIT ?
+  `).all(idWatermark, completionWatermark, limit);
+
+  const truncated = backfills.length === limit;
+  if (truncated) {
+    const lastEpoch = backfills[backfills.length - 1].completed_at_epoch!;
+    const trimmed = backfills.filter(p => p.completed_at_epoch! < lastEpoch);
+    if (trimmed.length > 0) backfills = trimmed;
+  }
+
+  let nextCompletions = completionWatermark;
+  for (const p of backfills) {
+    if (p.completed_at_epoch! > nextCompletions) nextCompletions = p.completed_at_epoch!;
+  }
+  if (!truncated) {
+    for (const p of freshPrompts) {
+      if (p.completed_at_epoch != null && p.completed_at_epoch > nextCompletions) {
+        nextCompletions = p.completed_at_epoch;
+      }
+    }
+  }
+
+  return { backfills, nextCompletions };
 }
 
 const SESSION_COLS = `id, content_session_id, memory_session_id, project, platform_source, user_prompt,

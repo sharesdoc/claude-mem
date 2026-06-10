@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from 'fs
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Database } from 'bun:sqlite';
-import { ClaudeMemDatabase } from '../src/services/sqlite/Database.js';
+import { SessionStore } from '../src/services/sqlite/SessionStore.js';
 import { SyncAgent, type SyncAgentConfig, type FetchFn } from '../src/services/sync/SyncAgent.js';
 import { readState } from '../src/services/sync/sync-state.js';
 import type { DatabaseManager } from '../src/services/worker/DatabaseManager.js';
@@ -16,7 +16,7 @@ let stateDir: string;
 let statePath: string;
 
 function makeDb(): Database {
-  const db = new ClaudeMemDatabase(':memory:').db;
+  const db = new SessionStore(':memory:').db;
   db.prepare(`
     INSERT INTO sdk_sessions (content_session_id, memory_session_id, project, started_at, started_at_epoch, status, user_label)
     VALUES ('c1', 'm1', 'p', '2026', 1000, 'active', 'alice')
@@ -118,7 +118,7 @@ describe('SyncAgent.tick — success path', () => {
   });
 
   it('no-op when batch is empty (no fetch call)', async () => {
-    const db = new ClaudeMemDatabase(':memory:').db;
+    const db = new SessionStore(':memory:').db;
     let calls = 0;
     const fetchImpl = (async () => { calls++; return new Response('{}'); }) as FetchFn;
     const agent = new SyncAgent(makeManager(db), baseConfig(), fetchImpl, statePath);

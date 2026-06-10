@@ -262,6 +262,8 @@ function mergeWatermark(
     observations: pickMax(prev.observations, server.observations, local.observations),
     summaries: pickMax(prev.summaries, server.summaries, local.summaries),
     prompts: pickMax(prev.prompts, server.prompts, local.prompts),
+    // 完成时间水位是纯客户端概念(epoch ms),服务端 next_watermark 不会下发。
+    prompt_completions: pickMax(prev.prompt_completions, local.prompt_completions),
   };
 }
 
