@@ -312,11 +312,11 @@ export class DataRoutes extends BaseRouteHandler {
           return `A${s}s`;
         };
         const fmtHuman = (ms: number): string => {
-          const h = Math.floor(Math.max(0, ms) / 3600000);
-          const m = Math.floor((Math.max(0, ms) % 3600000) / 60000);
-          const s = Math.round((Math.max(0, ms) % 60000) / 1000);
+          const v = Math.max(0, ms);
+          const h = Math.floor(v / 3600000), m = Math.floor((v % 3600000) / 60000), s = Math.round((v % 60000) / 1000);
           if (h > 0) return `H${h}h${m}m${s}s`;
-          return `H${m}m${s}s`; // level≥2 始终显示 H(保 H0m0s)
+          if (m > 0) return `H${m}m${s}s`;
+          return `H${s}s`;
         };
         const aiMs = Math.max(0, p.completed_at_epoch - p.created_at_epoch);
         const aiStr = fmtAi(aiMs);
