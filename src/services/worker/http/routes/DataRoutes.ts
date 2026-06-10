@@ -308,8 +308,8 @@ export class DataRoutes extends BaseRouteHandler {
         if (level >= 2) {
           const hMs = (p.think_time_ms ?? 0);
           const hM = hMs > 0 ? Math.floor(hMs / 60000) : 0, hS = hMs > 0 ? Math.round((hMs % 60000) / 1000) : 0;
-          const hStr = (hM > 0 || hS > 0) ? `H${hM}m${hS}s` : '';
-          p.processing_time_display = hStr ? `${hStr} + ${aiStr}` : aiStr;
+          const hStr = `H${hM}m${hS}s`; // level≥2 时始终显示 H,即使为 0
+          p.processing_time_display = `${hStr} + ${aiStr}`;
         } else {
           p.processing_time_display = aiStr;
         }
