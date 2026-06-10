@@ -10,9 +10,9 @@
  *
  * 算法:对指定用户的每个会话,将其 prompt 按 prompt_number 升序排列:
  *   p[i].completed_at_epoch = p[i+1].created_at_epoch  (AI 在用户发下一条时已完成)
- *   p[最后].completed_at_epoch = session.completed_at_epoch
+ *   p[最后] = session.completed_at_epoch(有则用) / created_at_epoch + 5min(兜底)
  * 这是旧逻辑的 AI 处理时间(不含人类思考段,think_time_ms 保持 0)。
- * 仅回填 completed_at_epoch IS NULL 的行;会话 completed_at_epoch 为 NULL 则跳过。
+ * 仅回填 completed_at_epoch IS NULL 的行。
  */
 
 import { Database } from 'bun:sqlite';
@@ -22,6 +22,9 @@ import { homedir } from 'os';
 const DB_PATH = process.env.CLAUDE_MEM_DATA_DIR
   ? join(process.env.CLAUDE_MEM_DATA_DIR, 'claude-mem.db')
   : join(homedir(), '.claude-mem', 'claude-mem.db');
+
+/** 最后一条 prompt 无后续时,兜底按 5 分钟估算(与 v40 migration Step D 一致)。 */
+const LAST_PROMPT_FALLBACK_MS = 5 * 60 * 1000;
 
 /** Parse CLI: -n <name> */
 function parseArgs(): string | null {
@@ -66,15 +69,9 @@ const updatePrompt = db.prepare(
 );
 
 let totalFixed = 0;
-let skippedSessions = 0;
+let fallbackLast = 0;  // 用 5min 兜底补的最后一条数
 
 for (const { sid, sess_completed } of sessions) {
-  if (sess_completed == null) {
-    console.log(`  跳过会话 ${sid}: 会话本身 completed_at_epoch 为空(可能未正常结束)`);
-    skippedSessions++;
-    continue;
-  }
-
   const prompts = db.prepare(`
     SELECT prompt_number, created_at_epoch, completed_at_epoch
     FROM user_prompts
@@ -98,14 +95,19 @@ for (const { sid, sess_completed } of sessions) {
 
   let fixed = 0;
   for (const p of prompts) {
-    const newCompleted = nextCreated.get(p.prompt_number) ?? sess_completed;
+    // 非最后一条 → 取下一条 created; 最后一条 → session 已完成用其实时,否则 5min 兜底
+    const nextVal = nextCreated.get(p.prompt_number);
+    const newCompleted = nextVal
+      ?? (sess_completed != null ? sess_completed : p.created_at_epoch + LAST_PROMPT_FALLBACK_MS);
+    if (!nextVal && sess_completed == null) fallbackLast++;
     // 兜底:会话被重复使用(新 prompt 创建时间晚于 session completed_at_epoch)时,
     // completed 不应早于 created,取 MAX 避免负数耗时。
     updatePrompt.run(Math.max(newCompleted, p.created_at_epoch), sid, p.prompt_number);
     fixed++;
   }
 
-  console.log(`  ${sid.slice(0, 8)}…: ${prompts.length} 个 NULL prompt,已回填 ${fixed} 条`);
+  const tag = sess_completed == null ? '(5min兜底)' : '';
+  console.log(`  ${sid.slice(0, 8)}…: ${prompts.length} 个 NULL prompt,已回填 ${fixed} 条 ${tag}`);
   totalFixed += fixed;
 }
 
@@ -113,4 +115,4 @@ db.close();
 
 console.log(`\n===== 完成 =====`);
 console.log(`修复: ${totalFixed} 条 prompt`);
-if (skippedSessions > 0) console.log(`跳过: ${skippedSessions} 个会话(会话未正常结束)`);
+if (fallbackLast > 0) console.log(`其中 ${fallbackLast} 条为最后一条(5min 兜底,因会话 completed_at_epoch 为空)`);
