@@ -79,10 +79,8 @@ echo ""
 
 # ── 查询 ───────────────────────────────────────────────────────────────────
 ROWS=$(sqlite3 -separator $'\t' "$DB_PATH" "
-  SELECT s.project, up.prompt_text,
-         up.created_at_epoch,
-         up.completed_at_epoch,
-         COALESCE(up.think_time_ms, 0)
+  SELECT RTRIM(s.project, '/'), up.created_at_epoch,
+         up.completed_at_epoch, COALESCE(up.think_time_ms, 0)
   FROM user_prompts up
   JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
   WHERE up.created_at_epoch >= $SINCE_EPOCH AND up.created_at_epoch <= $UNTIL_EPOCH
@@ -93,7 +91,7 @@ ROWS=$(sqlite3 -separator $'\t' "$DB_PATH" "
 # 按项目聚合
 declare -A P_AI P_H P_CNT P_DONE
 TOTAL=0; TOTAL_AI=0; TOTAL_H=0; COMPLETED=0; PROJ_ORDER=""
-while IFS=$'\t' read -r proj _ created completed think; do
+while IFS=$'\t' read -r proj created completed think; do
   [[ -z "$proj" ]] && proj="(unknown)"
   TOTAL=$((TOTAL + 1))
   P_CNT["$proj"]=$(( ${P_CNT["$proj"]:-0} + 1 ))
