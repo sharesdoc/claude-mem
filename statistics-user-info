@@ -142,7 +142,8 @@ echo "  AI 耗时:    $(fmt_dur $TOTAL_AI)"
 echo "  人类思考:   $(fmt_dur $TOTAL_H)"
 echo "  总耗时:     $(fmt_dur $TOTAL_TIME)"
 echo "  涉及项目:   $(echo "$PROJ_ORDER" | grep -c .)"
-echo "  日均任务:   $(awk "BEGIN {printf \"%.1f\", $TOTAL/$DAYS}")"
+AVG_TASKS=$(( TOTAL * 10 / DAYS ))
+echo "  日均任务:   $((AVG_TASKS / 10)).$((AVG_TASKS % 10))"
 echo "  日均耗时:   $(fmt_dur $(( TOTAL_TIME / DAYS )))"
 echo ""
 
