@@ -56,3 +56,6 @@ claude-mem-github
 snap.txt
 claude-mem.github/
 .playwright-mcp/
+# install-claude-mem temp backups of package.json (restored by its EXIT trap;
+# may linger if the script is killed mid-run) — never commit these.
+*.install-bak

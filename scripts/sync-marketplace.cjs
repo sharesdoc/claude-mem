@@ -7,7 +7,7 @@ const os = require('os');
 // ── 跨平台目录同步(Windows无rsync时的Node.js实现,solutions.md问题2) ──
 const _isWin = process.platform === 'win32';
 function syncDir(src, dest, excludes) {
-  const {mkdirSync,readdirSync,statSync,copyFileSync,unlinkSync,rmdirSync} = require('fs');
+  const {mkdirSync,readdirSync,statSync,copyFileSync,unlinkSync,rmdirSync,rmSync} = require('fs');
   function matchGlob(pattern, rel) {
     const re = pattern.replace(/[.+^${}()|[\]\\]/g,'\\$&').replace(/\*\*\//g,'(?:.+/)?').replace(/\*/g,'[^/]*').replace(/\?/g,'[^/]');
     return new RegExp('(^|/)'+re+'($|/)').test(rel);
@@ -27,7 +27,15 @@ function syncDir(src, dest, excludes) {
     for(const n of readdirSync(dst)){
       const s=path.join(src,n),d=path.join(dst,n);
       if(skip(path.relative(path.dirname(src),d),ex)) continue;
-      if(!existsSync(s)){ if(statSync(d).isDirectory()){ readdirSync(d).forEach(x=>unlinkSync(path.join(d,x))); rmdirSync(d); } else unlinkSync(d); }
+      if(!existsSync(s)){
+        // Removing a stale dest entry must never abort the whole sync. On
+        // Windows an IDE-locked or reparse-point file (e.g. .windsurf/rules)
+        // throws EPERM on unlink; rmSync({recursive,force}) handles dirs and
+        // symlinks, and a per-entry try/catch downgrades the rest to a warning
+        // so the critical worker copy (already done in cp()) still lands.
+        try { rmSync(d,{recursive:true,force:true,maxRetries:2}); }
+        catch(e){ console.warn('  \x1b[33m(skip stale '+d+': '+(e&&e.code||e)+')\x1b[0m'); }
+      }
       else if(statSync(d).isDirectory()) clean(s,d,ex);
     }
   }
@@ -42,6 +50,22 @@ function rsyncExec(src, dest, excludes) {
 
 const INSTALLED_PATH = path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'thedotmack');
 const CACHE_BASE_PATH = path.join(os.homedir(), '.claude', 'plugins', 'cache', 'thedotmack', 'claude-mem');
+
+// Resolve bun cross-platform. The npm child shell that runs this script does
+// not always inherit ~/.bun/bin on PATH — on Windows the installer adds it
+// only to the *user* PATH (absent from an already-running process), and on
+// macOS a non-login shell skips ~/.zprofile. Fall back to the canonical bun
+// install location so `bun install` below never dies with "command not found".
+function resolveBun() {
+  const home = os.homedir();
+  const candidates = process.platform === 'win32'
+    ? [path.join(home, '.bun', 'bin', 'bun.exe'), path.join(home, '.bun', 'bin', 'bun')]
+    : [path.join(home, '.bun', 'bin', 'bun'), '/usr/local/bin/bun', '/opt/homebrew/bin/bun'];
+  for (const c of candidates) { if (existsSync(c)) return c; }
+  return 'bun'; // last resort: trust PATH
+}
+const BUN = resolveBun();
+const bunInstall = (cwd) => execSync(`"${BUN}" install`, { cwd, stdio: 'inherit' });
 
 // Reject obviously invalid ports before they reach http.request, which would
 // throw with a confusing error like "RangeError: Port should be > 0 and < 65536".
@@ -174,10 +198,7 @@ try {
     ['.git','bun.lock','package-lock.json','scripts/package.json','scripts/node_modules'].concat(gitignoreExcludes));
 
   console.log('Running bun install in marketplace...');
-  execSync(
-    'bun install',
-    { cwd: path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'thedotmack'), stdio: 'inherit' }
-  );
+  bunInstall(path.join(os.homedir(), '.claude', 'plugins', 'marketplaces', 'thedotmack'));
 
   const version = getPluginVersion();
   const CACHE_VERSION_PATH = path.join(CACHE_BASE_PATH, version);
@@ -189,17 +210,26 @@ try {
   rsyncExec(path.join(rootDir, 'plugin'), CACHE_VERSION_PATH, ['.git'].concat(pluginGitignoreExcludes));
 
   console.log(`Running bun install in cache folder (version ${version})...`);
-  execSync(`bun install`, { cwd: CACHE_VERSION_PATH, stdio: 'inherit' });
+  bunInstall(CACHE_VERSION_PATH);
 
   if (installedMismatch && installedMismatch.installedVersion !== version) {
     const INSTALLED_CACHE_PATH = path.join(CACHE_BASE_PATH, installedMismatch.installedVersion);
     console.log(`Mirroring to installed-version cache (${installedMismatch.installedVersion}) for hot reload...`);
     rsyncExec(path.join(rootDir, 'plugin'), INSTALLED_CACHE_PATH, ['.git'].concat(pluginGitignoreExcludes));
     console.log(`Running bun install in installed-version cache (${installedMismatch.installedVersion})...`);
-    execSync(`bun install`, { cwd: INSTALLED_CACHE_PATH, stdio: 'inherit' });
+    bunInstall(INSTALLED_CACHE_PATH);
   }
 
   console.log('\x1b[32m%s\x1b[0m', 'Sync complete!');
+
+  // When the caller (install-claude-mem) owns the worker lifecycle it sets
+  // CLAUDE_MEM_SYNC_NO_RESTART=1 and does its own deterministic stop+start.
+  // Firing this async restart in that case only races the caller and has been
+  // observed leaving the worker stopped. Skip it cleanly.
+  if (process.env.CLAUDE_MEM_SYNC_NO_RESTART === '1') {
+    console.log('ℹ Skipping worker restart trigger (caller manages worker lifecycle)');
+    return;
+  }
 
   console.log('\n🔄 Triggering worker restart...');
   const http = require('http');

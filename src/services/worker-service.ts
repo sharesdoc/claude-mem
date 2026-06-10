@@ -412,19 +412,6 @@ export class WorkerService implements WorkerRef {
       logger.info('WORKER', 'Checking for one-time CWD remap...');
       runOneTimeCwdRemap();
 
-      // T-06 + T-14: launch SyncAgent only in client mode with sync turned
-      // on and a non-empty upstream URL. Anything missing → no agent now,
-      // but a watcher on settings.json will retry once the install/restart
-      // script writes the sync config (race seen in practice when worker
-      // boots before install script finishes writing settings.json).
-      try {
-        if (!this.tryStartSyncAgent()) {
-          this.watchSyncSettings();
-        }
-      } catch (error) {
-        logger.error('SYNC', 'SyncAgent bootstrap failed', {}, error as Error);
-      }
-
       // Weekly work report scheduler (daily, default 13:00) — never blocks exit.
       try {
         this.reportScheduler = new ReportScheduler(this.dbManager);
@@ -481,6 +468,22 @@ export class WorkerService implements WorkerRef {
 
       if (sweepResult.changes > 0) {
         logger.info('SYSTEM', `Startup orphan sweep reclaimed ${sweepResult.changes} processing rows`);
+      }
+
+      // T-06 + T-14: launch SyncAgent only in client mode with sync turned
+      // on and a non-empty upstream URL. Anything missing → no agent now,
+      // but a watcher on settings.json will retry once the install/restart
+      // script writes the sync config (race seen in practice when worker
+      // boots before install script finishes writing settings.json).
+      // MUST run AFTER dbManager.initialize() above — the agent's initial
+      // tick reads the DB, so starting it earlier threw "Database not
+      // initialized" on every boot.
+      try {
+        if (!this.tryStartSyncAgent()) {
+          this.watchSyncSettings();
+        }
+      } catch (error) {
+        logger.error('SYNC', 'SyncAgent bootstrap failed', {}, error as Error);
       }
 
       runOneTimeV12_4_3Cleanup();

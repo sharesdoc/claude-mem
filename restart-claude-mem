@@ -128,9 +128,11 @@ fi
 step "Starting worker..."
 bun "$WORKER_SCRIPT" start >/dev/null 2>&1 || true
 
-# Wait for health check
+# Wait for health check. A cold worker boot (bun startup + DB init + migrations
+# + SyncAgent) can exceed 15s on Windows/MSYS, so wait up to 30s to avoid a
+# false "timed out" warning when the worker is simply still coming up.
 retries=0
-while [[ $retries -lt 15 ]]; do
+while [[ $retries -lt 30 ]]; do
   if curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 1 2>/dev/null; then
     ok "Worker started on port ${port}"
     break

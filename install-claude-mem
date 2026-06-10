@@ -11,9 +11,12 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # MSYS2→Windows 路径转换(轻量版,脚本顶部 LOCAL_VERSION 使用)
+# 用 cygpath -m(正斜杠 C:/...)而非 -w(反斜杠 C:\...):这些路径会被嵌入
+# node 的 JS 字符串字面量(require('...') / const path='...'),反斜杠会被 JS
+# 转义吃掉(C:\Users\… → C:Users…)导致写错文件;正斜杠 node 同样接受且不会被吃。
 _early_native() {
   if [[ "$(uname -s 2>/dev/null)" == *"_NT"* ]] || is_windows_shell; then
-    cygpath -w "$1" 2>/dev/null || echo "$1"
+    cygpath -m "$1" 2>/dev/null || echo "$1"
   else
     echo "$1"
   fi
@@ -198,7 +201,21 @@ check_built() {
 check_synced() {
   # Both marketplace AND versioned cache must be populated, otherwise a partial
   # sync (e.g. failed mid-run) would be falsely reported as "already synced".
-  [[ -f "$WORKER_SCRIPT" ]] && [[ -f "$PLUGIN_CACHE_DIR/scripts/worker-service.cjs" ]]
+  [[ -f "$WORKER_SCRIPT" ]] || return 1
+  [[ -f "$PLUGIN_CACHE_DIR/scripts/worker-service.cjs" ]] || return 1
+
+  # Existence alone is NOT enough: Claude Code registers the marketplace by
+  # git-cloning the published thedotmack repo, which ships an OLDER worker
+  # build (e.g. one without the SyncAgent). A bare -f check then made do_sync
+  # report "already synced" and skip the rsync, so the stale worker kept
+  # running forever and client→server sync silently never worked. Require the
+  # deployed worker to be byte-identical to the freshly-built local plugin
+  # worker; any drift → not synced → do_sync re-runs.
+  local src="$SCRIPT_DIR/plugin/scripts/worker-service.cjs"
+  [[ -f "$src" ]] || return 0   # no local build to compare against → trust existence
+  cmp -s "$src" "$WORKER_SCRIPT" || return 1
+  cmp -s "$src" "$PLUGIN_CACHE_DIR/scripts/worker-service.cjs" || return 1
+  return 0
 }
 
 check_marketplace_registered() {
@@ -247,10 +264,15 @@ is_windows_shell() {
     *) return 1 ;;
   esac
 }
-# MSYS2->Windows原生路径转换(solutions.md问题1)
+# MSYS2->Windows 路径转换(solutions.md问题1)。
+# 用 cygpath -m(正斜杠 C:/Users/...)而非 -w(反斜杠 C:\Users\...):本函数的
+# 输出全部用于嵌入 node 的 JS 字符串字面量(require('$path') / const path='$file'),
+# 反斜杠会被 JS 字符串转义吃掉(C:\Users\…\settings.json → C:Users…settings.json),
+# 导致 apply_sync_settings 等把配置写到 cwd 下的错误文件而非真正的 settings.json。
+# 正斜杠路径 node 原生接受,且在 MSYS bash 的 [[ -f ]] / > 重定向里同样可用。
 windows_native_path() {
   if [[ "$(uname -s 2>/dev/null)" == *"_NT"* ]] || is_windows_shell; then
-    cygpath -w "$1" 2>/dev/null || echo "$1"
+    cygpath -m "$1" 2>/dev/null || echo "$1"
   else
     echo "$1"
   fi
@@ -319,8 +341,10 @@ check_codex_plugin_installed() {
 # CDN and hard-wires the URL. To avoid this fragile download we skip its
 # postinstall (by removing from trustedDependencies) and inject the binary
 # ourselves. Source preference:
-#   1. ./download/tree-sitter-macos-<arch>.gz  in this repo
-#   2. Prompt for SOCKS5 proxy port → curl --socks5-hostname download
+#   1. ./download/tree-sitter-<os>-<arch>.gz  in this repo (any committed
+#      platform: macos-x64/arm64, windows-x64, ...) — reused as-is if valid
+#   2. Prompt for SOCKS5 proxy port → curl --socks5-hostname download,
+#      then cache the result into ./download for reuse on the next install
 
 case "$(uname -s)" in
   Darwin) TS_OS="macos" ;;
@@ -345,9 +369,17 @@ ensure_treesitter_binary() {
     exit 1
   fi
 
+  # Local-first: reuse a committed/cached gz from ./download if it's a valid,
+  # non-empty gzip. A corrupt/partial cached file would otherwise pass the
+  # bare -f check and only blow up later at gunzip-injection time, so we
+  # verify integrity here and fall through to a fresh download if it's bad.
   if [[ -f "$LOCAL_TS_BINARY_GZ" ]]; then
-    ok "Using local tree-sitter binary: $LOCAL_TS_BINARY_GZ"
-    return
+    if [[ -s "$LOCAL_TS_BINARY_GZ" ]] && gzip -t "$LOCAL_TS_BINARY_GZ" 2>/dev/null; then
+      ok "Using local tree-sitter binary: $LOCAL_TS_BINARY_GZ"
+      return
+    fi
+    warn "Local tree-sitter binary is empty/corrupt — re-downloading: $LOCAL_TS_BINARY_GZ"
+    rm -f "$LOCAL_TS_BINARY_GZ"
   fi
 
   warn "Local tree-sitter binary not found: $LOCAL_TS_BINARY_GZ"
@@ -377,7 +409,15 @@ ensure_treesitter_binary() {
   if curl -fL --socks5-hostname "127.0.0.1:$user_port" \
        --connect-timeout 10 --max-time 120 \
        -o "$LOCAL_TS_BINARY_GZ" "$url"; then
-    ok "Downloaded to $LOCAL_TS_BINARY_GZ"
+    # Validate before caching — a truncated/HTML-error body must not be left
+    # in ./download where the local-first branch would happily reuse it.
+    if [[ -s "$LOCAL_TS_BINARY_GZ" ]] && gzip -t "$LOCAL_TS_BINARY_GZ" 2>/dev/null; then
+      ok "Downloaded and cached to $LOCAL_TS_BINARY_GZ (reused on next install)"
+    else
+      fail "Downloaded file is not a valid gzip: $LOCAL_TS_BINARY_GZ"
+      rm -f "$LOCAL_TS_BINARY_GZ"
+      exit 1
+    fi
   else
     fail "Download failed from $url"
     rm -f "$LOCAL_TS_BINARY_GZ"
@@ -555,7 +595,12 @@ do_sync() {
   patch_pkgjson_skip_treesitter
 
   info "Running npm run sync-marketplace..."
-  (cd "$SCRIPT_DIR" && npm run sync-marketplace)
+  # Tell sync-marketplace NOT to fire its own async /api/admin/restart: the
+  # install flow owns the worker lifecycle and does a deterministic stop+start
+  # afterwards (see do_restart_worker). The async trigger would only race that
+  # and was observed leaving the worker stopped. Inline env assignment works
+  # on both macOS (bash/zsh) and Windows Git Bash.
+  (cd "$SCRIPT_DIR" && CLAUDE_MEM_SYNC_NO_RESTART=1 npm run sync-marketplace)
 
   # Place the binary into both bun-install locations so smart-file-read can
   # actually call it. The marketplace dir runs at runtime; the versioned cache
@@ -590,8 +635,11 @@ do_start_worker() {
   info "Starting local worker via bun..."
   bun "$WORKER_SCRIPT" start >/dev/null 2>&1 || true
 
+  # A cold worker boot (bun startup + DB init + migrations + SyncAgent) can take
+  # well over 10s on Windows/MSYS, where it was emitting a false "timed out"
+  # warning even though the worker came up moments later. Wait up to 30s.
   local retries=0
-  while [[ $retries -lt 10 ]]; do
+  while [[ $retries -lt 30 ]]; do
     if curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 1 --max-time 2 2>/dev/null; then
       ok "Worker started on port ${port}"
       return
@@ -602,6 +650,17 @@ do_start_worker() {
 
   warn "Worker health check timed out — it may still be starting"
   info "Check status: bun $WORKER_SCRIPT status"
+}
+
+# Deterministically reload the worker onto a freshly-synced build. We reach
+# this only after do_build + do_sync deployed new code, so a bare "start if not
+# already running" (do_start_worker) is wrong: it would leave a STALE worker
+# from the previous build running. Stop any existing worker first, then start.
+# do_stop_worker is a no-op when nothing is running, so this is safe even on a
+# first install. Cross-platform: both helpers use is_windows_shell-aware kill.
+do_restart_worker() {
+  do_stop_worker
+  do_start_worker
 }
 
 do_stop_worker() {
@@ -713,7 +772,9 @@ do_install_claude() {
   step "Registering plugin with Claude Code (local-only, no npx)..."
   register_plugin_local
 
-  do_start_worker
+  # Deterministic reload onto the freshly-synced build (not a bare start —
+  # that would keep a stale worker from the old build alive).
+  do_restart_worker
 
   print_summary "Claude Code — Install Summary"
   check_marketplace_registered && ok "Registered"  || fail "Not registered"
@@ -817,7 +878,8 @@ do_install_codex() {
     fi
   fi
 
-  do_start_worker
+  # Deterministic reload onto the freshly-synced build (see do_restart_worker).
+  do_restart_worker
 
   print_summary "Codex CLI — Install Summary"
   check_codex_marketplace       && ok "Marketplace registered with Codex" || warn "Marketplace not registered"
