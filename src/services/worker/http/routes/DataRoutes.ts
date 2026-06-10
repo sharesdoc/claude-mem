@@ -5,7 +5,8 @@ import path from 'path';
 import type { SQLQueryBindings } from 'bun:sqlite';
 import { readFileSync, statSync, existsSync } from 'fs';
 import { logger } from '../../../../utils/logger.js';
-import { getPackageRoot, paths } from '../../../../shared/paths.js';
+import { getPackageRoot, paths, USER_SETTINGS_PATH } from '../../../../shared/paths.js';
+import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
 import { getWorkerPort } from '../../../../shared/worker-utils.js';
 import { normalizeStringArrayQuery } from '../../../../shared/query-utils.js';
 import { PaginationHelper } from '../../PaginationHelper.js';
@@ -287,6 +288,31 @@ export class DataRoutes extends BaseRouteHandler {
   private handleGetPrompts = this.wrapHandler((req: Request, res: Response): void => {
     const { offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch, userLabel } = this.parsePaginationParams(req);
     const result = this.paginationHelper.getPrompts(offset, limit, project, platformSource, dateStartEpoch, dateEndEpoch, userLabel);
+    // 服务端预计算 processing_time_display,前端只渲染不判断。
+    let level = 0;
+    try {
+      level = parseInt((SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME ?? '0'), 10) || 0;
+      if (level === 0 && SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME === 'true') level = 2; // 向下兼容
+    } catch { /* use default 0 */ }
+    if (level > 0) {
+      for (const p of result.items as any[]) {
+        if (!p.completed_at_epoch) {
+          p.processing_time_display = 'cancelled';
+          continue;
+        }
+        const aiMs = p.completed_at_epoch - p.created_at_epoch;
+        const aiM = Math.floor(aiMs / 60000), aiS = Math.round((aiMs % 60000) / 1000);
+        const aiStr = aiM > 0 ? `A${aiM}m${aiS}s` : `A${aiS}s`;
+        if (level >= 2) {
+          const hMs = (p.think_time_ms ?? 0);
+          const hM = hMs > 0 ? Math.floor(hMs / 60000) : 0, hS = hMs > 0 ? Math.round((hMs % 60000) / 1000) : 0;
+          const hStr = (hM > 0 || hS > 0) ? `H${hM}m${hS}s` : '';
+          p.processing_time_display = hStr ? `${hStr} + ${aiStr}` : aiStr;
+        } else {
+          p.processing_time_display = aiStr;
+        }
+      }
+    }
     res.json(result);
   });
 

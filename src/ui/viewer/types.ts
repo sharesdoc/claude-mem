@@ -52,6 +52,9 @@ export interface UserPrompt {
   created_at_epoch: number;
   completed_at_epoch?: number | null;
   think_time_ms?: number;
+  /** 后端根据 CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME 预计算的展示字符串,
+   *  如 null(不展示) / "A15s"(仅AI) / "H3m + A15s"(完整) / "cancelled"。 */
+  processing_time_display?: string | null;
   content_hash?: string | null;
 }
 

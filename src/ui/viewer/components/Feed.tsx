@@ -15,10 +15,9 @@ interface FeedProps {
   onPromptDeleted?: (id: number) => void;
   isLoading: boolean;
   hasMore: boolean;
-  showProcessingTime?: number; // 0=off, 1=AI time only, 2=AI+human think time
 }
 
-export function Feed({ observations, summaries, prompts, onLoadMore, onPromptDeleted, isLoading, hasMore, showProcessingTime }: FeedProps) {
+export function Feed({ observations, summaries, prompts, onLoadMore, onPromptDeleted, isLoading, hasMore }: FeedProps) {
   const { t } = useLocale();
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const feedRef = useRef<HTMLDivElement>(null);
@@ -73,7 +72,7 @@ export function Feed({ observations, summaries, prompts, onLoadMore, onPromptDel
           } else if (item.itemType === 'summary') {
             return <SummaryCard key={key} summary={item} />;
           } else {
-            return <PromptCard key={key} prompt={item} onDeleted={onPromptDeleted} showProcessingTime={showProcessingTime} />;
+            return <PromptCard key={key} prompt={item} onDeleted={onPromptDeleted}  />;
           }
         })}
         {items.length === 0 && !isLoading && (

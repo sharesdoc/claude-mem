@@ -9,35 +9,18 @@ interface PromptCardProps {
   /** Called with the prompt id after it is deleted from the database. */
   onDeleted?: (id: number) => void;
   /** 0=off, 1=AI time only, 2=AI+human think time. */
-  showProcessingTime?: number; // 0=off, 1=AI only, 2=AI+human
 }
 
 const COPIED_DURATION_MS = 2000;
 
-export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCardProps) {
+export function PromptCard({ prompt, onDeleted }: PromptCardProps) {
   const { t } = useLocale();
   const [copied, setCopied] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const date = formatDate(prompt.created_at_epoch);
 
-  const level = showProcessingTime ?? 0;
-	  const processingInfo = (level > 0 && prompt.completed_at_epoch)
-    ? (() => {
-        const thinkMs = prompt.think_time_ms ?? 0;
-        const aiMs = prompt.completed_at_epoch - prompt.created_at_epoch;
-        const completedDate = formatDate(prompt.completed_at_epoch);
-        // AI processing time
-        const aiMins = Math.floor(aiMs / 60000);
-        const aiSecs = Math.round((aiMs % 60000) / 1000);
-        const aiStr = aiMins > 0 ? `A${aiMins}m${aiSecs}s` : `A${aiSecs}s`;
-        // Human think time
-        const hMins = thinkMs > 0 ? Math.floor(thinkMs / 60000) : 0;
-        const hSecs = thinkMs > 0 ? Math.round((thinkMs % 60000) / 1000) : 0;
-        const hStr = level >= 2 && (hMins > 0 || hSecs > 0) ? `H${hMins}m${hSecs}s` : '';
-        return { completedDate, aiStr, hStr };
-      })()
-    : null;
+	    const ptDisplay = (prompt as any).processing_time_display as string | null | undefined;
 
   const handleDelete = async () => {
     if (deleting) return;
@@ -116,11 +99,11 @@ export function PromptCard({ prompt, onDeleted, showProcessingTime }: PromptCard
       <div className="card-meta prompt-meta">
         <span className="meta-date">
           #{prompt.id} • {date}
-          {processingInfo ? (
-            <span className="meta-processing-time" title={`${processingInfo.completedDate}`}>
-              {' · '}⏱ {processingInfo.hStr && `${processingInfo.hStr} + `}{processingInfo.aiStr}
+          {(ptDisplay && ptDisplay !== 'cancelled') ? (
+            <span className="meta-processing-time">
+              {' · '}⏱ {ptDisplay}
             </span>
-          ) : (level > 0 && !prompt.completed_at_epoch) ? (
+           ) : (ptDisplay === 'cancelled') ? (
             <span className="meta-processing-time meta-cancelled"> · {t('prompt.cancelled')}</span>
           ) : null}
           {(prompt.user_label || prompt.user_name) && (
