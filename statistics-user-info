@@ -153,10 +153,9 @@ if [[ -z "$PROJ_ORDER" ]]; then
   echo "  (无数据)"
 else
   # 构建 TSV → column 自动对齐
-  TABLE_TSV=$'项目\t#任务\t完成\tAI耗时\tH耗时\t合计\t占比\t平均/任务\n'
+  TABLE_TSV=$'#任务\t完成\tAI耗时\tH耗时\t合计\t占比\t平均/任务\t项目\n'
   while IFS= read -r proj; do
     [[ -z "$proj" ]] && continue
-    # 从 PROJ_DATA 取该项目的聚合值
     row=$(grep -F "${proj}"$'\t' <<<"$PROJ_DATA" || true)
     cnt=$(echo "$row" | cut -f2); done_cnt=$(echo "$row" | cut -f3)
     ai=$(echo "$row" | cut -f4); h=$(echo "$row" | cut -f5)
@@ -164,7 +163,7 @@ else
     tt=$((ai + h))
     (( TOTAL_TIME > 0 )) && pct="$((tt * 100 / TOTAL_TIME))%" || pct="-"
     if (( done_cnt > 0 )); then avg="$(fmt_dur $(( tt / done_cnt )))"; else avg="-"; fi
-    TABLE_TSV+="${proj}\t${cnt}\t${done_cnt}\t$(fmt_dur $ai)\t$(fmt_dur $h)\t$(fmt_dur $tt)\t${pct}\t${avg}"$'\n'
+    TABLE_TSV+="${cnt}\t${done_cnt}\t$(fmt_dur $ai)\t$(fmt_dur $h)\t$(fmt_dur $tt)\t${pct}\t${avg}\t${proj}"$'\n'
   done <<<"$PROJ_SORTED"
   echo -e "$TABLE_TSV" | column -t -s $'\t' | sed '2,$s/^/  /'
 fi
