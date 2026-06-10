@@ -23,12 +23,6 @@ fmt_dur() {  # ms → 中文耗时
   else printf '%ds' "$s"
   fi
 }
-fmt_pct() {  # part total → " 12%"
-  local part=$1 total=$2
-  if (( total <= 0 )); then printf '   -'; else printf '%3d%%' "$((part * 100 / total))"; fi
-}
-rpad() { printf "%-${2}s" "$1"; }
-lpad() { printf "%${2}s" "$1"; }
 
 # ── CLI 解析 ───────────────────────────────────────────────────────────────
 NAME=""; DAYS=1; HELP=false
@@ -138,22 +132,17 @@ echo "═══ 按项目 ═══"
 if [[ -z "$PROJ_ORDER" ]]; then
   echo "  (无数据)"
 else
-  printf "%-62s %6s %5s %11s %10s %11s %4s %11s\n" \
-    "项目" "#任务" "完成" "AI耗时" "H耗时" "合计" "占比" "平均/任务"
-  printf '%*s\n' 120 '' | tr ' ' '─'
-
+  # 构建 TSV → column 自动对齐
+  TABLE_TSV=$'项目\t#任务\t完成\tAI耗时\tH耗时\t合计\t占比\t平均/任务\n'
   while IFS= read -r proj; do
     cnt=${P_CNT[$proj]:-0}; done_cnt=${P_DONE[$proj]:-0}
     ai=${P_AI[$proj]:-0}; h=${P_H[$proj]:-0}
     tt=$((ai + h))
-    pct=$(fmt_pct $tt $TOTAL_TIME)
-    if (( done_cnt > 0 )); then avg=$(fmt_dur $(( tt / done_cnt ))); else avg="-"; fi
-    # 截断过长项目名
-    pname="$proj"
-    ((${#pname} > 60)) && pname="${pname:0:58}.."
-    printf "%-62s %6s %5s %11s %10s %11s %4s %11s\n" \
-      "$pname" "$cnt" "$done_cnt" "$(fmt_dur $ai)" "$(fmt_dur $h)" "$(fmt_dur $tt)" "$pct" "$avg"
+    (( TOTAL_TIME > 0 )) && pct="$((tt * 100 / TOTAL_TIME))%" || pct="-"
+    if (( done_cnt > 0 )); then avg="$(fmt_dur $(( tt / done_cnt )))"; else avg="-"; fi
+    TABLE_TSV+="${proj}\t${cnt}\t${done_cnt}\t$(fmt_dur $ai)\t$(fmt_dur $h)\t$(fmt_dur $tt)\t${pct}\t${avg}"$'\n'
   done <<<"$PROJ_SORTED"
+  echo -e "$TABLE_TSV" | column -t -s $'\t' | sed '2,$s/^/  /'
 fi
 
 echo '────────────────────────────────────────────────────────────'
