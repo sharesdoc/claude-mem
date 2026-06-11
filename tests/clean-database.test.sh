@@ -72,12 +72,43 @@ test_x002() {
   assert "chroma kill pattern scoped to this DATA_DIR" in_script 'chroma-mcp.*'
 }
 
+# ── X-003 端口解析：env > worker.pid > settings.json > uid 默认 ──
+shown_port() { # shown_port <DATA_DIR> [env_port]  → -s 输出中的 worker 端口
+  local dir="$1" envp="${2:-}"
+  if [[ -n "$envp" ]]; then
+    CLAUDE_MEM_DATA_DIR="$dir" CLAUDE_MEM_WORKER_PORT="$envp" "$SCRIPT" -s 2>/dev/null
+  else
+    env -u CLAUDE_MEM_WORKER_PORT CLAUDE_MEM_DATA_DIR="$dir" "$SCRIPT" -s 2>/dev/null
+  fi | sed -n 's/.*port \([0-9][0-9]*\).*/\1/p' | head -1
+}
+
+test_x003() {
+  echo "X-003 worker port resolution sources"
+  local dir
+  dir="$(make_sandbox x003)"
+
+  printf '{\n  "pid": 99999,\n  "port": 39998\n}\n' > "$dir/worker.pid"
+  assert "worker.pid port honored (39998)" test "$(shown_port "$dir")" = "39998"
+
+  rm -f "$dir/worker.pid"
+  printf '{ "CLAUDE_MEM_WORKER_PORT": "39997" }\n' > "$dir/settings.json"
+  assert "settings.json port honored (39997)" test "$(shown_port "$dir")" = "39997"
+
+  printf '{\n  "pid": 99999,\n  "port": 39998\n}\n' > "$dir/worker.pid"
+  assert "env beats pid file and settings (39996)" test "$(shown_port "$dir" 39996)" = "39996"
+
+  rm -f "$dir/worker.pid" "$dir/settings.json"
+  assert "uid default when no source ($((37700 + $(id -u) % 100)))" \
+    test "$(shown_port "$dir")" = "$((37700 + $(id -u) % 100))"
+}
+
 # ── 运行器 ──────────────────────────────────────────────────────
 run_all=true
 for t in "$@"; do run_all=false; "test_$t"; done
 if $run_all; then
   test_x001
   test_x002
+  test_x003
 fi
 
 echo ""

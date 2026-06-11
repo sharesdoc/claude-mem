@@ -20,7 +20,24 @@ DB="$DATA_DIR/claude-mem.db"
 CHROMA_DB="$DATA_DIR/chroma/chroma.sqlite3"
 BACKUP_DIR="$DATA_DIR/backups"
 WORKER_SCRIPT="$SCRIPT_DIR/plugin/scripts/worker-service.cjs"
-WORKER_PORT="${CLAUDE_MEM_WORKER_PORT:-$((37700 + $(id -u) % 100))}"
+
+# Worker port: env > worker.pid (live record) > settings.json > uid default (X-003)
+resolve_worker_port() {
+  if [[ -n "${CLAUDE_MEM_WORKER_PORT:-}" ]]; then
+    printf "%s" "$CLAUDE_MEM_WORKER_PORT"; return
+  fi
+  local p=""
+  if [[ -f "$DATA_DIR/worker.pid" ]]; then
+    p=$(sed -n 's/.*"port"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$DATA_DIR/worker.pid" | head -1)
+    if [[ -n "$p" ]]; then printf "%s" "$p"; return; fi
+  fi
+  if [[ -f "$DATA_DIR/settings.json" ]]; then
+    p=$(sed -n 's/.*"CLAUDE_MEM_WORKER_PORT"[[:space:]]*:[[:space:]]*"\{0,1\}\([0-9][0-9]*\)"\{0,1\}.*/\1/p' "$DATA_DIR/settings.json" | head -1)
+    if [[ -n "$p" ]]; then printf "%s" "$p"; return; fi
+  fi
+  printf "%s" "$((37700 + $(id -u) % 100))"
+}
+WORKER_PORT="$(resolve_worker_port)"
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
 BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
