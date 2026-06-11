@@ -30,29 +30,39 @@ export interface GracefulShutdownConfig {
 export async function performGracefulShutdown(config: GracefulShutdownConfig): Promise<void> {
   logger.info('SYSTEM', 'Shutdown initiated');
 
+  // Each teardown step is isolated (X-004): a throw in any earlier step used
+  // to abort the whole chain, skipping ChromaMcpManager.stop() — which
+  // orphaned the uvx/python chroma subprocess tree on every restart because
+  // chroma-mcp does not exit on stdin EOF.
+  const step = async (name: string, action: () => unknown): Promise<void> => {
+    try {
+      await action();
+      logger.info('SHUTDOWN', `${name}: done`);
+    } catch (error) {
+      logger.error('SHUTDOWN', `${name}: failed (continuing teardown)`, {},
+        error instanceof Error ? error : new Error(String(error)));
+    }
+  };
+
   if (config.server) {
-    await closeHttpServer(config.server);
-    logger.info('SYSTEM', 'HTTP server closed');
+    await step('HTTP server close', () => closeHttpServer(config.server!));
   }
 
-  await config.sessionManager.shutdownAll();
+  await step('Session manager shutdown', () => config.sessionManager.shutdownAll());
 
   if (config.mcpClient) {
-    await config.mcpClient.close();
-    logger.info('SYSTEM', 'MCP client closed');
+    await step('MCP client close', () => config.mcpClient!.close());
   }
 
   if (config.chromaMcpManager) {
-    logger.info('SHUTDOWN', 'Stopping Chroma MCP connection...');
-    await config.chromaMcpManager.stop();
-    logger.info('SHUTDOWN', 'Chroma MCP connection stopped');
+    await step('Chroma MCP stop', () => config.chromaMcpManager!.stop());
   }
 
   if (config.dbManager) {
-    await config.dbManager.close();
+    await step('Database close', () => config.dbManager!.close());
   }
 
-  await getSupervisor().stop();
+  await step('Supervisor stop', () => getSupervisor().stop());
 
   logger.info('SYSTEM', 'Worker shutdown complete');
 }

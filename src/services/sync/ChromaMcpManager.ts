@@ -101,6 +101,12 @@ export class ChromaMcpManager {
     // orphans behind.
     await this.disposeCurrentSubprocess();
 
+    // Orphan sweep (X-004): reclaim chroma-mcp trees left behind by dead
+    // workers. chroma-mcp does not exit on stdin EOF, so any worker death
+    // that skipped tree-kill (crash, SIGKILL, aborted shutdown) re-parents
+    // the uvx/python pair to init where it accumulates forever.
+    await ChromaMcpManager.sweepOrphanedChroma();
+
     const commandArgs = this.buildCommandArgs();
     const spawnEnvironment = this.getSpawnEnv();
     getSupervisor().assertCanSpawn('chroma mcp');
@@ -526,6 +532,49 @@ export class ChromaMcpManager {
         pid,
         error: error instanceof Error ? error.message : String(error)
       });
+    }
+  }
+
+  /**
+   * Orphan sweep (X-004): SIGKILL chroma-mcp processes that point at THIS
+   * instance's --data-dir but are not descendants of the current worker.
+   * Their owning worker is gone (or they leaked from an aborted shutdown),
+   * so nothing will ever reap them otherwise. Scoping by the exact data-dir
+   * keeps other profiles' chroma processes untouched (multi-account).
+   * POSIX-only — on Windows the tracked PID is torn down via taskkill /T
+   * and orphaned trees do not occur in the same shape. Best-effort.
+   */
+  private static async sweepOrphanedChroma(): Promise<void> {
+    if (process.platform === 'win32') {
+      return;
+    }
+    const dataDir = DEFAULT_CHROMA_DATA_DIR.replace(/\\/g, '/');
+    let stdout = '';
+    try {
+      ({ stdout } = await execFileAsync('pgrep', ['-f', `chroma-mcp.*--data-dir ${dataDir}`], { timeout: 2_000 }));
+    } catch {
+      return; // pgrep exits 1 when nothing matches — no orphans.
+    }
+
+    const ownDescendants = new Set(await ChromaMcpManager.collectDescendantPids(process.pid));
+    const orphanPids = stdout
+      .split('\n')
+      .map(line => Number.parseInt(line.trim(), 10))
+      .filter(pid => Number.isFinite(pid) && pid > 0 && pid !== process.pid && !ownDescendants.has(pid));
+
+    if (orphanPids.length === 0) {
+      return;
+    }
+
+    logger.info('CHROMA_MCP', `Sweeping ${orphanPids.length} orphaned chroma-mcp process(es)`, {
+      pids: orphanPids.slice(0, 20)
+    });
+    for (const pid of orphanPids) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {
+        // Already dead — fine.
+      }
     }
   }
 
