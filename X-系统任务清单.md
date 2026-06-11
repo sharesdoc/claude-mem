@@ -77,11 +77,21 @@
 
 - 编号：X-004
 - 任务类型：缺陷
-- 严重程度：P2
-- 状态：新建
+- 严重程度：P1（升级：复现确认每次重启必泄漏，且泄漏速率高——6/10 单日 52 个）
+- 状态：已验证-关闭
 - 来源：fix（X-002 验证过程中发现）
 - 所属计划项：无（独立 fix）
-- 任务描述：现象——`pgrep -f "chroma-mcp.*~/.claude-mem/chroma"` 命中约 310 个进程（uvx 包装进程 + python chroma-mcp 成对累积，最早 pid 1046 起），说明 worker 历次重启未回收旧 Chroma MCP 子进程。影响范围——内存/进程表资源持续占用；与本批次修复无关，按"一问题一提交"纪律单独登记不顺手修。
-- 涉及文件与行号：疑似 `src/services/worker/ChromaMcpManager`（worker 停止时未终止子进程），待根因调查确认
+- 任务描述：现象——本机累积 310+ chroma-mcp 进程（uvx 包装 + python 成对，全部 PPID=1 孤儿化，6/6~6/11 每日新增）。复现——执行 `bun worker-service.cjs restart`，旧 worker 的 chroma uvx(94241) 重启后存活且 PPID 变为 1，进程数 310→312。影响范围——内存/进程表资源随重启次数无限增长。
+- 涉及文件与行号：`src/services/infrastructure/GracefulShutdown.ts:30-58`（关停链）、`src/services/server/flushResponseThen.ts:8-13`（吞错退出）、`src/services/sync/ChromaMcpManager.ts`（缺孤儿清扫）
 - 关联需求：N/A
-- 验收/测试方法：(1) 重启 worker 数次后 `pgrep -fc chroma-mcp` 不随重启次数增长；(2) worker stop 后本 profile 无残留 chroma-mcp 进程
+- 根因分析（5-Why）：
+  - Why-1 每次重启旧 chroma 树孤儿化 → 复现实验：restart 后 uvx 94241 存活、PPID→1
+  - Why-2 关停时 ChromaMcpManager.stop() 未被执行 → 日志止于 "Shutdown initiated"（GracefulShutdown.ts:31），后续"HTTP server closed"等全部缺失，而 claude SDK 子进程因管道 EOF 自行退出、chroma-mcp 不响应 stdin EOF 故存活
+  - Why-3 关停链无步骤级容错 → performGracefulShutdown（GracefulShutdown.ts:33-55）顺序 await，任一前序步骤（closeHttpServer/shutdownAll/mcpClient.close）抛错即中断剩余 teardown
+  - Why-4 异常被静默吞掉、无任何日志 → flushResponseThen.ts:8-13 的 try/finally 无 catch，finally 直接 process.exit(0)
+  - 根因：关停链缺乏步骤级隔离 + 异常静默退出，chroma 树杀步骤被跳过；且 chroma-mcp 不随父进程死亡退出，无兜底清扫机制
+- 实现/解决方案：(1) GracefulShutdown 每步独立 try/catch，单步失败不中断后续 teardown 并记录错误；(2) flushResponseThen 增加 catch 记录异常后再退出；(3) ChromaMcpManager 新增孤儿清扫 sweepOrphanedChroma()——每次 spawn 前按 `chroma-mcp.*--data-dir <本实例目录>` 匹配并 SIGKILL 非本进程后代的残留（兼治 SIGKILL/崩溃等硬死亡场景，并自动清理历史积累）。
+- 验收/测试方法：(1) 重启 worker 后旧 chroma uvx/python 对全部退出；(2) 触发 chroma 使用后历史 312 个孤儿被清扫归零；(3) 连续重启 2 次 `pgrep -fc chroma-mcp` 稳定为当前实例的 2 个；(4) 边界：多 profile 下清扫模式含本实例 data-dir，不误杀其他 profile。
+- git commit ID：abbd03fc
+- 验证方法与结果：实机验证——修复上线后日志捕获到根因异常 `[SHUTDOWN] HTTP server close: failed (continuing teardown) Server is not running`（此前被静默吞掉），后续 Session manager/MCP client/Chroma MCP stop/Database/Supervisor 五步全部 done；新 worker 启动即 `Sweeping 312 orphaned chroma-mcp process(es)` 清空历史积累；再次 restart 旧对 91805/91807 被回收，全机 chroma 进程稳定为当前实例的 2 个。其余 claude-mem 进程核查无泄漏（mcp-server.cjs×3 均有存活 claude 会话父进程，属会话级正常进程；worker 单实例）。
+- 关闭时间：2026-06-12 03:08
