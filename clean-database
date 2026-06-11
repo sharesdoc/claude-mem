@@ -1,18 +1,24 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# clean-database — 清理 claude-mem 数据库中的孤立记录并重建 Chroma 向量库
+# clean-database — claude-mem 按用户的数据清理 / 统计 / 备份工具
 #
 # Usage:
-#   ./clean-database           Interactive mode (shows report, asks confirmation)
-#   ./clean-database -y        Non-interactive (skip confirmation)
-#   ./clean-database -n        Dry-run (report only, no changes)
-#   ./clean-database -h        Show help
+#   ./clean-database                 Show help
+#   ./clean-database -h              Show help
+#   ./clean-database -l              List all user names
+#   ./clean-database -s              Show statistics & status per user
+#   ./clean-database --backup        Backup ALL users (full DB copy)
+#   ./clean-database -b -n <user>    Backup ONE user (everything of the user)
+#   ./clean-database -n <user>       Clean ONE user (everything of the user)
+#   ./clean-database --all-users     Clean ALL users, all info
+#   ./clean-database -y ...          Skip confirmation for clean operations
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 DATA_DIR="${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}"
 DB="$DATA_DIR/claude-mem.db"
 CHROMA_DB="$DATA_DIR/chroma/chroma.sqlite3"
+BACKUP_DIR="$DATA_DIR/backups"
 WORKER_SCRIPT="$SCRIPT_DIR/plugin/scripts/worker-service.cjs"
 WORKER_PORT="${CLAUDE_MEM_WORKER_PORT:-$((37700 + $(id -u) % 100))}"
 
@@ -27,52 +33,67 @@ info() { printf "  ${DIM}→${RESET} %s\n" "$1"; }
 # ── Help ─────────────────────────────────────────────────────────────
 show_help() {
   cat <<EOF
-clean-database — clean orphaned records from claude-mem database & rebuild Chroma
+clean-database — claude-mem per-user data cleanup / statistics / backup tool
 
 ${BOLD}Usage:${RESET}
-  ./clean-database            Show integrity report, then ask for confirmation
-  ./clean-database -y         Skip confirmation — execute cleanup immediately
-  ./clean-database -n         Dry-run — show report only, make no changes
-  ./clean-database -h         Show this help
+  ./clean-database                 Show this help
+  ./clean-database -h, --help      Show this help
+  ./clean-database -l              List all user names
+  ./clean-database -s              Show statistics & status for each user
+  ./clean-database --backup        Backup ALL users' info (full DB copy)
+  ./clean-database -b -n <user>    Backup the user's info (everything of the user)
+  ./clean-database -n <user>       Clean the user's info (everything of the user)
+  ./clean-database --all-users     Clean ALL users' all info
+  ./clean-database -y ...          Skip confirmation (for clean operations)
 
-${BOLD}What gets cleaned:${RESET}
-  • observations          Rows whose memory_session_id doesn't exist in sdk_sessions
-  • session_summaries     Same criterion
-  • Chroma vector DB      Rebuilt from scratch (stale embeddings removed)
-
-${BOLD}What is NOT affected:${RESET}
-  • sdk_sessions          Never touched
-  • user_prompts          Never touched
-  • settings.json         Never touched
+${BOLD}Per-user data covers:${RESET}
+  • sdk_sessions / observations / session_summaries     (by user_label)
+  • weekly_reports / sync_inbox                          (by user_label)
+  • user_prompts / pending_messages                      (via the user's sessions)
 
 ${BOLD}Safety:${RESET}
-  • Worker is stopped before any changes
-  • Integrity report is shown before any deletion
-  • FK is enforced (PRAGMA foreign_keys = ON) during deletion
-  • FTS indexes are auto-cleaned via triggers
-  • Chroma is rebuilt from valid data after cleanup
-  • Worker is restarted after cleanup
+  • Clean operations require typing "yes" (unless -y)
+  • A full DB backup is taken automatically before any clean
+  • Worker is stopped before / restarted after a clean
+  • Chroma vector DB is removed and rebuilt on worker restart
+  • Backups are plain SQLite files: ${DIM}$BACKUP_DIR/${RESET}
 
-${BOLD}Examples:${RESET}
-  ./clean-database           # Interactive
-  ./clean-database -n        # Just see what would be cleaned
-  ./clean-database -y        # Run without prompts
+${BOLD}Restore a backup:${RESET}
+  cp <backup-file> "$DB"   ${DIM}(stop worker first)${RESET}
 
 ${BOLD}Database:${RESET}  $DB
-${BOLD}Chroma:${RESET}     $CHROMA_DB
 EOF
 }
 
 # ── Parse flags ──────────────────────────────────────────────────────
 AUTO_YES=false
-DRY_RUN=false
+DO_BACKUP=false
+DO_BACKUP_ALL=false
+DO_CLEAN_ALL=false
+DO_STATS=false
+DO_LIST=false
+TARGET_USER=""
+
+if [[ $# -eq 0 ]]; then
+  show_help
+  exit 0
+fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -y|--yes)   AUTO_YES=true; shift ;;
-    -n|--dry-run) DRY_RUN=true; shift ;;
-    -h|--help)  show_help; exit 0 ;;
-    *)          fail "Unknown flag: $1"; show_help; exit 1 ;;
+    -h|--help)    show_help; exit 0 ;;
+    -y|--yes)     AUTO_YES=true; shift ;;
+    -b)           DO_BACKUP=true; shift ;;
+    --backup)     DO_BACKUP_ALL=true; shift ;;
+    --all-users)  DO_CLEAN_ALL=true; shift ;;
+    -s)           DO_STATS=true; shift ;;
+    -l)           DO_LIST=true; shift ;;
+    -n)
+      if [[ $# -lt 2 || -z "${2:-}" ]]; then
+        fail "-n requires a username"; exit 1
+      fi
+      TARGET_USER="$2"; shift 2 ;;
+    *)            fail "Unknown flag: $1"; echo ""; show_help; exit 1 ;;
   esac
 done
 
@@ -87,19 +108,50 @@ if ! command -v sqlite3 &>/dev/null; then
   exit 1
 fi
 
+# Escape a value for embedding inside SQL single quotes
+sql_quote() { printf "%s" "${1//\'/\'\'}"; }
+
+# All distinct user labels across user-owning tables
+list_users() {
+  sqlite3 "$DB" "
+    SELECT DISTINCT user_label FROM (
+      SELECT user_label FROM sdk_sessions
+      UNION SELECT user_label FROM observations
+      UNION SELECT user_label FROM session_summaries
+      UNION SELECT user_label FROM weekly_reports
+      UNION SELECT user_label FROM sync_inbox
+    ) WHERE user_label IS NOT NULL AND user_label != ''
+    ORDER BY user_label;
+  "
+}
+
+user_exists() {
+  local u; u="$(sql_quote "$1")"
+  [[ "$(sqlite3 "$DB" "
+    SELECT COUNT(*) FROM (
+      SELECT user_label FROM sdk_sessions   WHERE user_label = '$u'
+      UNION ALL SELECT user_label FROM observations      WHERE user_label = '$u'
+      UNION ALL SELECT user_label FROM session_summaries WHERE user_label = '$u'
+      UNION ALL SELECT user_label FROM weekly_reports    WHERE user_label = '$u'
+      UNION ALL SELECT user_label FROM sync_inbox        WHERE user_label = '$u'
+    );")" -gt 0 ]]
+}
+
 # ── Worker helpers ───────────────────────────────────────────────────
 worker_is_running() {
   curl -sf "http://127.0.0.1:${WORKER_PORT}/api/health" -o /dev/null --connect-timeout 1 --max-time 2 2>/dev/null
 }
 
+WORKER_WAS_RUNNING=false
+
 stop_worker() {
   if worker_is_running; then
+    WORKER_WAS_RUNNING=true
     info "Stopping worker on port ${WORKER_PORT}..."
     if [[ -f "$WORKER_SCRIPT" ]]; then
       cd "$SCRIPT_DIR" && bun "$WORKER_SCRIPT" stop 2>/dev/null || true
     fi
     sleep 2
-    # Wait for port release
     local waited=0
     while worker_is_running; do
       sleep 1
@@ -118,7 +170,8 @@ stop_worker() {
 }
 
 start_worker() {
-  if [[ -f "$WORKER_SCRIPT" ]]; then
+  # Only restart what we stopped — never spawn a worker that wasn't running
+  if [[ "$WORKER_WAS_RUNNING" == "true" && -f "$WORKER_SCRIPT" ]]; then
     info "Starting worker..."
     cd "$SCRIPT_DIR" && bun "$WORKER_SCRIPT" start 2>/dev/null || true
     sleep 2
@@ -157,202 +210,161 @@ stop_chroma() {
   fi
 }
 
-# ── Integrity report ─────────────────────────────────────────────────
-show_report() {
-  echo ""
-  printf "  ${BOLD}%s${RESET}\n" "========== Integrity Report =========="
-  echo ""
-
-  local total_obs orphan_obs orphan_obs_ids total_sums orphan_sums orphan_sum_ids
-  total_obs=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations;")
-  orphan_obs=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations o LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id WHERE s.memory_session_id IS NULL;")
-  orphan_obs_ids=$(sqlite3 "$DB" "SELECT COUNT(DISTINCT o.memory_session_id) FROM observations o LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id WHERE s.memory_session_id IS NULL;")
-  total_sums=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries;")
-  orphan_sums=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries ss LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id WHERE s.memory_session_id IS NULL;")
-  orphan_sum_ids=$(sqlite3 "$DB" "SELECT COUNT(DISTINCT ss.memory_session_id) FROM session_summaries ss LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id WHERE s.memory_session_id IS NULL;")
-
-  local total_sessions
-  total_sessions=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sdk_sessions;")
-
-  local chroma_emb=0 chroma_size="N/A"
-  if [[ -f "$CHROMA_DB" ]]; then
-    chroma_emb=$(sqlite3 "$CHROMA_DB" "SELECT COUNT(*) FROM embeddings;" 2>/dev/null || echo 0)
-    chroma_size=$(ls -lh "$CHROMA_DB" | awk '{print $5}')
-  fi
-
-  printf "  ${BOLD}Main Database:${RESET} %s\n" "$(ls -lh "$DB" | awk '{print $5}')"
-  printf "  %-30s %6s total, ${RED}%6s orphan${RESET} (%s unique IDs)\n" \
-    "observations" "$total_obs" "$orphan_obs" "$orphan_obs_ids"
-  printf "  %-30s %6s total, ${RED}%6s orphan${RESET} (%s unique IDs)\n" \
-    "session_summaries" "$total_sums" "$orphan_sums" "$orphan_sum_ids"
-  printf "  %-30s %6s (all valid)\n" "sdk_sessions" "$total_sessions"
-
-  echo ""
-  printf "  ${BOLD}Chroma Vector DB:${RESET} %s\n" "$chroma_size"
-  if [[ "$chroma_emb" -gt 0 ]]; then
-    local chroma_ok chroma_orphan chroma_zombie
-    chroma_ok=$(sqlite3 "$CHROMA_DB" \
-      "ATTACH '$DB' AS cm; SELECT COUNT(*) FROM embedding_metadata em WHERE em.key='memory_session_id' AND em.string_value IN (SELECT memory_session_id FROM cm.sdk_sessions WHERE memory_session_id IS NOT NULL);" 2>/dev/null || echo 0)
-    chroma_orphan=$(sqlite3 "$CHROMA_DB" \
-      "ATTACH '$DB' AS cm; SELECT COUNT(*) FROM embedding_metadata em WHERE em.key='memory_session_id' AND em.string_value IN (SELECT o.memory_session_id FROM cm.observations o LEFT JOIN cm.sdk_sessions s ON s.memory_session_id = o.memory_session_id WHERE s.memory_session_id IS NULL);" 2>/dev/null || echo 0)
-    printf "  %-30s %6s total, ${GREEN}%6s valid${RESET}, ${RED}%6s stale${RESET}\n" \
-      "embeddings" "$chroma_emb" "$chroma_ok" "$((chroma_emb - chroma_ok))"
-  fi
-
-  echo ""
-
-  # Show affected query paths
-  printf "  ${BOLD}Affected query paths:${RESET}\n"
-  printf "  ${DIM}• Search (SessionSearch) — orphans appear in search results${RESET}\n"
-  printf "  ${DIM}• Viewer feed (PaginationHelper) — orphans appear with NULL session${RESET}\n"
-  printf "  ${DIM}• Context injection (ObservationCompiler) — orphans may be injected${RESET}\n"
-  printf "  ${DIM}• Stats page (DataRoutes) — orphans inflate counts${RESET}\n"
-  printf "  ${DIM}• Chroma vector search — stale embeddings degrade results${RESET}\n"
-
-  echo ""
+# Rebuild external-content FTS5 indexes so deleted rows' tokens are dropped
+rebuild_fts() {
+  local dbfile="$1"
+  sqlite3 "$dbfile" "
+    INSERT INTO observations_fts(observations_fts)           VALUES('rebuild');
+    INSERT INTO session_summaries_fts(session_summaries_fts) VALUES('rebuild');
+    INSERT INTO user_prompts_fts(user_prompts_fts)           VALUES('rebuild');
+  "
 }
 
-# ── Clean main database ──────────────────────────────────────────────
-clean_main_db() {
-  echo ""
-  printf "  ${BOLD}%s${RESET}\n" "========== Cleaning Main Database =========="
-  echo ""
-
-  # Count before
-  local before_obs before_sums
-  before_obs=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations;")
-  before_sums=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries;")
-
-  info "Enabling foreign keys..."
-  sqlite3 "$DB" "PRAGMA foreign_keys = ON;"
-
-  info "Deleting orphaned observations..."
-  sqlite3 "$DB" "
-    PRAGMA foreign_keys = ON;
-    DELETE FROM observations
-    WHERE memory_session_id NOT IN (
-      SELECT memory_session_id FROM sdk_sessions WHERE memory_session_id IS NOT NULL
-    );
-  "
-  local deleted_obs=$((before_obs - $(sqlite3 "$DB" "SELECT COUNT(*) FROM observations;")))
-  ok "Deleted $deleted_obs orphaned observations"
-
-  info "Deleting orphaned session_summaries..."
-  sqlite3 "$DB" "
-    PRAGMA foreign_keys = ON;
-    DELETE FROM session_summaries
-    WHERE memory_session_id NOT IN (
-      SELECT memory_session_id FROM sdk_sessions WHERE memory_session_id IS NOT NULL
-    );
-  "
-  local deleted_sums=$((before_sums - $(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries;")))
-  ok "Deleted $deleted_sums orphaned session_summaries"
-
-  # Verify
-  local after_orphan_obs after_orphan_sums
-  after_orphan_obs=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations o LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id WHERE s.memory_session_id IS NULL;")
-  after_orphan_sums=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries ss LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id WHERE s.memory_session_id IS NULL;")
-
-  if [[ "$after_orphan_obs" -eq 0 && "$after_orphan_sums" -eq 0 ]]; then
-    ok "Verification passed — 0 orphaned records remaining"
-  else
-    fail "Verification failed — remaining orphans: obs=$after_orphan_obs, summaries=$after_orphan_sums"
-    return 1
-  fi
-
-  # Vacuum to reclaim space
-  info "Vacuuming database..."
-  local before_size=$(ls -lh "$DB" | awk '{print $5}')
-  sqlite3 "$DB" "PRAGMA foreign_keys = ON; VACUUM;"
-  local after_size=$(ls -lh "$DB" | awk '{print $5}')
-  ok "Vacuum complete: ${before_size} → ${after_size}"
-
-  echo ""
-}
-
-# ── Rebuild Chroma ───────────────────────────────────────────────────
+# Remove Chroma DB so the worker rebuilds embeddings from remaining data
 rebuild_chroma() {
-  echo ""
-  printf "  ${BOLD}%s${RESET}\n" "========== Rebuilding Chroma =========="
-  echo ""
-
   if [[ ! -f "$CHROMA_DB" ]]; then
     info "Chroma database not found — will be created on worker restart"
     return 0
   fi
-
-  local before_size=$(ls -lh "$CHROMA_DB" | awk '{print $5}')
-  local before_emb=$(sqlite3 "$CHROMA_DB" "SELECT COUNT(*) FROM embeddings;" 2>/dev/null || echo 0)
-
+  local before_size
+  before_size=$(ls -lh "$CHROMA_DB" | awk '{print $5}')
   stop_chroma
-
   info "Removing Chroma database..."
-  rm -f "$CHROMA_DB"
-  # Also remove WAL/SHM files
-  rm -f "$CHROMA_DB-wal" "$CHROMA_DB-shm"
-  ok "Chroma database removed (was: $before_size, $before_emb embeddings)"
-
-  echo ""
-  info "Chroma will be rebuilt on worker restart via backfillAllProjects()"
-  info "This syncs all valid observations/summaries/prompts to vector DB"
-  echo ""
+  rm -f "$CHROMA_DB" "$CHROMA_DB-wal" "$CHROMA_DB-shm"
+  ok "Chroma database removed (was: $before_size) — rebuilt on worker restart"
 }
 
-# ── Verify after cleanup ─────────────────────────────────────────────
-verify_cleanup() {
+# ── List users (-l) ──────────────────────────────────────────────────
+cmd_list() {
+  local users
+  users="$(list_users)"
+  if [[ -z "$users" ]]; then
+    info "No users found in $DB"
+    return 0
+  fi
+  echo "$users"
+}
+
+# ── Statistics & status (-s) ─────────────────────────────────────────
+cmd_stats() {
   echo ""
-  printf "  ${BOLD}%s${RESET}\n" "========== Post-Cleanup Verification =========="
+  printf "  ${BOLD}%s${RESET}\n" "========== Per-User Statistics =========="
   echo ""
 
-  local obs total_sums orphan_obs orphan_sums
-  obs=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations;")
-  total_sums=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries;")
-  orphan_obs=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations o LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id WHERE s.memory_session_id IS NULL;")
-  orphan_sums=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries ss LEFT JOIN sdk_sessions s ON s.memory_session_id = ss.memory_session_id WHERE s.memory_session_id IS NULL;")
+  {
+    echo "User|Sessions|Prompts|Observations|Summaries|WeeklyReports|FirstActivity|LastActivity"
+    local u uq
+    while IFS= read -r u; do
+      [[ -z "$u" ]] && continue
+      uq="$(sql_quote "$u")"
+      sqlite3 -separator '|' "$DB" "
+        SELECT
+          '$uq',
+          (SELECT COUNT(*) FROM sdk_sessions WHERE user_label = '$uq'),
+          (SELECT COUNT(*) FROM user_prompts up
+             WHERE up.content_session_id IN
+               (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq')),
+          (SELECT COUNT(*) FROM observations WHERE user_label = '$uq'),
+          (SELECT COUNT(*) FROM session_summaries WHERE user_label = '$uq'),
+          (SELECT COUNT(*) FROM weekly_reports WHERE user_label = '$uq'),
+          COALESCE((SELECT MIN(date(started_at)) FROM sdk_sessions WHERE user_label = '$uq'), '-'),
+          COALESCE((SELECT MAX(date(started_at)) FROM sdk_sessions WHERE user_label = '$uq'), '-');
+      "
+    done < <(list_users)
+  } | column -t -s '|' | sed 's/^/  /'
 
-  local db_size=$(ls -lh "$DB" | awk '{print $5}')
-
-  printf "  %-30s %6s (orphan: %s)\n" "observations" "$obs" "$orphan_obs"
-  printf "  %-30s %6s (orphan: %s)\n" "session_summaries" "$total_sums" "$orphan_sums"
-  printf "  %-30s %6s\n" "Database size" "$db_size"
-
+  echo ""
+  printf "  ${BOLD}%s${RESET}\n" "========== Status =========="
+  echo ""
+  printf "  %-22s %s\n" "Database" "$DB ($(ls -lh "$DB" | awk '{print $5}'))"
   if [[ -f "$CHROMA_DB" ]]; then
-    local chroma_emb=$(sqlite3 "$CHROMA_DB" "SELECT COUNT(*) FROM embeddings;" 2>/dev/null || echo "?")
-    printf "  %-30s %6s\n" "Chroma embeddings" "$chroma_emb"
+    local emb
+    emb=$(sqlite3 "$CHROMA_DB" "SELECT COUNT(*) FROM embeddings;" 2>/dev/null || echo "?")
+    printf "  %-22s %s\n" "Chroma" "$CHROMA_DB ($(ls -lh "$CHROMA_DB" | awk '{print $5}'), $emb embeddings)"
   else
-    printf "  %-30s (will be created on restart)\n" "Chroma"
+    printf "  %-22s %s\n" "Chroma" "(not present)"
   fi
-
+  if worker_is_running; then
+    printf "  %-22s ${GREEN}%s${RESET}\n" "Worker" "running on port $WORKER_PORT"
+  else
+    printf "  %-22s ${YELLOW}%s${RESET}\n" "Worker" "not running (port $WORKER_PORT)"
+  fi
+  if [[ -d "$BACKUP_DIR" ]]; then
+    printf "  %-22s %s\n" "Backups" "$(ls "$BACKUP_DIR" 2>/dev/null | wc -l | tr -d ' ') file(s) in $BACKUP_DIR"
+  else
+    printf "  %-22s %s\n" "Backups" "(none yet — $BACKUP_DIR)"
+  fi
   echo ""
-
-  if [[ "$orphan_obs" -eq 0 && "$orphan_sums" -eq 0 ]]; then
-    ok "All checks passed — database is clean"
-  else
-    fail "Orphaned records remain — manual investigation needed"
-    return 1
-  fi
 }
 
-# ── Main ─────────────────────────────────────────────────────────────
+# ── Backup all users (--backup) ──────────────────────────────────────
+# Online-safe full copy via sqlite3 .backup. Returns path on stdout.
+backup_full() {
+  mkdir -p "$BACKUP_DIR"
+  local ts out
+  ts=$(date +%Y%m%d-%H%M%S)
+  out="$BACKUP_DIR/claude-mem-all-$ts.db"
+  sqlite3 "$DB" ".backup '$out'"
+  printf "%s" "$out"
+}
 
-echo ""
-printf "${BOLD}claude-mem Database Cleanup${RESET}\n"
-printf "Database: ${DIM}%s${RESET}\n" "$DB"
-printf "Mode: ${YELLOW}%s${RESET}\n" "$([[ "$DRY_RUN" == "true" ]] && echo 'DRY-RUN (no changes)' || echo 'LIVE')"
-echo ""
-
-# Show report always
-show_report
-
-if [[ "$DRY_RUN" == "true" ]]; then
-  info "Dry-run complete — no changes made."
+cmd_backup_all() {
   echo ""
-  exit 0
-fi
+  info "Backing up ALL users (full database copy)..."
+  local out
+  out="$(backup_full)"
+  ok "Backup written: $out ($(ls -lh "$out" | awk '{print $5}'))"
+  echo ""
+}
 
-# Confirmation
-if [[ "$AUTO_YES" != "true" ]]; then
-  printf "${YELLOW}Proceed with cleanup? This is IRREVERSIBLE.${RESET}\n"
+# ── Backup one user (-b -n <user>) ───────────────────────────────────
+# Full .backup copy, then strip every other user's rows in the copy and
+# VACUUM — yields a schema-complete claude-mem.db holding only this user.
+cmd_backup_user() {
+  local user="$1" uq
+  uq="$(sql_quote "$user")"
+  echo ""
+  info "Backing up user '${user}' (everything of the user)..."
+
+  mkdir -p "$BACKUP_DIR"
+  local ts out safe_name
+  ts=$(date +%Y%m%d-%H%M%S)
+  safe_name=$(printf "%s" "$user" | tr -c 'A-Za-z0-9._-' '_')
+  out="$BACKUP_DIR/claude-mem-user-$safe_name-$ts.db"
+
+  sqlite3 "$DB" ".backup '$out'"
+
+  sqlite3 "$out" "
+    PRAGMA foreign_keys = OFF;
+    DELETE FROM user_prompts WHERE content_session_id NOT IN
+      (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');
+    DELETE FROM pending_messages WHERE content_session_id NOT IN
+      (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');
+    DELETE FROM observations      WHERE user_label IS NOT '$uq';
+    DELETE FROM session_summaries WHERE user_label IS NOT '$uq';
+    DELETE FROM weekly_reports    WHERE user_label IS NOT '$uq';
+    DELETE FROM sync_inbox        WHERE user_label IS NOT '$uq';
+    DELETE FROM sdk_sessions      WHERE user_label IS NOT '$uq';
+  "
+  rebuild_fts "$out"
+  sqlite3 "$out" "VACUUM;"
+
+  local sessions obs sums prompts
+  sessions=$(sqlite3 "$out" "SELECT COUNT(*) FROM sdk_sessions;")
+  prompts=$(sqlite3 "$out" "SELECT COUNT(*) FROM user_prompts;")
+  obs=$(sqlite3 "$out" "SELECT COUNT(*) FROM observations;")
+  sums=$(sqlite3 "$out" "SELECT COUNT(*) FROM session_summaries;")
+  ok "Backup written: $out ($(ls -lh "$out" | awk '{print $5}'))"
+  info "Contains: $sessions sessions, $prompts prompts, $obs observations, $sums summaries"
+  echo ""
+}
+
+# ── Confirmation prompt ──────────────────────────────────────────────
+confirm_or_abort() {
+  if [[ "$AUTO_YES" == "true" ]]; then
+    return 0
+  fi
+  printf "${YELLOW}Proceed with cleanup? This is IRREVERSIBLE (a backup is taken first).${RESET}\n"
   printf "Type ${BOLD}yes${RESET} to confirm: "
   read -r CONFIRM
   if [[ "$CONFIRM" != "yes" ]]; then
@@ -360,21 +372,180 @@ if [[ "$AUTO_YES" != "true" ]]; then
     echo ""
     exit 0
   fi
+}
+
+# ── Clean one user (-n <user>) ───────────────────────────────────────
+cmd_clean_user() {
+  local user="$1" uq
+  uq="$(sql_quote "$user")"
+
+  echo ""
+  printf "  ${BOLD}%s${RESET}\n" "========== Clean User: $user =========="
+  echo ""
+
+  local sessions prompts pending obs sums weekly inbox
+  sessions=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sdk_sessions WHERE user_label = '$uq';")
+  prompts=$(sqlite3 "$DB" "SELECT COUNT(*) FROM user_prompts WHERE content_session_id IN (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');")
+  pending=$(sqlite3 "$DB" "SELECT COUNT(*) FROM pending_messages WHERE content_session_id IN (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');")
+  obs=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations WHERE user_label = '$uq';")
+  sums=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries WHERE user_label = '$uq';")
+  weekly=$(sqlite3 "$DB" "SELECT COUNT(*) FROM weekly_reports WHERE user_label = '$uq';")
+  inbox=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sync_inbox WHERE user_label = '$uq';")
+
+  printf "  Will delete: %s sessions, %s prompts, %s pending_messages,\n" "$sessions" "$prompts" "$pending"
+  printf "               %s observations, %s summaries, %s weekly_reports, %s sync_inbox rows\n" "$obs" "$sums" "$weekly" "$inbox"
+  echo ""
+
+  confirm_or_abort
+
+  local bk
+  bk="$(backup_full)"
+  ok "Safety backup: $bk"
+
+  stop_worker
+
+  info "Deleting user '${user}' data..."
+  sqlite3 "$DB" "
+    PRAGMA foreign_keys = ON;
+    DELETE FROM user_prompts WHERE content_session_id IN
+      (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');
+    DELETE FROM pending_messages WHERE content_session_id IN
+      (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');
+    DELETE FROM observations      WHERE user_label = '$uq';
+    DELETE FROM session_summaries WHERE user_label = '$uq';
+    DELETE FROM weekly_reports    WHERE user_label = '$uq';
+    DELETE FROM sync_inbox        WHERE user_label = '$uq';
+    DELETE FROM sdk_sessions      WHERE user_label = '$uq';
+  "
+
+  local remain
+  remain=$(sqlite3 "$DB" "
+    SELECT (SELECT COUNT(*) FROM sdk_sessions      WHERE user_label = '$uq')
+         + (SELECT COUNT(*) FROM observations      WHERE user_label = '$uq')
+         + (SELECT COUNT(*) FROM session_summaries WHERE user_label = '$uq')
+         + (SELECT COUNT(*) FROM weekly_reports    WHERE user_label = '$uq')
+         + (SELECT COUNT(*) FROM sync_inbox        WHERE user_label = '$uq');")
+  if [[ "$remain" -eq 0 ]]; then
+    ok "All data of user '${user}' deleted"
+  else
+    fail "Verification failed — $remain rows of user '${user}' remain"
+    start_worker
+    return 1
+  fi
+
+  info "Rebuilding FTS indexes & vacuuming database..."
+  rebuild_fts "$DB"
+  sqlite3 "$DB" "VACUUM;"
+  ok "Vacuum complete ($(ls -lh "$DB" | awk '{print $5}'))"
+
+  rebuild_chroma
+  start_worker
+
+  echo ""
+  ok "Clean complete for user '${user}'"
+  echo ""
+}
+
+# ── Clean all users (--all-users) ────────────────────────────────────
+cmd_clean_all() {
+  echo ""
+  printf "  ${BOLD}%s${RESET}\n" "========== Clean ALL Users =========="
+  echo ""
+
+  local sessions prompts pending obs sums weekly inbox
+  sessions=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sdk_sessions;")
+  prompts=$(sqlite3 "$DB" "SELECT COUNT(*) FROM user_prompts;")
+  pending=$(sqlite3 "$DB" "SELECT COUNT(*) FROM pending_messages;")
+  obs=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations;")
+  sums=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries;")
+  weekly=$(sqlite3 "$DB" "SELECT COUNT(*) FROM weekly_reports;")
+  inbox=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sync_inbox;")
+
+  printf "  Users: %s\n" "$(list_users | tr '\n' ' ')"
+  printf "  Will delete: %s sessions, %s prompts, %s pending_messages,\n" "$sessions" "$prompts" "$pending"
+  printf "               %s observations, %s summaries, %s weekly_reports, %s sync_inbox rows\n" "$obs" "$sums" "$weekly" "$inbox"
+  echo ""
+
+  confirm_or_abort
+
+  local bk
+  bk="$(backup_full)"
+  ok "Safety backup: $bk"
+
+  stop_worker
+
+  info "Deleting ALL users' data..."
+  sqlite3 "$DB" "
+    PRAGMA foreign_keys = ON;
+    DELETE FROM user_prompts;
+    DELETE FROM pending_messages;
+    DELETE FROM observations;
+    DELETE FROM session_summaries;
+    DELETE FROM weekly_reports;
+    DELETE FROM sync_inbox;
+    DELETE FROM sdk_sessions;
+  "
+
+  local remain
+  remain=$(sqlite3 "$DB" "
+    SELECT (SELECT COUNT(*) FROM sdk_sessions)
+         + (SELECT COUNT(*) FROM user_prompts)
+         + (SELECT COUNT(*) FROM pending_messages)
+         + (SELECT COUNT(*) FROM observations)
+         + (SELECT COUNT(*) FROM session_summaries)
+         + (SELECT COUNT(*) FROM weekly_reports)
+         + (SELECT COUNT(*) FROM sync_inbox);")
+  if [[ "$remain" -eq 0 ]]; then
+    ok "All user data deleted"
+  else
+    fail "Verification failed — $remain rows remain"
+    start_worker
+    return 1
+  fi
+
+  info "Rebuilding FTS indexes & vacuuming database..."
+  rebuild_fts "$DB"
+  sqlite3 "$DB" "VACUUM;"
+  ok "Vacuum complete ($(ls -lh "$DB" | awk '{print $5}'))"
+
+  rebuild_chroma
+  start_worker
+
+  echo ""
+  ok "Clean complete — all users' data removed"
+  echo ""
+}
+
+# ── Dispatch ─────────────────────────────────────────────────────────
+
+# Validate flag combinations
+if [[ "$DO_CLEAN_ALL" == "true" && ( -n "$TARGET_USER" || "$DO_BACKUP" == "true" || "$DO_BACKUP_ALL" == "true" ) ]]; then
+  fail "--all-users cannot be combined with -n / -b / --backup"
+  exit 1
+fi
+if [[ "$DO_BACKUP" == "true" && -z "$TARGET_USER" ]]; then
+  # bare -b behaves like --backup (backup everything)
+  DO_BACKUP_ALL=true
+  DO_BACKUP=false
 fi
 
-# Execute
-stop_worker
-clean_main_db
-rebuild_chroma
-start_worker
+if [[ -n "$TARGET_USER" ]]; then
+  if ! user_exists "$TARGET_USER"; then
+    fail "User not found: $TARGET_USER"
+    info "Known users:"
+    list_users | sed 's/^/      /'
+    exit 1
+  fi
+fi
 
-# Give worker a moment to start Chroma backfill
-echo ""
-info "Waiting for worker to initialize Chroma backfill..."
-sleep 5
+if [[ "$DO_LIST" == "true" ]]; then cmd_list; fi
+if [[ "$DO_STATS" == "true" ]]; then cmd_stats; fi
+if [[ "$DO_BACKUP_ALL" == "true" ]]; then cmd_backup_all; fi
 
-verify_cleanup
+if [[ "$DO_BACKUP" == "true" && -n "$TARGET_USER" ]]; then
+  cmd_backup_user "$TARGET_USER"
+elif [[ -n "$TARGET_USER" ]]; then
+  cmd_clean_user "$TARGET_USER"
+fi
 
-echo ""
-ok "Cleanup complete"
-echo ""
+if [[ "$DO_CLEAN_ALL" == "true" ]]; then cmd_clean_all; fi
