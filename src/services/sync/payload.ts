@@ -192,7 +192,7 @@ export function collectIncremental(
     schema_version: 1,
     user_label: userLabel,
     generated_at_epoch: now(),
-    think_time_cap_minutes: parseInt(process.env.CLAUDE_MEM_THINK_TIME_CAP_MINUTES ?? '3', 10) || 0,
+    think_time_cap_minutes: parseInt(process.env.CLAUDE_MEM_THINK_TIME_CAP_MINUTES ?? '0', 10) || 0,
     sessions: allSessions,
     observations,
     summaries,

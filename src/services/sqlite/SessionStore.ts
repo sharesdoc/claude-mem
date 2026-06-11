@@ -315,7 +315,7 @@ export class SessionStore {
    *
    * User thinking/editing time between tasks. Gap between previous prompt's
    * completion and this prompt's creation is "think time". Capped at
-   * CLAUDE_MEM_THINK_TIME_CAP_MINUTES (default 3 min). 0 = disabled.
+   * CLAUDE_MEM_THINK_TIME_CAP_MINUTES (default 0 = disabled).
    */
   private ensureThinkTimeColumn(): void {
     const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(41) as SchemaVersion | undefined;
