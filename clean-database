@@ -405,8 +405,11 @@ cmd_clean_user() {
   stop_worker
 
   info "Deleting user '${user}' data..."
+  # Atomic: wait up to 5s on a busy DB, all-or-nothing via BEGIN IMMEDIATE (X-001)
   sqlite3 "$DB" "
+    PRAGMA busy_timeout = 5000;
     PRAGMA foreign_keys = ON;
+    BEGIN IMMEDIATE;
     DELETE FROM user_prompts WHERE content_session_id IN
       (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');
     DELETE FROM pending_messages WHERE content_session_id IN
@@ -416,6 +419,7 @@ cmd_clean_user() {
     DELETE FROM weekly_reports    WHERE user_label = '$uq';
     DELETE FROM sync_inbox        WHERE user_label = '$uq';
     DELETE FROM sdk_sessions      WHERE user_label = '$uq';
+    COMMIT;
   "
 
   local remain
@@ -475,8 +479,11 @@ cmd_clean_all() {
   stop_worker
 
   info "Deleting ALL users' data..."
+  # Atomic: wait up to 5s on a busy DB, all-or-nothing via BEGIN IMMEDIATE (X-001)
   sqlite3 "$DB" "
+    PRAGMA busy_timeout = 5000;
     PRAGMA foreign_keys = ON;
+    BEGIN IMMEDIATE;
     DELETE FROM user_prompts;
     DELETE FROM pending_messages;
     DELETE FROM observations;
@@ -484,6 +491,7 @@ cmd_clean_all() {
     DELETE FROM weekly_reports;
     DELETE FROM sync_inbox;
     DELETE FROM sdk_sessions;
+    COMMIT;
   "
 
   local remain
