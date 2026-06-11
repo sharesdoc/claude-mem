@@ -144,6 +144,20 @@ worker_is_running() {
 
 WORKER_WAS_RUNNING=false
 
+# Kill only THIS instance's worker: pid from $DATA_DIR/worker.pid, falling
+# back to whatever listens on our resolved port — never a global pkill (X-002)
+force_kill_worker() {
+  local wpid=""
+  if [[ -f "$DATA_DIR/worker.pid" ]]; then
+    wpid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$DATA_DIR/worker.pid" | head -1)
+  fi
+  if [[ -n "$wpid" ]] && kill -0 "$wpid" 2>/dev/null; then
+    kill -9 "$wpid" 2>/dev/null || true
+  else
+    lsof -ti tcp:"$WORKER_PORT" -sTCP:LISTEN 2>/dev/null | xargs kill -9 2>/dev/null || true
+  fi
+}
+
 stop_worker() {
   if worker_is_running; then
     WORKER_WAS_RUNNING=true
@@ -158,7 +172,7 @@ stop_worker() {
       waited=$((waited + 1))
       if [[ $waited -ge 15 ]]; then
         warn "Worker did not stop gracefully — force killing"
-        pkill -f "worker-service.cjs" 2>/dev/null || true
+        force_kill_worker
         sleep 2
         break
       fi
@@ -184,14 +198,17 @@ start_worker() {
 }
 
 # ── Chroma helpers ───────────────────────────────────────────────────
+# Match only THIS instance's chroma-mcp via its --data-dir argument (X-002)
+CHROMA_PROC_PATTERN="chroma-mcp.*$DATA_DIR/chroma"
+
 chroma_running() {
-  pgrep -f "chroma-mcp" &>/dev/null
+  pgrep -f "$CHROMA_PROC_PATTERN" &>/dev/null
 }
 
 stop_chroma() {
   if chroma_running; then
     info "Stopping Chroma MCP processes..."
-    pkill -f "chroma-mcp" 2>/dev/null || true
+    pkill -f "$CHROMA_PROC_PATTERN" 2>/dev/null || true
     sleep 2
     local waited=0
     while chroma_running; do
@@ -199,7 +216,7 @@ stop_chroma() {
       waited=$((waited + 1))
       if [[ $waited -ge 10 ]]; then
         warn "Chroma did not stop — force killing"
-        pkill -9 -f "chroma-mcp" 2>/dev/null || true
+        pkill -9 -f "$CHROMA_PROC_PATTERN" 2>/dev/null || true
         sleep 1
         break
       fi

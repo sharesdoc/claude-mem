@@ -59,11 +59,25 @@ test_x001() {
   assert "delete block is wrapped in a transaction" grep -q "BEGIN IMMEDIATE" "$SCRIPT"
 }
 
+# ── X-002 进程操作实例定界：不得全局 pkill 误杀其他 profile ─────
+in_script()     { grep -qF -- "$1" "$SCRIPT"; }
+not_in_script() { ! grep -qF -- "$1" "$SCRIPT"; }
+
+test_x002() {
+  echo "X-002 instance-scoped process kill (no global pkill)"
+  assert "no global pkill on worker-service.cjs" not_in_script 'pkill -f "worker-service.cjs"'
+  assert "no global pkill on bare chroma-mcp"    not_in_script '-f "chroma-mcp"'
+  assert "worker force-kill targets pid from worker.pid" in_script 'worker.pid'
+  assert "port-scoped lsof fallback exists"      in_script 'lsof -ti tcp'
+  assert "chroma kill pattern scoped to this DATA_DIR" in_script 'chroma-mcp.*'
+}
+
 # ── 运行器 ──────────────────────────────────────────────────────
 run_all=true
 for t in "$@"; do run_all=false; "test_$t"; done
 if $run_all; then
   test_x001
+  test_x002
 fi
 
 echo ""
