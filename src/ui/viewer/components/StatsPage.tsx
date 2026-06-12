@@ -499,9 +499,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     finally { markBusy(user, false); }
   }, [loadDailyOverview, markBusy]);
 
-  // 日报表只在 All-Projects 页(非 history)展示;进入时拉取一次状态总览。
+  // 日报表只在「当日(Today)」scope 展示;进入该 scope 时拉取一次状态总览。
   useEffect(() => {
-    if (scope === 'history') return;
+    if (scope !== 'day') return;
     void loadDailyOverview();
   }, [scope, loadDailyOverview]);
 
@@ -819,8 +819,8 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
             </div>
           )}
 
-          {/* 日报 — 每个用户一行;操作=生成/重新生成/删除/下载;链接→新页显示最近两天日报 */}
-          {isAllProjects && userSummary.length > 0 && (
+          {/* 日报 — 仅在「当日(Today)」scope 显示;每个用户一行;操作=生成/重新生成/删除/下载;链接→新页显示最近两天日报 */}
+          {scope === 'day' && isAllProjects && userSummary.length > 0 && (
             <div className="stats-section">
               <div className="stats-section-title">{t('stats.dailyReports')}</div>
               <div className="stats-user-table-wrap">
