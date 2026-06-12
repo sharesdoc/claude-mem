@@ -42,7 +42,9 @@ export class ReportRoutes extends BaseRouteHandler {
 
   setupRoutes(app: express.Application): void {
     app.get('/api/reports/list', this.handleList.bind(this));
+    app.get('/api/reports/overview', this.handleOverview.bind(this));
     app.post('/api/reports/generate', this.handleGenerate.bind(this));
+    app.post('/api/reports/delete', this.handleDelete.bind(this));
     app.get('/api/reports/download', this.handleDownload.bind(this));
     app.get('/report', this.handleReportPage.bind(this));
   }
@@ -97,6 +99,46 @@ export class ReportRoutes extends BaseRouteHandler {
         stats: r.stats ? JSON.parse(r.stats) : null,
       })),
     });
+  });
+
+  // ── GET /api/reports/overview ──────────────────────────────────────
+  // 每个用户的周报状态(最近周 + 本周是否已生成),供统计页「周报」表。
+  private handleOverview = this.wrapHandler((req: Request, res: Response): void => {
+    if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
+    const tzOffsetMs = this.tzOffsetMs(req);
+    const week = weekMondayOf(Date.now(), tzOffsetMs);          // 本周一(本地日期)
+    const weekEnd = this.fmtYMD(new Date(`${week}T00:00:00Z`).getTime() + 6 * 86400000);
+
+    const rows = this.dbManager.getConnection().prepare(`
+      SELECT user_label,
+             MAX(week_start) AS latest_week,
+             MAX(CASE WHEN week_start = ? THEN 1 ELSE 0 END) AS has_current
+      FROM weekly_reports GROUP BY user_label
+    `).all(week) as Array<{ user_label: string; latest_week: string; has_current: number }>;
+
+    const users: Record<string, { latest_week: string; has_current: boolean }> = {};
+    for (const r of rows) users[r.user_label] = { latest_week: r.latest_week, has_current: !!r.has_current };
+    res.json({ week, week_end: weekEnd, users });
+  });
+
+  /** YYYY-MM-DD (UTC) from an epoch — used to derive week_end deterministically. */
+  private fmtYMD(epochMs: number): string {
+    const d = new Date(epochMs);
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+  }
+
+  // ── POST /api/reports/delete ───────────────────────────────────────
+  private handleDelete = this.wrapHandler((req: Request, res: Response): void => {
+    if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
+    const body = (req.body ?? {}) as { user?: string; week?: string };
+    const user = (body.user ?? '').trim();
+    const week = (body.week ?? '').trim();
+    if (!user || !week || !WEEK_RE.test(week)) { this.badRequest(res, 'missing/invalid user or week'); return; }
+    const info = this.dbManager.getConnection().prepare(
+      'DELETE FROM weekly_reports WHERE user_label = ? COLLATE NOCASE AND week_start = ?',
+    ).run(user, week);
+    logger.info('WORKER', 'Weekly report deleted', { user, week, changes: info.changes });
+    res.json({ ok: true, deleted: info.changes });
   });
 
   // ── POST /api/reports/generate ─────────────────────────────────────

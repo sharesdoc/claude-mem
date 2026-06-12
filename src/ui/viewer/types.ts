@@ -216,3 +216,12 @@ export interface DailyReportOverview {
   /** 每个 user_label 的日报状态。无日报的用户不在此映射内。 */
   users: Record<string, { latest_date: string; has_today: boolean; has_yesterday: boolean }>;
 }
+
+/** 周报状态总览(GET /api/reports/overview 返回)。 */
+export interface WeeklyReportOverview {
+  /** 本周一与本周日(本地日期 YYYY-MM-DD)。 */
+  week: string;
+  week_end: string;
+  /** 每个 user_label 的周报状态。无周报的用户不在此映射内。 */
+  users: Record<string, { latest_week: string; has_current: boolean }>;
+}

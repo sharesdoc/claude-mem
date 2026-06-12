@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AnalyticsResponse, WeeklyReportItem, DailyReportOverview } from '../types';
+import { AnalyticsResponse, WeeklyReportItem, DailyReportOverview, WeeklyReportOverview } from '../types';
 import { useLocale } from '../hooks/useLocale';
 import { authFetch } from '../utils/api';
 
@@ -270,6 +270,11 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   // click 张三 生成 then immediately 李四 生成; each request is independent.
   const [dailyBusyUsers, setDailyBusyUsers] = useState<Set<string>>(new Set());
 
+  // ── Weekly reports (周报 table on the Week stats page) ────────────
+  // Same shape/UX as the daily table, but for the current week per user.
+  const [weeklyOverview, setWeeklyOverview] = useState<WeeklyReportOverview | null>(null);
+  const [weeklyBusyUsers, setWeeklyBusyUsers] = useState<Set<string>>(new Set());
+
   // scope: GLOBAL time range — drives EVERY section on the page. Persisted.
   const [scope, setScope] = useState<Scope>(() => {
     try {
@@ -504,6 +509,56 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     if (scope !== 'day') return;
     void loadDailyOverview();
   }, [scope, loadDailyOverview]);
+
+  // ── 周报:状态总览 + 生成/删除(供 Week scope「周报」表) ─────────
+  const loadWeeklyOverview = useCallback(async () => {
+    try {
+      const tz = -new Date().getTimezoneOffset();
+      const resp = await authFetch('/api/reports/overview?tz=' + tz);
+      if (resp.ok) setWeeklyOverview(await resp.json() as WeeklyReportOverview);
+    } catch { /* 保持旧值;失败不阻塞页面 */ }
+  }, []);
+
+  const markWeeklyBusy = useCallback((user: string, busy: boolean) => {
+    setWeeklyBusyUsers(prev => {
+      const next = new Set(prev);
+      if (busy) next.add(user); else next.delete(user);
+      return next;
+    });
+  }, []);
+
+  const generateWeekly = useCallback(async (user: string, week: string) => {
+    markWeeklyBusy(user, true);
+    try {
+      const tz = -new Date().getTimezoneOffset();
+      await authFetch('/api/reports/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, week, tz }),
+      });
+      await loadWeeklyOverview();
+    } catch { /* surfaced via unchanged status */ }
+    finally { markWeeklyBusy(user, false); }
+  }, [loadWeeklyOverview, markWeeklyBusy]);
+
+  const deleteWeekly = useCallback(async (user: string, week: string) => {
+    markWeeklyBusy(user, true);
+    try {
+      await authFetch('/api/reports/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, week }),
+      });
+      await loadWeeklyOverview();
+    } catch { /* surfaced via unchanged status */ }
+    finally { markWeeklyBusy(user, false); }
+  }, [loadWeeklyOverview, markWeeklyBusy]);
+
+  // 周报表只在「本周(Week)」scope 展示;进入该 scope 时拉取一次状态总览。
+  useEffect(() => {
+    if (scope !== 'week') return;
+    void loadWeeklyOverview();
+  }, [scope, loadWeeklyOverview]);
 
   const svgPadding = { top: 16, right: 8, bottom: 32, left: 42 };
   const svgW = chartWidth;
@@ -876,6 +931,75 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                               className={viewable ? 'stats-tab is-active' : 'stats-tab'}
                               disabled={busy}
                               onClick={() => window.open(urlOf('/daily-report'), '_blank')}>
+                              {t('stats.dailyView')}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* 周报 — 仅在「本周(Week)」scope 显示;每用户一行(仅当前周);格式同日报表 */}
+          {scope === 'week' && isAllProjects && userSummary.length > 0 && (
+            <div className="stats-section">
+              <div className="stats-section-title">{t('stats.weeklyReports')}</div>
+              <div className="stats-user-table-wrap">
+                <table className="stats-user-table">
+                  <thead><tr>
+                    <th>{t('stats.dailyDate')}</th>
+                    <th>{t('stats.user')}</th>
+                    <th>{t('stats.dailyActions')}</th>
+                    <th>{t('stats.dailyLink')}</th>
+                  </tr></thead>
+                  <tbody>
+                    {userSummary.map(row => {
+                      const u = row.user_label;
+                      const week = weeklyOverview?.week ?? '';
+                      const weekEnd = weeklyOverview?.week_end ?? '';
+                      const st = weeklyOverview?.users?.[u];
+                      const hasCurrent = !!st?.has_current;
+                      // View 高亮的前提:该用户有可看的周报(本周或更早一周)。
+                      const viewable = !!st;
+                      const busy = weeklyBusyUsers.has(u);
+                      const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
+                      const urlOf = (path: string) => {
+                        const q = new URLSearchParams({ user: u, week });
+                        if (tokenQ) q.set('token', tokenQ);
+                        return `${path}?${q.toString()}`;
+                      };
+                      return (
+                        <tr key={u}>
+                          <td>{week ? `${week} ~ ${weekEnd}` : ''}</td>
+                          <td>{u}</td>
+                          <td>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              <button type="button" className="stats-tab is-active" disabled={busy}
+                                onClick={() => void generateWeekly(u, week)}>
+                                {hasCurrent ? t('stats.dailyRegenerate') : t('stats.dailyGenerate')}
+                              </button>
+                              {hasCurrent && (
+                                <button type="button" className="stats-tab" disabled={busy}
+                                  onClick={() => { if (window.confirm(t('stats.weeklyConfirmDelete'))) void deleteWeekly(u, week); }}>
+                                  {t('stats.dailyDelete')}
+                                </button>
+                              )}
+                              {hasCurrent && (
+                                <button type="button" className="stats-tab" disabled={busy}
+                                  onClick={() => window.open(urlOf('/api/reports/download'), '_blank')}>
+                                  {t('stats.downloadReport')}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <button type="button"
+                              className={viewable ? 'stats-tab is-active' : 'stats-tab'}
+                              disabled={busy}
+                              onClick={() => window.open(urlOf('/report'), '_blank')}>
                               {t('stats.dailyView')}
                             </button>
                           </td>
