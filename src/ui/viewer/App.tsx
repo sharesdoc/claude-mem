@@ -20,6 +20,7 @@ import { useAuth } from './hooks/useAuth';
 import { LoginPage } from './components/LoginPage';
 import { Observation, Summary, UserPrompt } from './types';
 import { mergeAndDeduplicateByProject } from './utils/data';
+import { authFetch } from './utils/api';
 
 const VIEW_MODE_KEY = 'claude-mem.viewMode';
 
@@ -132,7 +133,7 @@ export function App() {
     });
     if (userLabelFilter) params.append('userLabel', userLabelFilter);
     const url = `/api/projects/stats?${params}`;
-    fetch(url, { signal: controller.signal })
+    authFetch(url, { signal: controller.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((body: { projects?: Record<string, ProjectStat> }) => {
         setDayStats(body.projects ?? {});

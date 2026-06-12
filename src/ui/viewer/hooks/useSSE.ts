@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Observation, Summary, UserPrompt, StreamEvent } from '../types';
 import { API_ENDPOINTS } from '../constants/api';
 import { TIMING } from '../constants/timing';
+import { TOKEN_KEY } from './useAuth';
+import { authFetch } from '../utils/api';
 
 export interface ProjectStat {
   observations: number;
@@ -65,7 +67,7 @@ export function useSSE() {
   // incremental bumpStat never drifts far from the DB truth.
   const fetchProjectStats = async () => {
     try {
-      const r = await fetch('/api/projects/stats');
+      const r = await authFetch('/api/projects/stats');
       if (!r.ok) return;
       const body = (await r.json()) as {
         projects?: Record<string, ProjectStat>;
@@ -105,7 +107,18 @@ export function useSSE() {
         eventSourceRef.current.close();
       }
 
-      const eventSource = new EventSource(API_ENDPOINTS.STREAM);
+      // EventSource cannot send an Authorization header, so the admin token
+      // (server-mode login / local auto-login) rides along as a query
+      // parameter (X-006). Read on every connect so the reconnect loop picks
+      // up the token right after login without a page reload.
+      let token: string | null = null;
+      try {
+        token = localStorage.getItem(TOKEN_KEY);
+      } catch { /* unauthenticated */ }
+      const streamUrl = token
+        ? `${API_ENDPOINTS.STREAM}?token=${encodeURIComponent(token)}`
+        : API_ENDPOINTS.STREAM;
+      const eventSource = new EventSource(streamUrl);
       eventSourceRef.current = eventSource;
 
       eventSource.onopen = () => {

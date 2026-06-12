@@ -4,6 +4,7 @@ import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { resolveUserLabel } from '../../../../shared/user-label.js';
+import { isLoopbackRequest } from '../middleware.js';
 
 /**
  * Display-only refinement of `role` (see endpoint docs below).
@@ -66,16 +67,21 @@ export class AdminRoutes extends BaseRouteHandler {
     app.get('/api/admin/role', this.handleGetRole.bind(this));
   }
 
-  private handleGetRole = this.wrapHandler(async (_req: Request, res: Response): Promise<void> => {
+  private handleGetRole = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const settingsPath = this.settingsPathResolver();
     const settings = SettingsDefaultsManager.loadFromFile(settingsPath);
     const raw = (settings.CLAUDE_MEM_NODE_ROLE ?? 'client').trim().toLowerCase();
     const role: 'client' | 'server' = raw === 'server' ? 'server' : 'client';
 
+    // Public endpoint (the viewer needs the role to decide whether to show
+    // the login page), but identity stays behind auth: only a caller the
+    // gate authenticated — or a loopback origin — sees userLabel (X-006).
+    const revealIdentity = Boolean(res.locals.authVia) || isLoopbackRequest(req);
+
     res.json({
       role,
       deployment: resolveDeployment(settingsPath),
-      userLabel: resolveUserLabel(settingsPath),
+      userLabel: revealIdentity ? resolveUserLabel(settingsPath) : null,
     });
   });
 }

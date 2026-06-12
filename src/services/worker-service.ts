@@ -102,6 +102,7 @@ import { CorpusRoutes } from './worker/http/routes/CorpusRoutes.js';
 import { ChromaRoutes } from './worker/http/routes/ChromaRoutes.js';
 import { AdminRoutes } from './worker/http/routes/AdminRoutes.js';
 import { AuthRoutes } from './worker/http/routes/AuthRoutes.js';
+import { serverApiGate } from './worker/http/middleware/serverApiGate.js';
 import { AdminSessionStore } from './worker/http/AdminSessionStore.js';
 
 import { CorpusStore } from './worker/knowledge/CorpusStore.js';
@@ -274,6 +275,19 @@ export class WorkerService implements WorkerRef {
   }
 
   private registerRoutes(): void {
+    // Single admin-session registry shared by the API gate, AuthRoutes
+    // (mints sessions on login) and DataRoutes (verifies before writes).
+    const isServerMode = resolveBindAddress().role === 'server';
+    const adminSessions = new AdminSessionStore();
+    const statsSettings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const serverAccessToken = (statsSettings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim();
+
+    // X-006: server mode is default-deny — mounted before every route below
+    // so no endpoint is reachable without loopback origin, the shared access
+    // token, or an admin session (public login shell excepted).
+    if (isServerMode) {
+      this.server.app.use(serverApiGate(adminSessions, serverAccessToken));
+    }
 
     this.server.registerRoutes(new ChromaRoutes());
     this.server.registerRoutes(new AdminRoutes());
@@ -317,16 +331,11 @@ export class WorkerService implements WorkerRef {
     attachIngestGeneratorStarter((sessionDbId, source) =>
       sessionRoutes.ensureGeneratorRunning(sessionDbId, source),
     );
-    // Single admin-session registry shared by AuthRoutes (mints sessions on
-    // login) and DataRoutes (verifies them before destructive writes). In
-    // server mode, destructive DataRoutes endpoints require a valid admin
+    // In server mode, destructive DataRoutes endpoints require a valid admin
     // token; in client/standalone mode there is no login so the flag is false
     // and those endpoints stay open (loopback-only by CORS anyway).
-    const isServerMode = resolveBindAddress().role === 'server';
-    const adminSessions = new AdminSessionStore();
-    const statsSettings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-    this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime, adminSessions, isServerMode, (statsSettings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim()));
-    this.server.registerRoutes(new ReportRoutes(this.dbManager, isServerMode, (statsSettings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim(), isServerMode ? adminSessions : undefined));
+    this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime, adminSessions, isServerMode, serverAccessToken));
+    this.server.registerRoutes(new ReportRoutes(this.dbManager, isServerMode, serverAccessToken, isServerMode ? adminSessions : undefined));
     this.server.registerRoutes(new SettingsRoutes(this.settingsManager));
     this.server.registerRoutes(new LogsRoutes());
     this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem'));

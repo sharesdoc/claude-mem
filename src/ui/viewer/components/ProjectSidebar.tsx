@@ -3,6 +3,7 @@ import { Observation, Summary, UserPrompt } from '../types';
 import { useLocale } from '../hooks/useLocale';
 import { API_ENDPOINTS } from '../constants/api';
 import { parseProjectId } from '../utils/projectAlias';
+import { authFetch } from '../utils/api';
 
 interface ProjectSidebarProps {
   projects: string[];
@@ -406,7 +407,7 @@ export function ProjectSidebar({
 
     setDeleting(true);
     try {
-      const response = await fetch(API_ENDPOINTS.PROJECTS_DELETE, {
+      const response = await authFetch(API_ENDPOINTS.PROJECTS_DELETE, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ projects: sanitized }),
