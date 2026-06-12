@@ -207,3 +207,12 @@ export interface WeeklyReportItem {
     obs: number; summaries: number; sessions: number;
   } | null;
 }
+
+/** 日报状态总览(GET /api/daily-reports/overview 返回)。 */
+export interface DailyReportOverview {
+  /** 服务端按提交时区算出的「今天」「昨天」本地日期 YYYY-MM-DD。 */
+  today: string;
+  yesterday: string;
+  /** 每个 user_label 的日报状态。无日报的用户不在此映射内。 */
+  users: Record<string, { latest_date: string; has_today: boolean; has_yesterday: boolean }>;
+}

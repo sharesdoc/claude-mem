@@ -109,6 +109,7 @@ export class SessionStore {
     this.ensurePromptCompletedAtColumn();
     this.ensureThinkTimeColumn();
     this.ensureWeeklyReportsTable();
+    this.ensureDailyReportsTable();
   }
 
   /**
@@ -360,6 +361,39 @@ export class SessionStore {
     this.db.run('CREATE INDEX IF NOT EXISTS idx_weekly_reports_user_week_desc ON weekly_reports(user_label, week_start DESC)');
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(42, new Date().toISOString());
+  }
+
+  /**
+   * v43 — daily_reports table (日报).
+   *
+   * Stores one generated daily work report per (user_label, report_date).
+   * Mirrors weekly_reports: a derived/aggregated snapshot of
+   * observations/summaries/prompts/sessions for a single local calendar day —
+   * not part of the capture pipeline. UPSERT on regeneration via the unique
+   * index. No physical FK (app-layer logical link by user_label + report_date).
+   */
+  private ensureDailyReportsTable(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(43) as SchemaVersion | undefined;
+    if (applied) {
+      const exists = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='daily_reports'").get() as TableNameRow | undefined;
+      if (exists) return;
+    }
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS daily_reports (
+        id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_label          TEXT    NOT NULL,
+        report_date         TEXT    NOT NULL,
+        markdown            TEXT    NOT NULL,
+        stats               TEXT,
+        model               TEXT,
+        generated_at_epoch  INTEGER NOT NULL
+      )
+    `);
+    this.db.run('CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_reports_user_date ON daily_reports(user_label, report_date)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_daily_reports_user_date_desc ON daily_reports(user_label, report_date DESC)');
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(43, new Date().toISOString());
   }
 
   /**

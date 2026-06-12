@@ -33,6 +33,18 @@ const PUBLIC_PATHS = new Set([
 
 const STATIC_ASSET_RE = /\.(?:js|css|map|webp|png|jpe?g|svg|gif|ico|woff2?|ttf)$/i;
 
+// Paths reached by new-tab navigation or EventSource, neither of which can set
+// an Authorization header — they carry the same shared/admin token as a
+// `?token=` query parameter instead. The report viewer pages and their .md
+// downloads (周报/日报) open in a new tab, so they belong here alongside /stream.
+const QUERY_TOKEN_PATHS = new Set([
+  '/stream',
+  '/report',
+  '/daily-report',
+  '/api/reports/download',
+  '/api/daily-reports/download',
+]);
+
 function tokenMatches(provided: string, expected: string): boolean {
   if (!provided || !expected) return false;
   const a = Buffer.from(provided);
@@ -83,7 +95,7 @@ export function serverApiGate(adminSessions: AdminSessionStore, serverToken: str
       }
     }
 
-    if (req.path === '/stream') {
+    if (QUERY_TOKEN_PATHS.has(req.path)) {
       const queryToken = typeof req.query.token === 'string' ? req.query.token : '';
       if (tokenMatches(queryToken, serverToken) || adminSessions.verify(queryToken)) {
         res.locals.authVia = 'token';

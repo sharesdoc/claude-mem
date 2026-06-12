@@ -92,6 +92,7 @@ import { SettingsRoutes } from './worker/http/routes/SettingsRoutes.js';
 import { LogsRoutes } from './worker/http/routes/LogsRoutes.js';
 import { MemoryRoutes } from './worker/http/routes/MemoryRoutes.js';
 import { ReportRoutes } from './worker/http/routes/ReportRoutes.js';
+import { DailyReportRoutes } from './worker/http/routes/DailyReportRoutes.js';
 import { ReportScheduler } from './worker/reports/ReportScheduler.js';
 import { UsersRoutes } from './worker/http/routes/UsersRoutes.js';
 import { SyncRoutes } from './worker/http/routes/SyncRoutes.js';
@@ -336,6 +337,7 @@ export class WorkerService implements WorkerRef {
     // and those endpoints stay open (loopback-only by CORS anyway).
     this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime, adminSessions, isServerMode, serverAccessToken));
     this.server.registerRoutes(new ReportRoutes(this.dbManager, isServerMode, serverAccessToken, isServerMode ? adminSessions : undefined));
+    this.server.registerRoutes(new DailyReportRoutes(this.dbManager, isServerMode, serverAccessToken, isServerMode ? adminSessions : undefined));
     this.server.registerRoutes(new SettingsRoutes(this.settingsManager));
     this.server.registerRoutes(new LogsRoutes());
     this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem'));

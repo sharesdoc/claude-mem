@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AnalyticsResponse, WeeklyReportItem } from '../types';
+import { AnalyticsResponse, WeeklyReportItem, DailyReportOverview } from '../types';
 import { useLocale } from '../hooks/useLocale';
 import { authFetch } from '../utils/api';
 
@@ -261,6 +261,13 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const [historyReports, setHistoryReports] = useState<WeeklyReportItem[]>([]);
   const [reportsBusy, setReportsBusy] = useState(false);
 
+  // ── Daily reports (日报 table on the All-Projects stats page) ─────
+  // Per-user status (latest date + whether today/yesterday exist). Users with
+  // no daily report yet are simply absent from `users`.
+  const [dailyOverview, setDailyOverview] = useState<DailyReportOverview | null>(null);
+  // user_label currently being generated/deleted → disables that row's buttons.
+  const [dailyBusyUser, setDailyBusyUser] = useState<string | null>(null);
+
   // scope: GLOBAL time range — drives EVERY section on the page. Persisted.
   const [scope, setScope] = useState<Scope>(() => {
     try {
@@ -444,6 +451,48 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     } catch { /* surfaced via empty/unchanged list */ }
     finally { setReportsBusy(false); }
   }, [loadReports]);
+
+  // ── 日报:状态总览 + 生成/删除(供 All-Projects 页「日报」表) ──────
+  const loadDailyOverview = useCallback(async () => {
+    try {
+      const tz = -new Date().getTimezoneOffset();
+      const resp = await authFetch('/api/daily-reports/overview?tz=' + tz);
+      if (resp.ok) setDailyOverview(await resp.json() as DailyReportOverview);
+    } catch { /* 保持旧值;失败不阻塞页面 */ }
+  }, []);
+
+  const generateDaily = useCallback(async (user: string, date: string) => {
+    setDailyBusyUser(user);
+    try {
+      const tz = -new Date().getTimezoneOffset();
+      await authFetch('/api/daily-reports/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, date, tz }),
+      });
+      await loadDailyOverview();
+    } catch { /* surfaced via unchanged status */ }
+    finally { setDailyBusyUser(null); }
+  }, [loadDailyOverview]);
+
+  const deleteDaily = useCallback(async (user: string, date: string) => {
+    setDailyBusyUser(user);
+    try {
+      await authFetch('/api/daily-reports/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, date }),
+      });
+      await loadDailyOverview();
+    } catch { /* surfaced via unchanged status */ }
+    finally { setDailyBusyUser(null); }
+  }, [loadDailyOverview]);
+
+  // 日报表只在 All-Projects 页(非 history)展示;进入时拉取一次状态总览。
+  useEffect(() => {
+    if (scope === 'history') return;
+    void loadDailyOverview();
+  }, [scope, loadDailyOverview]);
 
   const svgPadding = { top: 16, right: 8, bottom: 32, left: 42 };
   const svgW = chartWidth;
@@ -753,6 +802,71 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                         <td className="stats-num-col">{formatProcessingTime(row.processingMs)}</td>
                       </tr>
                     ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* 日报 — 每个用户一行;操作=生成/重新生成/删除/下载;链接→新页显示最近两天日报 */}
+          {isAllProjects && userSummary.length > 0 && (
+            <div className="stats-section">
+              <div className="stats-section-title">{t('stats.dailyReports')}</div>
+              <div className="stats-user-table-wrap">
+                <table className="stats-user-table">
+                  <thead><tr>
+                    <th>{t('stats.dailyDate')}</th>
+                    <th>{t('stats.user')}</th>
+                    <th>{t('stats.dailyActions')}</th>
+                    <th>{t('stats.dailyLink')}</th>
+                  </tr></thead>
+                  <tbody>
+                    {userSummary.map(row => {
+                      const u = row.user_label;
+                      const today = dailyOverview?.today ?? '';
+                      const st = dailyOverview?.users?.[u];
+                      const hasToday = !!st?.has_today;
+                      const busy = dailyBusyUser === u;
+                      const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
+                      const tz = -new Date().getTimezoneOffset();
+                      const urlOf = (path: string, extra?: Record<string, string>) => {
+                        const q = new URLSearchParams({ user: u, tz: String(tz), ...(extra ?? {}) });
+                        if (tokenQ) q.set('token', tokenQ);
+                        return `${path}?${q.toString()}`;
+                      };
+                      return (
+                        <tr key={u}>
+                          <td>{st?.latest_date ?? today}</td>
+                          <td>{u}</td>
+                          <td>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                              <button type="button" className="stats-tab is-active" disabled={busy}
+                                onClick={() => void generateDaily(u, today)}>
+                                {hasToday ? t('stats.dailyRegenerate') : t('stats.dailyGenerate')}
+                              </button>
+                              {hasToday && (
+                                <button type="button" className="stats-tab" disabled={busy}
+                                  onClick={() => { if (window.confirm(t('stats.dailyConfirmDelete'))) void deleteDaily(u, today); }}>
+                                  {t('stats.dailyDelete')}
+                                </button>
+                              )}
+                              {hasToday && (
+                                <button type="button" className="stats-tab" disabled={busy}
+                                  onClick={() => window.open(urlOf('/api/daily-reports/download', { date: today }), '_blank')}>
+                                  {t('stats.downloadReport')}
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <button type="button" className="stats-tab"
+                              onClick={() => window.open(urlOf('/daily-report'), '_blank')}>
+                              {t('stats.dailyView')}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

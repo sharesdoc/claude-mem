@@ -7,6 +7,7 @@ import { AdminSessionStore, extractBearerToken } from '../AdminSessionStore.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { ReportGenerator, upsertWeeklyReport, weekMondayOf } from '../../reports/ReportGenerator.js';
+import { mdToHtml } from '../../reports/mdToHtml.js';
 
 /**
  * ReportRoutes — 周报后端接口 (B-周报设计文档 §4)。
@@ -23,76 +24,6 @@ import { ReportGenerator, upsertWeeklyReport, weekMondayOf } from '../../reports
 
 const WEEK_RE = /^\d{4}-\d{2}-\d{2}$/;
 const LIST_LIMIT = 12;
-
-/** HTML-escape text (used inside generated report HTML). */
-function htmlEscape(s: string): string {
-  return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
-}
-
-/** Inline Markdown → HTML: escape, then `code`, **bold**, [text](url). */
-function mdInline(s: string): string {
-  let t = htmlEscape(s);
-  t = t.replace(/`([^`]+)`/g, (_m, c: string) => `<code>${c}</code>`);
-  t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-  return t;
-}
-
-/**
- * Minimal self-contained Markdown → HTML for weekly reports (no external dep).
- * Supports: #..###### headings, GFM tables, -/* and 1. lists, > blockquotes,
- * --- rules, paragraphs, and inline code/bold/links. Sufficient for our reports.
- */
-function mdToHtml(md: string): string {
-  const lines = md.replace(/\r\n/g, '\n').split('\n');
-  const out: string[] = [];
-  let listType: 'ul' | 'ol' | null = null;
-  let para: string[] = [];
-  const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
-  const flushPara = () => { if (para.length) { out.push(`<p>${mdInline(para.join(' '))}</p>`); para = []; } };
-
-  const parseRow = (r: string): string[] =>
-    r.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
-
-  for (let i = 0; i < lines.length; i++) {
-    const t = lines[i].trim();
-    if (t === '') { flushPara(); closeList(); continue; }
-
-    const h = t.match(/^(#{1,6})\s+(.*)$/);
-    if (h) { flushPara(); closeList(); const lvl = h[1].length; out.push(`<h${lvl}>${mdInline(h[2])}</h${lvl}>`); continue; }
-
-    if (/^(-{3,}|\*{3,}|_{3,})$/.test(t)) { flushPara(); closeList(); out.push('<hr/>'); continue; }
-
-    if (t.startsWith('>')) { flushPara(); closeList(); out.push(`<blockquote>${mdInline(t.replace(/^>\s?/, ''))}</blockquote>`); continue; }
-
-    // GFM table: header row followed by a |---|---| separator row
-    const next = (lines[i + 1] ?? '').trim();
-    if (t.startsWith('|') && /^\|?[\s:|-]+\|?$/.test(next) && next.includes('-')) {
-      flushPara(); closeList();
-      const headers = parseRow(t);
-      i += 1; // consume separator
-      let tbl = '<table><thead><tr>' + headers.map(c => `<th>${mdInline(c)}</th>`).join('') + '</tr></thead><tbody>';
-      while (i + 1 < lines.length && lines[i + 1].trim().startsWith('|')) {
-        i += 1;
-        tbl += '<tr>' + parseRow(lines[i].trim()).map(c => `<td>${mdInline(c)}</td>`).join('') + '</tr>';
-      }
-      tbl += '</tbody></table>';
-      out.push(tbl);
-      continue;
-    }
-
-    const ul = t.match(/^[-*]\s+(.*)$/);
-    if (ul) { flushPara(); if (listType !== 'ul') { closeList(); out.push('<ul>'); listType = 'ul'; } out.push(`<li>${mdInline(ul[1])}</li>`); continue; }
-
-    const ol = t.match(/^\d+\.\s+(.*)$/);
-    if (ol) { flushPara(); if (listType !== 'ol') { closeList(); out.push('<ol>'); listType = 'ol'; } out.push(`<li>${mdInline(ol[1])}</li>`); continue; }
-
-    closeList();
-    para.push(t);
-  }
-  flushPara(); closeList();
-  return out.join('\n');
-}
 
 interface ReportRow {
   user_label: string; week_start: string; week_end: string;
