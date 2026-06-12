@@ -18,6 +18,8 @@ const DASHSCOPE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/co
 const AI_TIMEOUT_MS = 90000;
 // 日报送入 AI 的项目数上限(单日通常项目不多,留足余量)。
 const MAX_PROJECTS_IN_PROMPT = 10;
+// AI 工作时间不足该阈值的项目(连同其任务)在日报里直接忽略,滤掉琐碎噪音。
+const MIN_PROJECT_MS = 10 * 60000; // 10 分钟
 
 export interface DailyReportStats {
   totalMs: number;
@@ -185,8 +187,9 @@ export class DailyReportGenerator {
         observations: os.slice(0, 6).map(o => ({ type: o.type, title: (o.title || o.subtitle || o.narrative || '').trim() })).filter(o => o.title),
       };
     })
-    // 日报只罗列“有具体工作内容”的项目(有总结/收获/观察记录),按耗时从多到少。
-    .filter(d => d.completed.length > 0 || d.learned.length > 0 || d.observations.length > 0)
+    // 日报只罗列“值得一提”的项目:① AI 工时 ≥ 10 分钟(连同其任务,不足者直接忽略);
+    // ② 且有具体工作内容(总结/收获/观察记录)。按耗时从多到少排序。
+    .filter(d => d.totalMs >= MIN_PROJECT_MS && (d.completed.length > 0 || d.learned.length > 0 || d.observations.length > 0))
     .sort((a, b) => b.totalMs - a.totalMs);
   }
 
@@ -266,7 +269,7 @@ export class DailyReportGenerator {
     const facts =
       `用户:${user}\n日期:${reportDate}\n` +
       `总AI耗时:${fmtDuration(stats.totalMs)};项目数:${stats.projects};任务数:${stats.prompts};观察:${stats.obs};总结:${stats.summaries};会话:${stats.sessions}\n\n` +
-      `各项目(已按耗时从多到少排序):\n${projectBlocks}`;
+      `各项目(已剔除 AI 工时不足 10 分钟的琐碎项目,按耗时从多到少排序):\n${projectBlocks}`;
 
     const instruction =
       '你是工程团队的技术主管。请依据某员工**今天**的真实工作数据,撰写一份**简短、罗列重点**的中文日报正文。' +
@@ -276,7 +279,8 @@ export class DailyReportGenerator {
       '## 一、今日工作概述\n用**一段话(80~150字)**概括今天主要做了什么、解决了什么问题。简要即可,不要长篇。\n\n' +
       '## 二、今日重点工作\n按项目分组、**按耗时从多到少**排列。每个项目用三级标题,格式严格为 `### 项目 <完整项目路径> · 耗时X`' +
       '(`<完整项目路径>`逐字照抄数据中的项目标识,作为唯一 ID,严禁简写/翻译/占位)。其下用要点(`- `)**简要**罗列今天该项目完成的重点工作,' +
-      '**每条一句话讲清做了什么**(精炼,不要展开成段落),**单个项目要点不超过 6 条**,次要的合并或省略。**数据中每个项目都要出现**。\n\n' +
+      '**每条一句话讲清做了什么**(精炼,不要展开成段落),**单个项目要点不超过 6 条**,次要的合并或省略。' +
+      '数据中给出的项目(已剔除工时不足 10 分钟者)都应出现,不要再提及任何琐碎或一带而过的工作。\n\n' +
       '全文务必简短克制,只罗列重点,避免冗长。直接输出 Markdown 正文,不要用三个反引号代码块把整篇包起来。\n\n数据如下:\n\n' + facts;
 
     const sys = '你是严谨的技术主管,只依据给定数据撰写**简短**的工作日报。全文简体中文,把英文工作记录转述为中文(仅保留专有名词/路径/代码/命令/commit);要点罗列、说明从简,绝不臆造。';
