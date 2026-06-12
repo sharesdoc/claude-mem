@@ -265,8 +265,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   // Per-user status (latest date + whether today/yesterday exist). Users with
   // no daily report yet are simply absent from `users`.
   const [dailyOverview, setDailyOverview] = useState<DailyReportOverview | null>(null);
-  // user_label currently being generated/deleted → disables that row's buttons.
-  const [dailyBusyUser, setDailyBusyUser] = useState<string | null>(null);
+  // user_labels currently generating/deleting → disables those rows' buttons.
+  // A Set (not a single value) so multiple users can run concurrently — e.g.
+  // click 张三 生成 then immediately 李四 生成; each request is independent.
+  const [dailyBusyUsers, setDailyBusyUsers] = useState<Set<string>>(new Set());
 
   // scope: GLOBAL time range — drives EVERY section on the page. Persisted.
   const [scope, setScope] = useState<Scope>(() => {
@@ -461,8 +463,17 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     } catch { /* 保持旧值;失败不阻塞页面 */ }
   }, []);
 
+  // 标记/解除某用户的忙碌态(用函数式更新,避免并发点击时相互覆盖 Set)。
+  const markBusy = useCallback((user: string, busy: boolean) => {
+    setDailyBusyUsers(prev => {
+      const next = new Set(prev);
+      if (busy) next.add(user); else next.delete(user);
+      return next;
+    });
+  }, []);
+
   const generateDaily = useCallback(async (user: string, date: string) => {
-    setDailyBusyUser(user);
+    markBusy(user, true);
     try {
       const tz = -new Date().getTimezoneOffset();
       await authFetch('/api/daily-reports/generate', {
@@ -472,11 +483,11 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       });
       await loadDailyOverview();
     } catch { /* surfaced via unchanged status */ }
-    finally { setDailyBusyUser(null); }
-  }, [loadDailyOverview]);
+    finally { markBusy(user, false); }
+  }, [loadDailyOverview, markBusy]);
 
   const deleteDaily = useCallback(async (user: string, date: string) => {
-    setDailyBusyUser(user);
+    markBusy(user, true);
     try {
       await authFetch('/api/daily-reports/delete', {
         method: 'POST',
@@ -485,8 +496,8 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       });
       await loadDailyOverview();
     } catch { /* surfaced via unchanged status */ }
-    finally { setDailyBusyUser(null); }
-  }, [loadDailyOverview]);
+    finally { markBusy(user, false); }
+  }, [loadDailyOverview, markBusy]);
 
   // 日报表只在 All-Projects 页(非 history)展示;进入时拉取一次状态总览。
   useEffect(() => {
@@ -826,7 +837,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                       const today = dailyOverview?.today ?? '';
                       const st = dailyOverview?.users?.[u];
                       const hasToday = !!st?.has_today;
-                      const busy = dailyBusyUser === u;
+                      // View 高亮的前提:该页(最近两天)确有可看的日报。
+                      const viewable = !!(st?.has_today || st?.has_yesterday);
+                      const busy = dailyBusyUsers.has(u);
                       const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
                       const tz = -new Date().getTimezoneOffset();
                       const urlOf = (path: string, extra?: Record<string, string>) => {
@@ -859,7 +872,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                             </div>
                           </td>
                           <td>
-                            <button type="button" className="stats-tab"
+                            <button type="button"
+                              className={viewable ? 'stats-tab is-active' : 'stats-tab'}
+                              disabled={busy}
                               onClick={() => window.open(urlOf('/daily-report'), '_blank')}>
                               {t('stats.dailyView')}
                             </button>

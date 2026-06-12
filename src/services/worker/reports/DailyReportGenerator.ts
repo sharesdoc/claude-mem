@@ -152,15 +152,17 @@ export class DailyReportGenerator {
       ORDER BY ss.created_at_epoch ASC
     `).all(start, end, user) as SummaryRow[];
 
-    const totalMs = projAgg.reduce((s, p) => s + p.total_ms, 0);
-    const prompts = projAgg.reduce((s, p) => s + p.prompts, 0);
-    const projects = new Set<string>([...projAgg.map(p => p.project), ...obsRows.map(o => o.project), ...summRows.map(s => s.project)]);
-    const stats: DailyReportStats = {
-      totalMs, projects: projects.size || (sessRow?.projects ?? 0),
-      prompts, obs: obsRows.length, summaries: summRows.length, sessions: sessRow?.sessions ?? 0,
-    };
-
     const digests = this.digestByProject(projAgg, obsRows, summRows);
+
+    // 概览的「项目 / 任务」也按 10 分钟口径过滤,与正文(digests)保持一致:
+    // 项目数 = 正文实际列出的项目数;任务数 = 这些项目下的提示词(任务)之和。
+    const promptCountOf = new Map(projAgg.map(p => [p.project, p.prompts]));
+    const reportedPrompts = digests.reduce((s, d) => s + (promptCountOf.get(d.project) ?? 0), 0);
+    const totalMs = projAgg.reduce((s, p) => s + p.total_ms, 0);
+    const stats: DailyReportStats = {
+      totalMs, projects: digests.length,
+      prompts: reportedPrompts, obs: obsRows.length, summaries: summRows.length, sessions: sessRow?.sessions ?? 0,
+    };
 
     // 正文:① 有内容 → AI 提炼简短日报;② 失败/无 Key → 确定性简版。
     const aiBody = await this.synthesize(user, reportDate, stats, digests, model);
