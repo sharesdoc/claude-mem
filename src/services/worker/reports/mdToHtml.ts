@@ -10,12 +10,25 @@ export function htmlEscape(s: string): string {
   return s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
 }
 
+/**
+ * Only http(s)/mailto and same-origin relative URLs are allowed as link hrefs.
+ * Anything else (javascript:, data:, vbscript:, …) is rejected so a crafted
+ * `[x](javascript:…)` in report content cannot become a clickable XSS vector.
+ * `url` is the already-HTML-escaped capture; entity-encoded scheme tricks
+ * (e.g. `&#106;avascript:`) fail this whitelist too and render as plain text.
+ */
+function isSafeHref(url: string): boolean {
+  return /^(?:https?:|mailto:|\/|#|\.\.?\/)/i.test(url.trim());
+}
+
 /** Inline Markdown → HTML: escape, then `code`, **bold**, [text](url). */
 export function mdInline(s: string): string {
   let t = htmlEscape(s);
   t = t.replace(/`([^`]+)`/g, (_m, c: string) => `<code>${c}</code>`);
   t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  // Unsafe-scheme links degrade to plain text (the link label), never an <a>.
+  t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text: string, url: string) =>
+    isSafeHref(url) ? `<a href="${url}" target="_blank" rel="noreferrer">${text}</a>` : text);
   return t;
 }
 
