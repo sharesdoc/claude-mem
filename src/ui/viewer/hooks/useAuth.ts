@@ -29,39 +29,41 @@ export function useAuth() {
     }
   };
 
-  // Check auth status on mount
+  // Check auth status on mount. Always probe — even without a stored token —
+  // because a loopback origin may receive an auto-issued session (X-005
+  // local auto-login, CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN).
   useEffect(() => {
     const token = localStorage.getItem(TOKEN_KEY);
-    if (!token) {
-      setState(prev => ({ ...prev, isLoading: false }));
-      return;
-    }
 
     const controller = new AbortController();
     abortRef.current = controller;
 
     fetch('/api/admin/session', {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
       signal: controller.signal,
     })
       .then(async r => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return r.json();
       })
-      .then((body: { authenticated: boolean }) => {
-        if (!controller.signal.aborted) {
-          setState({
-            isAuthenticated: body.authenticated === true,
-            isLoading: false,
-            error: null,
-            attemptsRemaining: null,
-            retryAfterSec: null,
-          });
+      .then((body: { authenticated: boolean; token?: string }) => {
+        if (controller.signal.aborted) return;
+        if (body.token) {
+          localStorage.setItem(TOKEN_KEY, body.token);
+        } else if (!body.authenticated && token) {
+          localStorage.removeItem(TOKEN_KEY);
         }
+        setState({
+          isAuthenticated: body.authenticated === true,
+          isLoading: false,
+          error: null,
+          attemptsRemaining: null,
+          retryAfterSec: null,
+        });
       })
       .catch(() => {
         if (!controller.signal.aborted) {
-          localStorage.removeItem(TOKEN_KEY);
+          if (token) localStorage.removeItem(TOKEN_KEY);
           setState(prev => ({ ...prev, isLoading: false }));
         }
       });

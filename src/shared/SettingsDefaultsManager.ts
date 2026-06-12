@@ -104,6 +104,7 @@ export interface SettingsDefaults {
   CLAUDE_MEM_SERVER_ALLOWED_USERS: string;    // csv user_labels; empty = allow all
   CLAUDE_MEM_SERVER_ALLOWED_ORIGINS: string;  // csv full origins (e.g. 'https://mem.acme.com'); for public reverse-proxied deployments
   CLAUDE_MEM_SERVER_ACCESS_TOKEN: string;      // shared secret for LAN deployments (Bearer token)
+  CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN: string;  // 'true' = loopback requests auto-login in server mode (X-005)
   CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: string;
   CLAUDE_MEM_SERVER_REQUIRE_TLS: string;
   CLAUDE_MEM_SYNC_ACCESS_TOKEN: string;        // client-side copy of the shared secret
@@ -213,6 +214,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_SERVER_ALLOWED_USERS: '',                     // empty = allow any user_label
     CLAUDE_MEM_SERVER_ALLOWED_ORIGINS: '',                   // csv full origins for public reverse-proxy deployments (e.g. 'https://mem.acme.com')
     CLAUDE_MEM_SERVER_ACCESS_TOKEN: '',                      // shared secret for LAN; empty = no token check
+    CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN: 'true',              // loopback auto-login in server mode; 'false' = always require credentials
     CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: '1000',
     CLAUDE_MEM_SERVER_REQUIRE_TLS: 'false',
     CLAUDE_MEM_SYNC_ACCESS_TOKEN: '',                        // client copy of the same shared secret

@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import { createHash } from 'crypto';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { AdminSessionStore, extractBearerToken } from '../AdminSessionStore.js';
+import { isLoopbackRequest } from '../middleware.js';
 import { logger } from '../../../../utils/logger.js';
 import type { DatabaseManager } from '../../DatabaseManager.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
@@ -193,7 +194,23 @@ export class AuthRoutes extends BaseRouteHandler {
   });
 
   private handleStatus = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    res.json({ authenticated: this.sessions.verify(extractBearerToken(req)) });
+    if (this.sessions.verify(extractBearerToken(req))) {
+      res.json({ authenticated: true });
+      return;
+    }
+
+    // Local auto-login (X-005): a loopback caller is the server operator —
+    // issue an admin session without credentials unless disabled via
+    // CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN=false (read fresh, no restart needed).
+    const autoLoginEnabled = (loadSettings().CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN ?? 'true') !== 'false';
+    if (autoLoginEnabled && isLoopbackRequest(req)) {
+      const { token, expiresAt } = this.sessions.create(Date.now());
+      logger.info('SYSTEM', 'Admin session auto-issued for loopback request');
+      res.json({ authenticated: true, token, expires_at: expiresAt, auto_login: 'local' });
+      return;
+    }
+
+    res.json({ authenticated: false });
   });
 
   private getLastAttemptEpoch(db: ReturnType<DatabaseManager['getConnection']>): number {

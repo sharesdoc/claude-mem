@@ -111,6 +111,20 @@ export function createCorsMiddleware(opts: {
   });
 }
 
+const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'localhost']);
+
+/**
+ * True only when the request demonstrably originates from this machine:
+ * both the express-resolved client IP (honours trusted-proxy resolution,
+ * so a remote client behind a local trusted reverse proxy is NOT loopback)
+ * and the raw socket peer address must be loopback (X-005).
+ */
+export function isLoopbackRequest(req: Request): boolean {
+  const clientIp = req.ip || '';
+  const socketIp = req.socket?.remoteAddress ?? '';
+  return LOOPBACK_ADDRESSES.has(clientIp) && LOOPBACK_ADDRESSES.has(socketIp);
+}
+
 export function requireLocalhost(req: Request, res: Response, next: NextFunction): void {
   const clientIp = req.ip || req.connection.remoteAddress || '';
   const isLocalhost =

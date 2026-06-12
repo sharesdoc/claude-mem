@@ -3,6 +3,21 @@ import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../../../../utils/logger.js';
 import type { AdminSessionStore } from '../AdminSessionStore.js';
 import { extractBearerToken } from '../AdminSessionStore.js';
+import { isLoopbackRequest } from '../middleware.js';
+import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
+import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
+
+/**
+ * Local auto-login (X-005): loopback callers skip the token requirement
+ * unless CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN=false. Read fresh per check so
+ * flipping the setting takes effect without a worker restart; only invoked
+ * on requests that failed every other authenticator.
+ */
+function loopbackBypassAllowed(req: Request): boolean {
+  if (!isLoopbackRequest(req)) return false;
+  const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+  return (settings.CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN ?? 'true') !== 'false';
+}
 
 /**
  * Shared-access-token middleware for LAN deployments.
@@ -39,6 +54,10 @@ export function tokenAuth(serverToken: string, adminSessions?: AdminSessionStore
   return (req: Request, res: Response, next: NextFunction): void => {
     const header = extractBearer(req);
     if (!header) {
+      if (loopbackBypassAllowed(req)) {
+        next();
+        return;
+      }
       logger.warn('HTTP', 'tokenAuth: missing Authorization header', {
         path: req.path,
         address: req.socket.remoteAddress ?? '(unknown)',
@@ -62,6 +81,12 @@ export function tokenAuth(serverToken: string, adminSessions?: AdminSessionStore
 
     // 2) Fall back to admin session token (viewer login).
     if (hasAdminFallback && adminSessions!.verify(extractBearerToken(req))) {
+      next();
+      return;
+    }
+
+    // 3) Loopback with a stale/foreign token — still the local operator.
+    if (loopbackBypassAllowed(req)) {
       next();
       return;
     }
