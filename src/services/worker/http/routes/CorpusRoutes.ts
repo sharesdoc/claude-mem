@@ -57,6 +57,10 @@ const queryCorpusSchema = z.object({
 
 const emptyBodySchema = z.object({}).passthrough();
 
+function routeParam(value: string | string[] | undefined): string {
+  return Array.isArray(value) ? (value[0] ?? '') : (value ?? '');
+}
+
 export class CorpusRoutes extends BaseRouteHandler {
   constructor(
     private corpusStore: CorpusStore,
@@ -105,7 +109,7 @@ export class CorpusRoutes extends BaseRouteHandler {
   });
 
   private handleGetCorpus = this.wrapHandler((req: Request, res: Response): void => {
-    const { name } = req.params;
+    const name = routeParam(req.params.name);
     const corpus = this.corpusStore.read(name);
 
     if (!corpus) {
@@ -122,7 +126,7 @@ export class CorpusRoutes extends BaseRouteHandler {
   });
 
   private handleDeleteCorpus = this.wrapHandler((req: Request, res: Response): void => {
-    const { name } = req.params;
+    const name = routeParam(req.params.name);
     const existed = this.corpusStore.delete(name);
 
     if (!existed) {
@@ -138,7 +142,7 @@ export class CorpusRoutes extends BaseRouteHandler {
   });
 
   private handleRebuildCorpus = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    const { name } = req.params;
+    const name = routeParam(req.params.name);
     const existingCorpus = this.corpusStore.read(name);
 
     if (!existingCorpus) {
@@ -157,7 +161,7 @@ export class CorpusRoutes extends BaseRouteHandler {
   });
 
   private handlePrimeCorpus = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    const { name } = req.params;
+    const name = routeParam(req.params.name);
     const corpus = this.corpusStore.read(name);
 
     if (!corpus) {
@@ -174,7 +178,7 @@ export class CorpusRoutes extends BaseRouteHandler {
   });
 
   private handleQueryCorpus = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    const { name } = req.params;
+    const name = routeParam(req.params.name);
     const corpus = this.corpusStore.read(name);
 
     if (!corpus) {
@@ -192,7 +196,7 @@ export class CorpusRoutes extends BaseRouteHandler {
   });
 
   private handleReprimeCorpus = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    const { name } = req.params;
+    const name = routeParam(req.params.name);
     const corpus = this.corpusStore.read(name);
 
     if (!corpus) {

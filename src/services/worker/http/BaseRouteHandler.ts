@@ -22,7 +22,9 @@ export abstract class BaseRouteHandler {
   }
 
   protected parseIntParam(req: Request, res: Response, paramName: string): number | null {
-    const value = parseInt(req.params[paramName], 10);
+    const rawValue = req.params[paramName];
+    const valueText = Array.isArray(rawValue) ? rawValue[0] : rawValue;
+    const value = parseInt(valueText ?? '', 10);
     if (isNaN(value)) {
       this.badRequest(res, `Invalid ${paramName}`);
       return null;

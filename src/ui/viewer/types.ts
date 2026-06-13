@@ -175,9 +175,9 @@ export interface AnalyticsResponse {
   userSummaryCounts: Record<string, { prompts: number; obs: number; summaries: number }>;
   /** User Summary 范围内的工作日数（用于日均计算）。 */
   summaryBusinessDays: number;
-  /** 图表 X 轴粒度：day（当日/本周/本月）或 week（季度按周聚合）。 */
+  /** 图表 X 轴粒度：hour（24小时）、day（当日/本周/本月）或 week（季度按周聚合）。 */
   granularity: 'hour' | 'day' | 'week';
-  /** 图表 X 轴的有序桶（YYYY-MM-DD，本地时间，已补齐空缺）。 */
+  /** 图表 X 轴的有序桶：hour=YYYY-MM-DD HH:00，day/week=YYYY-MM-DD，本地时间，已补齐空缺。 */
   chartBuckets: string[];
   /** 月度历史记录 — 按人分组（scope=history 时返回，每人每月一条，最多36个月）。 */
   historyMonths: Array<{

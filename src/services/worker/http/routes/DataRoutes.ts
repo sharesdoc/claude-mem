@@ -922,10 +922,14 @@ export class DataRoutes extends BaseRouteHandler {
     // ── format bucket → label ───────────────────────────────────────────
     const formatBucket = (bucket: number): string => {
       if (is24h) {
-        // Hourly bucket: render as "HH:00" in the viewer's local time.
+        // Hourly bucket key includes the local date, so a rolling 24h window
+        // never merges "09:00" from two different calendar days.
         const d = new Date(bucket * 3600000);
+        const y = d.getUTCFullYear();
+        const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+        const day = String(d.getUTCDate()).padStart(2, '0');
         const h = String(d.getUTCHours()).padStart(2, '0');
-        return `${h}:00`;
+        return `${y}-${m}-${day} ${h}:00`;
       }
       // Daily bucket: bucket*DAY → local date "YYYY-MM-DD".
       const d = new Date(bucket * 86400000);

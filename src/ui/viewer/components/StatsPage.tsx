@@ -17,9 +17,9 @@ const USER_COLORS = [
   '#0550ae', '#16c60c', '#e74856', '#8e7cbc', '#d4b888',
 ];
 
-/** Map a data point ''day'' (bucket label) to its chart bucket key given granularity. */
+/** Map a data point bucket label to its chart bucket key given granularity. */
 function bucketKeyOf(day: string, granularity: 'hour' | 'day' | 'week'): string {
-  if (granularity === 'hour') return day; // "14:00" → as-is
+  if (granularity === 'hour') return day; // "YYYY-MM-DD HH:00" → as-is
   if (granularity === 'day') return day;
   const [y, m, d] = day.split('-').map(Number);
   const dt = new Date(y, m - 1, d);
@@ -37,10 +37,28 @@ function formatNumber(n: number): string {
 }
 
 function formatDayLabel(bucket: string): string {
-  // Hourly bucket: "14:00"
-  if (bucket.includes(':')) return bucket;
+  // Hourly 24h bucket key keeps its date for correct grouping/coloring, while
+  // the axis label only shows the integer hour. Today vs previous day is color-coded.
+  const hourMatch = bucket.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}:00)$/);
+  if (hourMatch) return String(Number(hourMatch[4].slice(0, 2)));
   const d = new Date(bucket + 'T00:00:00');
   return `${d.getMonth() + 1}/${d.getDate()}`;
+}
+
+function localDateKey(date = new Date()): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function dayLabelColor(bucket: string): string {
+  const hourMatch = bucket.match(/^(\d{4}-\d{2}-\d{2}) \d{2}:00$/);
+  if (!hourMatch) return 'var(--color-text-muted)';
+  return hourMatch[1] === localDateKey()
+    ? 'var(--stats-hour-label-current, var(--color-text-primary))'
+    : 'var(--stats-hour-label-previous, var(--color-text-muted))';
+}
+
+function isHourlyBucket(bucket: string): boolean {
+  return /^\d{4}-\d{2}-\d{2} \d{2}:00$/.test(bucket);
 }
 
 function formatProcessingTime(ms: number): string {
@@ -91,7 +109,8 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
   const visible = series.filter(s => !hiddenUsers.has(s.user_label));
   const globalMax = visible.reduce((m, s) => Math.max(m, s.maxVal), 1);
   const totalDays = series[0].points.length;
-  const step = Math.max(1, Math.floor(allDays.length / 9));
+  const showEveryLabel = allDays.length > 0 && allDays.every(isHourlyBucket);
+  const step = showEveryLabel ? 1 : Math.max(1, Math.floor(allDays.length / 9));
   // Bar chart: each user group gets a bar per day, side by side
   const barGroupWidth = plotW / Math.max(totalDays, 1);
   const barWidth = Math.max(2, (barGroupWidth * 0.5) / Math.max(visible.length, 1));
@@ -121,7 +140,7 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
             const x = svgPadding.left + (idx + 0.5) * (plotW / Math.max(totalDays, 1));
             return (
               <text key={day} x={x} y={svgH - 6} textAnchor="middle"
-                fill="var(--color-text-muted)" fontSize="8" fontFamily="monospace">
+                fill={dayLabelColor(day)} fontSize="8" fontFamily="monospace">
                 {fmtDay(day)}
               </text>
             );
@@ -1059,4 +1078,3 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     </div>
   );
 }
-

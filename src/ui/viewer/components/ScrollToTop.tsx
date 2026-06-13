@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useLocale } from '../hooks/useLocale';
 
 interface ScrollToTopProps {
-  targetRef: React.RefObject<HTMLDivElement>;
+  targetRef: React.RefObject<HTMLDivElement | null>;
 }
 
 export function ScrollToTop({ targetRef }: ScrollToTopProps) {

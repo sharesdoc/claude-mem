@@ -77,7 +77,7 @@ export async function processAgentResponse(
   }));
 
   const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-  const userLabel = settings.CLAUDE_MEM_USER_LABEL || getOsUserName();
+  const userLabel = settings.CLAUDE_MEM_USER_LABEL || getOsUserName() || 'unknown';
 
   let result: ReturnType<typeof sessionStore.storeObservations>;
   try {
@@ -241,6 +241,7 @@ async function syncAndBroadcastObservations(
       prompt_number: session.lastPromptNumber,
       user_name: getOsUserName(),
       user_label: resolveUserLabel(),
+      created_at: new Date(result.createdAtEpoch).toISOString(),
       created_at_epoch: result.createdAtEpoch
     });
   }
@@ -325,6 +326,7 @@ async function syncAndBroadcastSummary(
     prompt_number: session.lastPromptNumber,
     user_name: getOsUserName(),
     user_label: resolveUserLabel(),
+    created_at: new Date(result.createdAtEpoch).toISOString(),
     created_at_epoch: result.createdAtEpoch
   });
 

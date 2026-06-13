@@ -7,7 +7,6 @@ import {
   IndexInfo,
   TableNameRow,
   SchemaVersion,
-  SdkSessionRecord,
   ObservationRecord,
   SessionSummaryRecord,
   UserPromptRecord,
