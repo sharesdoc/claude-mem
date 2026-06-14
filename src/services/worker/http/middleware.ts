@@ -114,19 +114,30 @@ const AUTO_LOGIN_IPS = new Set(['127.0.0.1', '::ffff:127.0.0.1']);
  * same machine.
  *
  * Conditions (all must hold):
- * 1. No X-Forwarded-For / X-Real-IP header — presence means a proxy is
- *    in the path, so the real client is remote regardless of socket peer.
- * 2. Both the express-resolved IP and the raw socket peer are 127.0.0.1
+ * 1. No X-Forwarded-For / X-Real-IP header — presence means an HTTP
+ *    proxy is in the path.
+ * 2. Host header is 127.0.0.1 or localhost — a domain name means the
+ *    request arrived via a TCP tunnel (frp TCP mode) or reverse proxy
+ *    that doesn't inject proxy headers.
+ * 3. Both the express-resolved IP and the raw socket peer are 127.0.0.1
  *    (or its IPv4-mapped IPv6 form).
  */
 export function isAutoLoginAllowed(req: Request): boolean {
-  // Proxy header present → real client is remote, never auto-login.
-  const xff = req.headers['x-forwarded-for'];
-  const xri = req.headers['x-real-ip'];
-  if (xff || xri) {
+  // 1. Proxy header present → HTTP proxy in path, real client is remote.
+  if (req.headers['x-forwarded-for'] || req.headers['x-real-ip']) {
     return false;
   }
 
+  // 2. Host header is a domain (not localhost/127.0.0.1) → request
+  //    arrived via TCP tunnel (frp) or reverse proxy that doesn't set
+  //    proxy headers.
+  const host = (req.headers['host'] ?? '') as string;
+  const hostname = host.split(':')[0] ?? '';
+  if (hostname && hostname !== '127.0.0.1' && hostname !== 'localhost') {
+    return false;
+  }
+
+  // 3. Both IP signals must be loopback.
   const clientIp = req.ip || '';
   const socketIp = req.socket?.remoteAddress ?? '';
   return AUTO_LOGIN_IPS.has(clientIp) && AUTO_LOGIN_IPS.has(socketIp);
