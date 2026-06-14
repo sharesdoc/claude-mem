@@ -824,8 +824,11 @@ do_install_claude() {
     local port; port=$(get_worker_port)
     ok "Claude Code integration already installed and running"
     printf "\n"
-    printf "  ${DIM}Viewer:${RESET}  http://localhost:%s\n" "$port"
-    printf "  ${DIM}Health:${RESET}  http://localhost:%s/api/health\n" "$port"
+    local lan_ip; lan_ip=$(get_lan_ip)
+    printf "  ${DIM}Viewer:${RESET}  http://127.0.0.1:%s" "$port"
+    [[ -n "$lan_ip" && "$lan_ip" != "YOUR-SERVER-IP" ]] && printf "  (LAN: http://%s:%s)" "$lan_ip" "$port"
+    printf "\n"
+    printf "  ${DIM}Health:${RESET}  http://127.0.0.1:%s/api/health\n" "$port"
     printf "  ${DIM}Use -r claude to reinstall.${RESET}\n\n"
     return
   fi
@@ -846,9 +849,12 @@ do_install_claude() {
   check_plugin_enabled         && ok "Enabled"      || warn "Not enabled"
 
   local port; port=$(get_worker_port)
+  local lan_ip; lan_ip=$(get_lan_ip)
   printf "\n"
-  printf "  ${DIM}Viewer:${RESET}  http://localhost:%s\n" "$port"
-  printf "  ${DIM}Health:${RESET}  http://localhost:%s/api/health\n" "$port"
+  printf "  ${DIM}Viewer:${RESET}  http://127.0.0.1:%s" "$port"
+  [[ -n "$lan_ip" && "$lan_ip" != "YOUR-SERVER-IP" ]] && printf "  (LAN: http://%s:%s)" "$lan_ip" "$port"
+  printf "\n"
+  printf "  ${DIM}Health:${RESET}  http://127.0.0.1:%s/api/health\n" "$port"
   printf "  ${DIM}Restart Claude Code to load the plugin.${RESET}\n\n"
 }
 
