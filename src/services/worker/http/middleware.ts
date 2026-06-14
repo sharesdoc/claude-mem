@@ -56,7 +56,6 @@ export function createMiddleware(
 // can connect from any IP without CORS preflight blocking them.
 export function createCorsMiddleware(opts: {
   role?: 'client' | 'server';
-  allowedOrigins?: string[];
 } = {}): RequestHandler {
   const role = opts.role ?? 'client';
   return cors({
