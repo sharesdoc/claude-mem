@@ -3,7 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../../../../utils/logger.js';
 import type { AdminSessionStore } from '../AdminSessionStore.js';
 import { extractBearerToken } from '../AdminSessionStore.js';
-import { isLoopbackRequest } from '../middleware.js';
+import { isAutoLoginAllowed } from '../middleware.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 
@@ -14,7 +14,7 @@ import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
  * on requests that failed every other authenticator.
  */
 function loopbackBypassAllowed(req: Request): boolean {
-  if (!isLoopbackRequest(req)) return false;
+  if (!isAutoLoginAllowed(req)) return false;
   const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
   return (settings.CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN ?? 'true') !== 'false';
 }

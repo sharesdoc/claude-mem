@@ -3,7 +3,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../../../../utils/logger.js';
 import type { AdminSessionStore } from '../AdminSessionStore.js';
 import { extractBearerToken } from '../AdminSessionStore.js';
-import { isLoopbackRequest } from '../middleware.js';
+import { isAutoLoginAllowed } from '../middleware.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 
@@ -86,7 +86,7 @@ export function serverApiGate(adminSessions: AdminSessionStore, serverToken: str
     // X-005 local auto-login: the loopback operator skips credentials
     // unless CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN=false (read fresh so the
     // switch takes effect without a restart).
-    if (isLoopbackRequest(req)) {
+    if (isAutoLoginAllowed(req)) {
       const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
       if ((settings.CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN ?? 'true') !== 'false') {
         res.locals.authVia = 'loopback';

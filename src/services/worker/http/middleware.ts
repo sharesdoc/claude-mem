@@ -117,12 +117,29 @@ const LOOPBACK_ADDRESSES = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1', 'loc
  * True only when the request demonstrably originates from this machine:
  * both the express-resolved client IP (honours trusted-proxy resolution,
  * so a remote client behind a local trusted reverse proxy is NOT loopback)
- * and the raw socket peer address must be loopback (X-005).
+ * and the raw socket peer address must be loopback.
  */
 export function isLoopbackRequest(req: Request): boolean {
   const clientIp = req.ip || '';
   const socketIp = req.socket?.remoteAddress ?? '';
   return LOOPBACK_ADDRESSES.has(clientIp) && LOOPBACK_ADDRESSES.has(socketIp);
+}
+
+/** IPv4 loopback addresses that qualify for auto-login (X-005).
+ *  Only 127.0.0.1 and its IPv4-mapped IPv6 form — ::1 and localhost are
+ *  excluded so that auto-login is restricted to the unambiguous IPv4
+ *  loopback address. */
+const AUTO_LOGIN_IPS = new Set(['127.0.0.1', '::ffff:127.0.0.1']);
+
+/**
+ * True when the request comes from 127.0.0.1 (or its IPv4-mapped IPv6
+ * equivalent), the only addresses allowed to auto-login without a password.
+ * Both the express-resolved IP and the raw socket peer must match.
+ */
+export function isAutoLoginAllowed(req: Request): boolean {
+  const clientIp = req.ip || '';
+  const socketIp = req.socket?.remoteAddress ?? '';
+  return AUTO_LOGIN_IPS.has(clientIp) && AUTO_LOGIN_IPS.has(socketIp);
 }
 
 export function requireLocalhost(req: Request, res: Response, next: NextFunction): void {
