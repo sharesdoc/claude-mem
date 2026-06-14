@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import { z } from 'zod';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { validateBody } from '../middleware/validateBody.js';
-import { trustProxies } from '../middleware/trustProxies.js';
+
 import { enforceAllowList } from '../middleware/enforceAllowList.js';
 import { tokenAuth } from '../middleware/tokenAuth.js';
 import { logger } from '../../../../utils/logger.js';
@@ -18,7 +18,7 @@ import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
  * T-09 — POST /api/sync/ingest (server-only).
  *
  * Middleware chain layers each operator-controlled boundary in order:
- *   trustProxies → requireTls → auth → allowList → validate → handler
+ *   requireTls → auth → allowList → validate → handler
  *
  * Each layer is wired from its settings key so an operator can enable
  * exactly the surface that fits their deployment without code changes.
@@ -105,7 +105,6 @@ const syncIngestSchema = z.object({
 type SyncIngestPayload = z.infer<typeof syncIngestSchema>;
 
 export interface SyncRoutesSettings {
-  CLAUDE_MEM_SERVER_TRUSTED_PROXIES: string;
   CLAUDE_MEM_SERVER_REQUIRE_TLS: string;
   CLAUDE_MEM_SERVER_AUTH_MODE: string;
   CLAUDE_MEM_SERVER_ALLOWED_USERS: string;
@@ -136,7 +135,6 @@ export class SyncRoutes extends BaseRouteHandler {
   setupRoutes(app: express.Application): void {
     app.post(
       '/api/sync/ingest',
-      trustProxies(this.settings.CLAUDE_MEM_SERVER_TRUSTED_PROXIES ?? ''),
       tokenAuth(this.settings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? ''),
       this.requireTls(),
       this.authMiddleware(),

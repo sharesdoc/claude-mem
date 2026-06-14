@@ -354,7 +354,6 @@ export class WorkerService implements WorkerRef {
       // T-09: /api/sync/ingest — server-only ingest endpoint.
       const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
       this.server.registerRoutes(new SyncRoutes(this.dbManager, {
-        CLAUDE_MEM_SERVER_TRUSTED_PROXIES: settings.CLAUDE_MEM_SERVER_TRUSTED_PROXIES ?? '',
         CLAUDE_MEM_SERVER_REQUIRE_TLS: settings.CLAUDE_MEM_SERVER_REQUIRE_TLS ?? 'false',
         CLAUDE_MEM_SERVER_AUTH_MODE: settings.CLAUDE_MEM_SERVER_AUTH_MODE ?? 'none',
         CLAUDE_MEM_SERVER_ALLOWED_USERS: settings.CLAUDE_MEM_SERVER_ALLOWED_USERS ?? '',
@@ -391,7 +390,7 @@ export class WorkerService implements WorkerRef {
       // Bind != loopback is an operator opt-in for server mode reachable via
       // frpc / nginx (S-doc §4). Surface it loudly so a misconfiguration on
       // a client install can't accidentally expose ingest to the LAN.
-      logger.info('SYSTEM', `Worker is listening on a non-loopback interface (${host}); ensure CLAUDE_MEM_SERVER_TRUSTED_PROXIES + ALLOWED_USERS are configured.`);
+      logger.info('SYSTEM', `Worker is listening on a non-loopback interface (${host}); ensure CLAUDE_MEM_SERVER_ALLOWED_USERS is configured.`);
     }
 
     this.initializeBackground().catch((error) => {

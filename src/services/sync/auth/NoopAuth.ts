@@ -12,8 +12,8 @@ import type { SyncAuthStrategy } from './types.js';
  *
  * Security note: NoopAuth provides ZERO attestation. It MUST only be
  * used behind a trusted network boundary (frpc tunnel inside an office
- * LAN, loopback-only nginx, etc.). The "trustProxies" middleware
- * (T-11) is the actual perimeter when this strategy is selected.
+ * LAN, loopback-only nginx, etc.). The tokenAuth / serverApiGate
+ * middleware is the actual perimeter when this strategy is selected.
  */
 export class NoopAuth implements SyncAuthStrategy {
   readonly mode = 'none' as const;

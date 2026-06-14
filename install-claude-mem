@@ -1121,7 +1121,6 @@ if (role) {
   flat.CLAUDE_MEM_NODE_ROLE = role;
   if (role === 'server') {
     if (!flat.CLAUDE_MEM_SERVER_BIND_HOST) flat.CLAUDE_MEM_SERVER_BIND_HOST = '0.0.0.0';
-    if (!flat.CLAUDE_MEM_SERVER_TRUSTED_PROXIES) flat.CLAUDE_MEM_SERVER_TRUSTED_PROXIES = '127.0.0.1/32,::1/128';
   }
 }
 if (upstream) {
