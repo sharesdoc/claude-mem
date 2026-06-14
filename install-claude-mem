@@ -1121,7 +1121,7 @@ if (role) {
   flat.CLAUDE_MEM_NODE_ROLE = role;
   if (role === 'server') {
     if (!flat.CLAUDE_MEM_SERVER_BIND_HOST) flat.CLAUDE_MEM_SERVER_BIND_HOST = '0.0.0.0';
-    if (!flat.CLAUDE_MEM_SERVER_TRUSTED_PROXIES) flat.CLAUDE_MEM_SERVER_TRUSTED_PROXIES = '127.0.0.1/32,::1/128,192.168.0.0/24';
+    if (!flat.CLAUDE_MEM_SERVER_TRUSTED_PROXIES) flat.CLAUDE_MEM_SERVER_TRUSTED_PROXIES = '127.0.0.1/32,::1/128';
   }
 }
 if (upstream) {
@@ -1150,32 +1150,16 @@ EOF
   fi
 }
 
-# Write CLAUDE_MEM_SERVER_ALLOWED_ORIGINS (csv) into settings.json so the
-# CORS middleware lets public-domain viewers (frpc/nginx reverse-proxied)
-# through. Empty arg = no-op.
+
+
+# Deprecated: CORS now allows all origins in server mode; kept as no-op for
+# backward compatibility with scripts that pass --allowed-origins.
 apply_allowed_origins() {
   local origins="${1:-}"
   [[ -z "$origins" ]] && return 0
-  local file="$(windows_native_path "$DATA_DIR/settings.json")"
-  mkdir -p "$DATA_DIR"
-  [[ -f "$file" ]] || printf '{}\n' > "$file"
+  warn "CLAUDE_MEM_SERVER_ALLOWED_ORIGINS is deprecated — CORS now allows all origins in server mode"
+}
 
-  step "Applying allowed CORS origins"
-  node - <<EOF
-const fs = require('fs');
-const path = '$file';
-let raw = {};
-try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
-let flat = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-if (flat.env && typeof flat.env === 'object') {
-  flat = { ...flat, ...flat.env };
-  delete flat.env;
-}
-flat.CLAUDE_MEM_SERVER_ALLOWED_ORIGINS = '$origins';
-fs.writeFileSync(path, JSON.stringify(flat, null, 2) + '\n');
-console.log(' ✓ allowed origins set:', '$origins');
-EOF
-}
 
 # Print a clear warning when -i wrote new settings but the worker
 # was already running, so the user knows to restart manually.
