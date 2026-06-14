@@ -3,7 +3,7 @@ import pc from 'picocolors';
 import { execSync } from 'child_process';
 import { spawnHidden } from '../../shared/spawn.js';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
+import { homedir, networkInterfaces } from 'os';
 import { dirname, join } from 'path';
 import { SettingsDefaultsManager, type SettingsDefaults } from '../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../shared/paths.js';
@@ -23,6 +23,30 @@ function getSetting<K extends keyof SettingsDefaults>(key: K): SettingsDefaults[
 }
 
 const isInteractive = process.stdin.isTTY === true;
+
+/** Detect the primary LAN IPv4 address (first non-internal, non-loopback). */
+function getLanIp(): string | null {
+  const ifaces = networkInterfaces();
+  for (const [, addrs] of Object.entries(ifaces)) {
+    if (!addrs) continue;
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' && !addr.internal) {
+        return addr.address;
+      }
+    }
+  }
+  return null;
+}
+
+/** Format viewer URLs string: always shows 127.0.0.1, plus LAN IP if available. */
+function formatViewerUrls(port: number | string): string {
+  const local = pc.underline(`http://127.0.0.1:${port}`);
+  const lan = getLanIp();
+  if (lan) {
+    return `${local}  (LAN: ${pc.underline(`http://${lan}:${port}`)})`;
+  }
+  return local;
+}
 
 interface TaskDescriptor {
   title: string;
@@ -1285,7 +1309,7 @@ export async function runInstallCommand(options: InstallOptions = {}): Promise<v
         workerStartResult = await ensureWorkerStarted(port, scriptPath);
         switch (workerStartResult) {
           case 'ready':
-            return `${selectedRuntime === 'server-beta' ? 'Server beta' : 'Worker'} ready at http://localhost:${port} ${pc.green('OK')}`;
+            return `${selectedRuntime === 'server-beta' ? 'Server beta' : 'Worker'} ready at ${formatViewerUrls(port)} ${pc.green('OK')}`;
           case 'warming':
             return `${selectedRuntime === 'server-beta' ? 'Server beta' : 'Worker'} starting on port ${port} — finishing in background ${pc.yellow('⏳')}`;
           case 'dead':
@@ -1347,7 +1371,7 @@ export async function runInstallCommand(options: InstallOptions = {}): Promise<v
       }
       healthSpinner?.stop(
         workerReady
-          ? `Worker ready at http://localhost:${actualPort}`
+          ? `Worker ready at ${formatViewerUrls(actualPort)}`
           : `Worker reachable but not ready on port ${workerPort}`,
       );
     } catch {
@@ -1362,13 +1386,13 @@ export async function runInstallCommand(options: InstallOptions = {}): Promise<v
   const workerHeadline = autoStartSkipped
     ? `${pc.yellow('!')} ${runtimeLabel} autostart skipped — start it manually with ${pc.bold(runtimeStartCommand)}`
     : workerReady || finalWorkerState === 'ready'
-      ? `${pc.green('✓')} ${runtimeLabel} running at ${pc.underline(`http://localhost:${actualPort}`)}`
-      : `${pc.yellow('⏳')} ${runtimeLabel} starting at ${pc.underline(`http://localhost:${actualPort}`)} — give it ~30s, then refresh`;
+      ? `${pc.green('✓')} ${runtimeLabel} running at ${formatViewerUrls(actualPort)}`
+      : `${pc.yellow('⏳')} ${runtimeLabel} starting at ${formatViewerUrls(actualPort)} — give it ~30s, then refresh`;
   const nextSteps = autoStartSkipped
     ? [
         workerHeadline,
         ``,
-        `${pc.bold('First success:')} once the worker is running, keep ${pc.underline(`http://localhost:${workerPort}`)} open in a browser, then open Claude Code in any project. Observations stream in as Claude reads, edits, and runs commands.`,
+        `${pc.bold('First success:')} once the worker is running, keep ${formatViewerUrls(workerPort)} open in a browser, then open Claude Code in any project. Observations stream in as Claude reads, edits, and runs commands.`,
         ``,
         `${pc.bold('Two paths from here:')}`,
         `  ${pc.cyan('A.')} Just start working. Memory builds passively from your first prompt. (Recommended.)`,
@@ -1399,7 +1423,7 @@ export async function runInstallCommand(options: InstallOptions = {}): Promise<v
     : [
         `${pc.yellow('!')} Worker not yet ready on port ${pc.cyan(String(workerPort))} -- still starting up; check ${pc.bold('claude-mem status')} later, or start manually: ${pc.bold('npx claude-mem start')}`,
         ``,
-        `${pc.bold('First success:')} keep ${pc.underline(`http://localhost:${workerPort}`)} open in a browser, then open Claude Code in any project. Observations stream in as Claude reads, edits, and runs commands.`,
+        `${pc.bold('First success:')} keep ${formatViewerUrls(workerPort)} open in a browser, then open Claude Code in any project. Observations stream in as Claude reads, edits, and runs commands.`,
         ``,
         `${pc.bold('Two paths from here:')}`,
         `  ${pc.cyan('A.')} Just start working. Memory builds passively from your first prompt. (Recommended.)`,

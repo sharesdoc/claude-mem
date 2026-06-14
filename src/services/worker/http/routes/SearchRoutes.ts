@@ -2,6 +2,7 @@
 import express, { Request, Response } from 'express';
 import * as fs from 'fs';
 import path from 'path';
+import { networkInterfaces } from 'os';
 import { z } from 'zod';
 import { SearchManager } from '../../SearchManager.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
@@ -77,6 +78,27 @@ function projectsHaveObservations(
     return true;
   }
   return false;
+}
+
+function getLanIp(): string | null {
+  const ifaces = networkInterfaces();
+  for (const [, addrs] of Object.entries(ifaces)) {
+    if (!addrs) continue;
+    for (const addr of addrs) {
+      if (addr.family === 'IPv4' && !addr.internal) {
+        return addr.address;
+      }
+    }
+  }
+  return null;
+}
+
+function buildViewerUrl(port: number | string): string {
+  const lan = getLanIp();
+  if (lan) {
+    return `http://127.0.0.1:${port} (LAN: http://${lan}:${port})`;
+  }
+  return `http://127.0.0.1:${port}`;
 }
 
 const WELCOME_HINT_TEMPLATE = `# claude-mem status
@@ -359,7 +381,7 @@ export class SearchRoutes extends BaseRouteHandler {
       // observations. Hot-path: PostToolUse fires after every Read/Edit.
       if (!projectsHaveObservations(sessionStore, projects)) {
         const port = settings.CLAUDE_MEM_WORKER_PORT;
-        const viewerUrl = `http://localhost:${port}`;
+        const viewerUrl = buildViewerUrl(port);
         const hintBody = WELCOME_HINT_TEMPLATE.replace('{viewer_url}', viewerUrl);
         res.setHeader('Content-Type', 'text/plain; charset=utf-8');
         res.send(hintBody);

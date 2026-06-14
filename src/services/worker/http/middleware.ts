@@ -48,62 +48,40 @@ export function createMiddleware(
   return middlewares;
 }
 
-function isPrivateOrigin(origin: string): boolean {
-  try {
-    const host = new URL(origin).hostname;
-    if (host === 'localhost' || host === '::1') return true;
-    const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-    if (!m) return false;
-    const a = Number(m[1]);
-    const b = Number(m[2]);
-    if (a === 127) return true;                          // 127.0.0.0/8
-    if (a === 10) return true;                           // 10.0.0.0/8
-    if (a === 192 && b === 168) return true;             // 192.168.0.0/16
-    if (a === 172 && b >= 16 && b <= 31) return true;    // 172.16.0.0/12
-    return false;
-  } catch {
-    return false;
-  }
-}
 
 // In server mode the worker binds 0.0.0.0 and is meant to be reached from
-// LAN browsers (e.g. http://192.168.0.110:37701). The auth layer (admin
-// password + sync access token) is the real security boundary; CORS is
-// only defense-in-depth, so widening the allowlist to RFC1918 origins is
-// safe and unblocks the deployed-server login flow.
+// any network (LAN or WAN). The auth layer (admin password + sync access
+// token) is the real security boundary; CORS is only defense-in-depth, so
+// allowing all origins in server mode ensures token-authenticated clients
+// can connect from any IP without CORS preflight blocking them.
 export function createCorsMiddleware(opts: {
   role?: 'client' | 'server';
   allowedOrigins?: string[];
 } = {}): RequestHandler {
   const role = opts.role ?? 'client';
-  // Normalize once; tolerant to trailing slashes and case in the host part.
-  const allowList = new Set(
-    (opts.allowedOrigins ?? [])
-      .map(o => o.trim().replace(/\/+$/, '').toLowerCase())
-      .filter(Boolean),
-  );
   return cors({
     origin: (origin, callback) => {
-      if (!origin ||
-          origin.startsWith('http://localhost:') ||
-          origin.startsWith('http://127.0.0.1:')) {
+      // No origin header (non-browser client) — always allow.
+      if (!origin) {
         callback(null, true);
         return;
       }
-      if (role === 'server' && isPrivateOrigin(origin)) {
-        callback(null, true);
+      // Client/standalone mode: only loopback origins.
+      if (role !== 'server') {
+        if (origin.startsWith('http://localhost:') ||
+            origin.startsWith('http://127.0.0.1:')) {
+          callback(null, true);
+          return;
+        }
+        logger.warn('HTTP', 'CORS origin not allowed in client mode', { origin, role });
+        callback(null, false);
         return;
       }
-      if (role === 'server' && allowList.has(origin.toLowerCase())) {
-        callback(null, true);
-        return;
-      }
-      // Silently disallow — return (null, false) so the cors lib omits the
-      // Access-Control-Allow-Origin header instead of calling next(err).
-      // Without an errorHandler in the worker's express stack, throwing
-      // here surfaces as an HTML 500 page that the viewer can't JSON-parse.
-      logger.warn('HTTP', 'CORS origin not allowed', { origin, role });
-      callback(null, false);
+      // Server mode: allow all origins. The serverApiGate middleware
+      // (mounted before all routes) enforces token/password auth on
+      // every request; CORS here is purely defense-in-depth and should
+      // never block a legitimate token-carrying client.
+      callback(null, true);
     },
     methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
