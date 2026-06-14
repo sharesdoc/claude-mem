@@ -109,11 +109,24 @@ export function isLoopbackRequest(req: Request): boolean {
 const AUTO_LOGIN_IPS = new Set(['127.0.0.1', '::ffff:127.0.0.1']);
 
 /**
- * True when the request comes from 127.0.0.1 (or its IPv4-mapped IPv6
- * equivalent), the only addresses allowed to auto-login without a password.
- * Both the express-resolved IP and the raw socket peer must match.
+ * True when the request demonstrably comes from a local console — not
+ * through a reverse proxy (frpc/nginx/etc.), even one running on the
+ * same machine.
+ *
+ * Conditions (all must hold):
+ * 1. No X-Forwarded-For / X-Real-IP header — presence means a proxy is
+ *    in the path, so the real client is remote regardless of socket peer.
+ * 2. Both the express-resolved IP and the raw socket peer are 127.0.0.1
+ *    (or its IPv4-mapped IPv6 form).
  */
 export function isAutoLoginAllowed(req: Request): boolean {
+  // Proxy header present → real client is remote, never auto-login.
+  const xff = req.headers['x-forwarded-for'];
+  const xri = req.headers['x-real-ip'];
+  if (xff || xri) {
+    return false;
+  }
+
   const clientIp = req.ip || '';
   const socketIp = req.socket?.remoteAddress ?? '';
   return AUTO_LOGIN_IPS.has(clientIp) && AUTO_LOGIN_IPS.has(socketIp);
