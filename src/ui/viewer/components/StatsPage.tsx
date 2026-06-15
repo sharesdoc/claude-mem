@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { AnalyticsResponse, WeeklyReportItem, DailyReportOverview, WeeklyReportOverview } from '../types';
 import { useLocale } from '../hooks/useLocale';
 import { authFetch } from '../utils/api';
+import { ScopePicker, ScopeMode } from './ScopePicker';
 
 interface StatsPageProps {
   currentFilter: string;
@@ -47,6 +48,22 @@ function formatDayLabel(bucket: string): string {
 
 function localDateKey(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+/* ── Current-period anchors (defaults for the ScopePickers) ───────────────── */
+function curDayAnchor(): string { return localDateKey(); }
+function curWeekAnchor(): string {
+  const d = new Date(); d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // back to Monday
+  return localDateKey(d);
+}
+function curMonthAnchor(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+function curQuarterAnchor(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${Math.floor(d.getMonth() / 3) + 1}`;
 }
 
 function dayLabelColor(bucket: string): string {
@@ -307,6 +324,17 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     try { localStorage.setItem(SCOPE_KEY, s); } catch {}
   }, []);
 
+  // Per-mode selected period (anchor). Defaults to the CURRENT period on each
+  // mount (so the buttons open on today/this-week), and the ScopePickers update
+  // it as the user picks a past day/week/month/quarter. Not persisted — a fresh
+  // load always starts from "now", matching the requested default behavior.
+  const [anchorByScope, setAnchorByScope] = useState<Record<ScopeMode, string>>(() => ({
+    day: curDayAnchor(), week: curWeekAnchor(), month: curMonthAnchor(), quarter: curQuarterAnchor(),
+  }));
+  const setAnchor = useCallback((m: ScopeMode, v: string) => {
+    setAnchorByScope(prev => ({ ...prev, [m]: v }));
+  }, []);
+
   /**
    * Fetch analytics from the backend. Aborts in-flight requests when
    * currentFilter / userLabelFilter / scope changes to avoid stale data races.
@@ -321,6 +349,11 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       // Send the viewer's TZ so day/week/month boundaries follow the user's
       // computer even when the worker (server mode) runs in another timezone.
       params.set('tz', String(-new Date().getTimezoneOffset()));
+      // Dated scopes carry the selected period so the backend computes
+      // [since, until) for that exact day/week/month/quarter.
+      if (scope === 'day' || scope === 'week' || scope === 'month' || scope === 'quarter') {
+        params.set('anchor', anchorByScope[scope]);
+      }
       if (currentFilter) params.set('project', currentFilter);
       if (userLabelFilter) params.set('userLabel', userLabelFilter);
       const resp = await authFetch(`/api/stats/analytics?${params}`, { signal: controller.signal });
@@ -334,7 +367,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       setLoading(false);
     }
     return () => controller.abort();
-  }, [currentFilter, userLabelFilter, scope]);
+  }, [currentFilter, userLabelFilter, scope, anchorByScope]);
 
   useEffect(() => {
     const ctrl = loadAnalytics();
@@ -482,10 +515,11 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const loadDailyOverview = useCallback(async () => {
     try {
       const tz = -new Date().getTimezoneOffset();
-      const resp = await authFetch('/api/daily-reports/overview?tz=' + tz);
+      // date=<selected day> so the daily-report table follows the chosen period.
+      const resp = await authFetch(`/api/daily-reports/overview?tz=${tz}&date=${anchorByScope.day}`);
       if (resp.ok) setDailyOverview(await resp.json() as DailyReportOverview);
     } catch { /* 保持旧值;失败不阻塞页面 */ }
-  }, []);
+  }, [anchorByScope.day]);
 
   // 标记/解除某用户的忙碌态(用函数式更新,避免并发点击时相互覆盖 Set)。
   const markBusy = useCallback((user: string, busy: boolean) => {
@@ -533,10 +567,11 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const loadWeeklyOverview = useCallback(async () => {
     try {
       const tz = -new Date().getTimezoneOffset();
-      const resp = await authFetch('/api/reports/overview?tz=' + tz);
+      // week=<selected Monday> so the weekly-report table follows the chosen week.
+      const resp = await authFetch(`/api/reports/overview?tz=${tz}&week=${anchorByScope.week}`);
       if (resp.ok) setWeeklyOverview(await resp.json() as WeeklyReportOverview);
     } catch { /* 保持旧值;失败不阻塞页面 */ }
-  }, []);
+  }, [anchorByScope.week]);
 
   const markWeeklyBusy = useCallback((user: string, busy: boolean) => {
     setWeeklyBusyUsers(prev => {
@@ -585,10 +620,36 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const plotW = svgW - svgPadding.left - svgPadding.right;
   const plotH = svgH - svgPadding.top - svgPadding.bottom;
 
-  if (loading) {
+  // Scope bar: 24h/history stay plain tabs; the four dated scopes become
+  // ScopePickers whose label is the selected period. Shared by both the
+  // history view and the main view so they never drift.
+  const renderScopeTabs = () => (
+    <span className="stats-tabs">
+      {SCOPES.map(s => (
+        (s === 'day' || s === 'week' || s === 'month' || s === 'quarter') ? (
+          <ScopePicker key={s} mode={s as ScopeMode} value={anchorByScope[s as ScopeMode]}
+            active={scope === s}
+            onActivate={() => changeScope(s)}
+            onChange={(a) => { setAnchor(s as ScopeMode, a); changeScope(s); }} />
+        ) : (
+          <button key={s} type="button"
+            className={`stats-tab${scope === s ? ' is-active' : ''}`}
+            onClick={() => changeScope(s)}>
+            {t(`stats.scope_${s}`)}
+          </button>
+        )
+      ))}
+    </span>
+  );
+
+  // Only take over the whole page on the FIRST load (no data yet). On later
+  // reloads (scope/anchor change) keep the last page rendered so the scope bar
+  // — and any open ScopePicker popover — survive instead of unmounting; the
+  // numbers just refresh in place when the new payload arrives.
+  if (loading && !analytics) {
     return (<div className="feed"><div className="feed-content"><div className="stats-page-loading"><div className="spinner" /><span>{t('stats.loading')}</span></div></div></div>);
   }
-  if (error) {
+  if (error && !analytics) {
     return (<div className="feed"><div className="feed-content"><div className="stats-page-error"><span>{t('stats.error')}: {error}</span><button className="stats-page-retry-btn" onClick={() => loadAnalytics()}>{t('stats.retry')}</button></div></div></div>);
   }
   // Always show the page with scope buttons so the user can switch views.
@@ -696,15 +757,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
         <div className="stats-page">
 
           <div className="stats-scope-bar">
-            <span className="stats-tabs">
-              {SCOPES.map(s => (
-                <button key={s} type="button"
-                  className={`stats-tab${scope === s ? ' is-active' : ''}`}
-                  onClick={() => changeScope(s)}>
-                  {t(`stats.scope_${s}`)}
-                </button>
-              ))}
-            </span>
+            {renderScopeTabs()}
             <span className="stats-scope-title">
               {t('stats.scope_history')}
               {!isAllProjects && `: ${currentFilter}`}
@@ -809,15 +862,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
         <div className="stats-page">
 
           <div className="stats-scope-bar">
-            <span className="stats-tabs">
-              {SCOPES.map(s => (
-                <button key={s} type="button"
-                  className={`stats-tab${scope === s ? ' is-active' : ''}`}
-                  onClick={() => changeScope(s)}>
-                  {t(`stats.scope_${s}`)}
-                </button>
-              ))}
-            </span>
+            {renderScopeTabs()}
             <span className="stats-scope-title">
               {isAllProjects ? t('stats.allProjects') : `${t('stats.singleProject')}: ${currentFilter}`}
             </span>

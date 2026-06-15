@@ -3474,6 +3474,119 @@
       border-color: var(--color-accent-primary);
     }
 
+    /* ── Scope picker (dated stats-scope buttons + popover) ──────────── */
+    .scope-picker {
+      position: relative;
+      display: inline-flex;
+    }
+    .scope-picker-btn {
+      min-width: 84px;
+      justify-content: center;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      white-space: nowrap;
+    }
+    /* Popover is portal'd to <body>; theme rides on the shared color tokens. */
+    .scope-picker-pop {
+      background: var(--color-bg-card);
+      border: 1px solid var(--color-border-primary);
+      border-radius: 8px;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.22);
+      padding: 8px;
+      z-index: 1000;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+    }
+    .sp-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 4px;
+      margin-bottom: 6px;
+    }
+    .sp-nav-group { display: flex; gap: 2px; }
+    .sp-nav {
+      width: 22px;
+      height: 22px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+      border: 1px solid var(--color-border-primary);
+      border-radius: 4px;
+      background: transparent;
+      color: var(--color-text-secondary);
+      font-size: 13px;
+      line-height: 1;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+    .sp-nav:hover:not(:disabled) {
+      color: var(--color-text-primary);
+      border-color: var(--color-border-hover);
+    }
+    .sp-nav:disabled { opacity: 0.35; cursor: not-allowed; }
+    .sp-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--color-text-primary);
+      letter-spacing: 0.01em;
+    }
+    .sp-dow {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      gap: 2px;
+      margin-bottom: 2px;
+    }
+    .sp-dow span {
+      text-align: center;
+      font-size: 10px;
+      color: var(--color-text-muted);
+      padding: 2px 0;
+    }
+    .sp-grid { display: grid; gap: 2px; }
+    .sp-grid--day, .sp-grid--week { grid-template-columns: repeat(7, 1fr); }
+    .sp-grid--month { grid-template-columns: repeat(3, 1fr); }
+    .sp-grid--quarter { grid-template-columns: 1fr; }
+    .sp-cell {
+      display: inline-flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 28px;
+      padding: 0;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      background: transparent;
+      color: var(--color-text-secondary);
+      font-size: 11px;
+      font-family: inherit;
+      cursor: pointer;
+      transition: all 0.12s ease;
+    }
+    .sp-cell--wide { height: 30px; }
+    .sp-cell--row { height: 34px; flex-direction: row; gap: 8px; }
+    .sp-cell:hover:not(:disabled):not(.is-blank) {
+      background: var(--color-bg-card-hover);
+      border-color: var(--color-border-hover);
+      color: var(--color-text-primary);
+    }
+    .sp-cell.is-today {
+      border-color: var(--color-accent-primary);
+      color: var(--color-text-primary);
+    }
+    .sp-cell.is-selected {
+      background: var(--color-accent-primary);
+      border-color: var(--color-accent-primary);
+      color: var(--color-text-button);
+    }
+    .sp-cell.is-disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+    .sp-cell.is-blank { cursor: default; }
+    .sp-q-main { font-weight: 600; }
+    .sp-q-sub { font-size: 10px; color: var(--color-text-muted); }
+    .sp-cell.is-selected .sp-q-sub { color: var(--color-text-button); }
+
     /* ── Line chart ────────────────────────────────────────────────── */
     .stats-line-chart {
       width: 100%;

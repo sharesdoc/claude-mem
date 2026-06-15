@@ -106,7 +106,11 @@ export class ReportRoutes extends BaseRouteHandler {
   private handleOverview = this.wrapHandler((req: Request, res: Response): void => {
     if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
     const tzOffsetMs = this.tzOffsetMs(req);
-    const week = weekMondayOf(Date.now(), tzOffsetMs);          // 本周一(本地日期)
+    // Optional ?week=YYYY-MM-DD (Monday) selects a specific past week so the
+    // stats page's weekly-report table can follow the chosen period; defaults
+    // to the current week.
+    const reqWeek = (req.query.week as string | undefined)?.trim();
+    const week = (reqWeek && WEEK_RE.test(reqWeek)) ? reqWeek : weekMondayOf(Date.now(), tzOffsetMs);
     const weekEnd = this.fmtYMD(new Date(`${week}T00:00:00Z`).getTime() + 6 * 86400000);
 
     const rows = this.dbManager.getConnection().prepare(`

@@ -695,13 +695,52 @@ export class DataRoutes extends BaseRouteHandler {
     const quarterStart = Date.UTC(cy, Math.floor(cm / 3) * 3, 1) - tzOffsetMs;
     // history: up to 36 calendar months before the current month
     const historyStart = Date.UTC(cy, cm - 35, 1) - tzOffsetMs;
-    const since = is24h ? Date.now() - 24 * 3600000
+    const qStartMonth = Math.floor(cm / 3) * 3;
+    let since = is24h ? Date.now() - 24 * 3600000
       : scope === 'day' ? localMidnightToday
       : scope === 'week' ? weekStart
       : scope === 'month' ? monthStart
       : scope === 'quarter' ? quarterStart
       : scope === 'history' ? historyStart
       : monthStart;
+
+    // Exclusive upper bound of the window. Default = the current period's end.
+    // 24h/history stay open-ended (until = now); the dated scopes end at the
+    // boundary of the CURRENT period until an explicit ?anchor selects a past one.
+    let until = is24h ? Date.now()
+      : scope === 'day' ? localMidnightToday + 86400000
+      : scope === 'week' ? weekStart + 7 * 86400000
+      : scope === 'month' ? Date.UTC(cy, cm + 1, 1) - tzOffsetMs
+      : scope === 'quarter' ? Date.UTC(cy, qStartMonth + 3, 1) - tzOffsetMs
+      : Date.now(); // history
+
+    // ── Optional explicit period selection (?anchor=) ───────────────────
+    // Lets the stats page query ANY past day/week/month/quarter (not just the
+    // current one). Format is per-scope; malformed values are ignored (falls
+    // back to the current period) — never 500 on a bad query string.
+    //   day     → YYYY-MM-DD          week → YYYY-MM-DD (that week's Monday)
+    //   month   → YYYY-MM             quarter → YYYY-Q  (Q = 1..4)
+    const anchor = typeof req.query.anchor === 'string' ? req.query.anchor.trim() : '';
+    if (anchor) {
+      if (scope === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(anchor)) {
+        const [y, m, d] = anchor.split('-').map(Number);
+        since = Date.UTC(y, m - 1, d) - tzOffsetMs;
+        until = since + 86400000;
+      } else if (scope === 'week' && /^\d{4}-\d{2}-\d{2}$/.test(anchor)) {
+        const [y, m, d] = anchor.split('-').map(Number);
+        since = Date.UTC(y, m - 1, d) - tzOffsetMs;
+        until = since + 7 * 86400000;
+      } else if (scope === 'month' && /^\d{4}-\d{2}$/.test(anchor)) {
+        const [y, m] = anchor.split('-').map(Number);
+        since = Date.UTC(y, m - 1, 1) - tzOffsetMs;
+        until = Date.UTC(y, m, 1) - tzOffsetMs;
+      } else if (scope === 'quarter' && /^\d{4}-[1-4]$/.test(anchor)) {
+        const [y, q] = anchor.split('-').map(Number);
+        const qs = (q - 1) * 3;
+        since = Date.UTC(y, qs, 1) - tzOffsetMs;
+        until = Date.UTC(y, qs + 3, 1) - tzOffsetMs;
+      }
+    }
 
     // Quarter has ~90 daily buckets → aggregate the charts by week instead.
     // 24h has hourly buckets.
@@ -722,11 +761,11 @@ export class DataRoutes extends BaseRouteHandler {
              COUNT(*) AS count
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
-      WHERE up.created_at_epoch >= ?
+      WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+    `).all(tzOffsetMs, since, until, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
     // ── prompts by project (全量，所有项目视图用，不按当前筛选) ──
     const promptsByProjectRows = db.prepare(`
@@ -734,11 +773,11 @@ export class DataRoutes extends BaseRouteHandler {
              COUNT(*) AS count
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
-      WHERE up.created_at_epoch >= ?
+      WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ?
         AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
       GROUP BY project
       ORDER BY count DESC
-    `).all(since, userLabel || null, userLabel || null) as Array<{ project: string; count: number }>;
+    `).all(since, until, userLabel || null, userLabel || null) as Array<{ project: string; count: number }>;
 
     // ── observations by user by bucket ─────────────────────────────────
     const observationsByUserByDay = db.prepare(`
@@ -746,11 +785,11 @@ export class DataRoutes extends BaseRouteHandler {
              COALESCE(NULLIF(o.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
       FROM observations o
-      WHERE o.created_at_epoch >= ?
+      WHERE o.created_at_epoch >= ? AND o.created_at_epoch < ?
         AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
       GROUP BY day_bucket, o.user_label
       ORDER BY day_bucket ASC
-    `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+    `).all(tzOffsetMs, since, until, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
     // ── summaries by user by bucket ────────────────────────────────────
     const summariesByUserByDay = db.prepare(`
@@ -758,11 +797,11 @@ export class DataRoutes extends BaseRouteHandler {
              COALESCE(NULLIF(ss.user_label, ''), 'unknown') AS user_label,
              COUNT(*) AS count
       FROM session_summaries ss
-      WHERE ss.created_at_epoch >= ?
+      WHERE ss.created_at_epoch >= ? AND ss.created_at_epoch < ?
         AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?)
       GROUP BY day_bucket, ss.user_label
       ORDER BY day_bucket ASC
-    `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
+    `).all(tzOffsetMs, since, until, project || null, project || null) as Array<{ day_bucket: number; user_label: string; count: number }>;
 
     // ── global totals ──────────────────────────────────────────────────
     // Summary cards — scoped by time, project AND userLabel (server mode) so
@@ -772,18 +811,18 @@ export class DataRoutes extends BaseRouteHandler {
              COUNT(*) AS totalObservations
       FROM observations o
       LEFT JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
-      WHERE o.created_at_epoch >= ?
+      WHERE o.created_at_epoch >= ? AND o.created_at_epoch < ?
         AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?)
         AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
-    `).get(since, project || null, project || null, userLabel || null, userLabel || null) as { totalDiscoveryTokens: number; totalObservations: number };
+    `).get(since, until, project || null, project || null, userLabel || null, userLabel || null) as { totalDiscoveryTokens: number; totalObservations: number };
 
     const totalSessionsRow = db.prepare(`
       SELECT COUNT(*) AS totalSessions
       FROM sdk_sessions
-      WHERE started_at_epoch >= ?
+      WHERE started_at_epoch >= ? AND started_at_epoch < ?
         AND (? IS NULL OR project = ?)
         AND (? IS NULL OR user_label = ? COLLATE NOCASE)
-    `).get(since, project || null, project || null, userLabel || null, userLabel || null) as { totalSessions: number };
+    `).get(since, until, project || null, project || null, userLabel || null, userLabel || null) as { totalSessions: number };
 
     // ── unique users ───────────────────────────────────────────────────
     const uniqueUsersRows = db.prepare(`
@@ -807,10 +846,10 @@ export class DataRoutes extends BaseRouteHandler {
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       WHERE up.completed_at_epoch IS NOT NULL
-        AND up.created_at_epoch >= ?
+        AND up.created_at_epoch >= ? AND up.created_at_epoch < ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY user_label
-    `).all(since, project || null, project || null) as Array<{ user_label: string; total_ms: number; prompt_count: number }>;
+    `).all(since, until, project || null, project || null) as Array<{ user_label: string; total_ms: number; prompt_count: number }>;
 
     const userProcessingTime: Record<string, { totalMs: number; sessionCount: number }> = {};
     for (const r of userProcessingTimeRows) {
@@ -825,11 +864,11 @@ export class DataRoutes extends BaseRouteHandler {
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       WHERE up.completed_at_epoch IS NOT NULL
-        AND up.created_at_epoch >= ?
+        AND up.created_at_epoch >= ? AND up.created_at_epoch < ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY day_bucket, user_label
       ORDER BY day_bucket ASC
-    `).all(tzOffsetMs, since, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
+    `).all(tzOffsetMs, since, until, project || null, project || null) as Array<{ day_bucket: number; user_label: string; total_ms: number }>;
 
     // ── per-user project count & active days (table-scoped, local TZ) ──
     const userProjectRows = db.prepare(`
@@ -837,10 +876,10 @@ export class DataRoutes extends BaseRouteHandler {
              COUNT(DISTINCT s.project) AS project_count,
              COUNT(DISTINCT ((s.started_at_epoch + ?) / 86400000)) AS active_days
       FROM sdk_sessions s
-      WHERE s.started_at_epoch >= ?
+      WHERE s.started_at_epoch >= ? AND s.started_at_epoch < ?
         AND (? IS NULL OR s.project = ?)
       GROUP BY user_label
-    `).all(tzOffsetMs, since, project || null, project || null) as Array<{ user_label: string; project_count: number; active_days: number }>;
+    `).all(tzOffsetMs, since, until, project || null, project || null) as Array<{ user_label: string; project_count: number; active_days: number }>;
 
     const userProjectMeta: Record<string, { projectCount: number; activeDays: number }> = {};
     for (const r of userProjectRows) {
@@ -854,36 +893,38 @@ export class DataRoutes extends BaseRouteHandler {
     for (const r of db.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
       FROM user_prompts up JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
-      WHERE up.created_at_epoch >= ? AND (? IS NULL OR s.project = ?) GROUP BY user_label
-    `).all(since, project || null, project || null) as Array<{ user_label: string; n: number }>) {
+      WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ? AND (? IS NULL OR s.project = ?) GROUP BY user_label
+    `).all(since, until, project || null, project || null) as Array<{ user_label: string; n: number }>) {
       ensureCounts(r.user_label).prompts = r.n;
     }
     for (const r of db.prepare(`
       SELECT COALESCE(NULLIF(o.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
       FROM observations o
-      WHERE o.created_at_epoch >= ? AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?) GROUP BY o.user_label
-    `).all(since, project || null, project || null) as Array<{ user_label: string; n: number }>) {
+      WHERE o.created_at_epoch >= ? AND o.created_at_epoch < ? AND (? IS NULL OR COALESCE(NULLIF(o.merged_into_project, ''), o.project) = ?) GROUP BY o.user_label
+    `).all(since, until, project || null, project || null) as Array<{ user_label: string; n: number }>) {
       ensureCounts(r.user_label).obs = r.n;
     }
     for (const r of db.prepare(`
       SELECT COALESCE(NULLIF(ss.user_label, ''), 'unknown') AS user_label, COUNT(*) AS n
       FROM session_summaries ss
-      WHERE ss.created_at_epoch >= ? AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?) GROUP BY ss.user_label
-    `).all(since, project || null, project || null) as Array<{ user_label: string; n: number }>) {
+      WHERE ss.created_at_epoch >= ? AND ss.created_at_epoch < ? AND (? IS NULL OR COALESCE(NULLIF(ss.merged_into_project, ''), ss.project) = ?) GROUP BY ss.user_label
+    `).all(since, until, project || null, project || null) as Array<{ user_label: string; n: number }>) {
       ensureCounts(r.user_label).summaries = r.n;
     }
 
-    // Business days (Mon–Fri) in the summary window [since, now], local TZ.
+    // Business days (Mon–Fri) in the summary window [since, until), VIEWER's TZ.
+    // Counts each local day from `since`'s day up to the window end, clamped to
+    // today so a CURRENT (future-ending) period doesn't over-count. tz-aware so
+    // boundaries follow the viewer's computer, matching every other section.
     let summaryBusinessDays = 0;
     {
-      const cur = new Date(since);
-      const end = new Date();
-      cur.setHours(0, 0, 0, 0);
-      end.setHours(0, 0, 0, 0);
+      const sinceShifted = new Date(since + tzOffsetMs);
+      let cur = Date.UTC(sinceShifted.getUTCFullYear(), sinceShifted.getUTCMonth(), sinceShifted.getUTCDate()) - tzOffsetMs;
+      const end = Math.min(until - 1, localMidnightToday);
       while (cur <= end) {
-        const d = cur.getDay();
-        if (d !== 0 && d !== 6) summaryBusinessDays++;
-        cur.setDate(cur.getDate() + 1);
+        const dow = new Date(cur + tzOffsetMs).getUTCDay();
+        if (dow !== 0 && dow !== 6) summaryBusinessDays++;
+        cur += 86400000;
       }
       if (summaryBusinessDays === 0) summaryBusinessDays = 1;
     }
@@ -913,11 +954,11 @@ export class DataRoutes extends BaseRouteHandler {
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       WHERE up.completed_at_epoch IS NOT NULL
-        AND up.created_at_epoch >= ?
+        AND up.created_at_epoch >= ? AND up.created_at_epoch < ?
         AND (? IS NULL OR s.user_label = ? COLLATE NOCASE)
       GROUP BY project
       ORDER BY total_ms DESC
-    `).all(since, userLabel || null, userLabel || null) as Array<{ project: string; total_ms: number; session_count: number }>;
+    `).all(since, until, userLabel || null, userLabel || null) as Array<{ project: string; total_ms: number; session_count: number }>;
 
     // ── format bucket → label ───────────────────────────────────────────
     const formatBucket = (bucket: number): string => {
@@ -1171,23 +1212,27 @@ export class DataRoutes extends BaseRouteHandler {
       const dayStart = Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate()) - tzOffsetMs;
       return dayStart - (wd === 0 ? 6 : wd - 1) * 86400000;
     };
+    // End the X-axis at the window's last day (until − 1 day) but never past
+    // today — so a past period stops at its own end and the current period
+    // stops at today (no empty future buckets).
+    const chartEndMidnight = Math.min(until - 86400000, localMidnightToday);
     const chartBuckets: string[] = [];
     if (granularity === 'hour') {
       let cur = since;
-      const now = Date.now();
-      while (cur <= now) {
+      const end = Math.min(until, Date.now());
+      while (cur <= end) {
         chartBuckets.push(fmtLocal(cur));
         cur += 3600000;
       }
     } else if (granularity === 'day') {
       let cur = since;
-      while (cur <= localMidnightToday) {
+      while (cur <= chartEndMidnight) {
         chartBuckets.push(fmtLocal(cur));
         cur += 86400000;
       }
     } else {
       let cur = mondayOf(since);
-      const endMonday = mondayOf(localMidnightToday);
+      const endMonday = mondayOf(chartEndMidnight);
       while (cur <= endMonday) {
         chartBuckets.push(fmtLocal(cur));
         cur += 7 * 86400000;

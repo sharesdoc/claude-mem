@@ -85,8 +85,12 @@ export class DailyReportRoutes extends BaseRouteHandler {
   private handleOverview = this.wrapHandler((req: Request, res: Response): void => {
     if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
     const tzOffsetMs = this.tzOffsetMs(req);
-    const today = dayOf(Date.now(), tzOffsetMs);
-    const yesterday = dayOf(Date.now() - DAY_MS, tzOffsetMs);
+    // Optional ?date=YYYY-MM-DD selects a specific past day so the stats page's
+    // daily-report table can follow the chosen period; defaults to today.
+    const reqDate = (req.query.date as string | undefined)?.trim();
+    const today = (reqDate && DATE_RE.test(reqDate)) ? reqDate : dayOf(Date.now(), tzOffsetMs);
+    const [ty, tm, td] = today.split('-').map(Number);
+    const yesterday = dayOf(Date.UTC(ty, tm - 1, td) - tzOffsetMs - DAY_MS, tzOffsetMs);
 
     const rows = this.dbManager.getConnection().prepare(`
       SELECT user_label,
