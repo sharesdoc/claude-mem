@@ -13,7 +13,7 @@ import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
  * flipping the setting takes effect without a worker restart; only invoked
  * on requests that failed every other authenticator.
  */
-function loopbackBypassAllowed(req: Request): boolean {
+export function loopbackBypassAllowed(req: Request): boolean {
   if (!isAutoLoginAllowed(req)) return false;
   const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
   return (settings.CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN ?? 'true') !== 'false';

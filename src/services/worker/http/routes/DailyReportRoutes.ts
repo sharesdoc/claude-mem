@@ -8,6 +8,7 @@ import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsMana
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { DailyReportGenerator, upsertDailyReport, dayOf } from '../../reports/DailyReportGenerator.js';
 import { mdToHtml } from '../../reports/mdToHtml.js';
+import { loopbackBypassAllowed } from '../middleware/tokenAuth.js';
 
 /**
  * DailyReportRoutes — 日报后端接口(对照周报 ReportRoutes,做简)。
@@ -59,6 +60,10 @@ export class DailyReportRoutes extends BaseRouteHandler {
       if (timingSafeEqual(a, b)) return true;
     }
     if (this.adminSessions && presented && this.adminSessions.verify(presented)) return true;
+    // X-005: loopback operator with local auto-login enabled needs no token —
+    // mirrors the API gate and tokenAuth so the stats page's daily-report
+    // table loads on 127.0.0.1 just like the analytics endpoint does.
+    if (loopbackBypassAllowed(req)) return true;
     return false;
   }
 

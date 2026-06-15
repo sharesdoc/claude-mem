@@ -8,6 +8,7 @@ import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsMana
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { ReportGenerator, upsertWeeklyReport, weekMondayOf } from '../../reports/ReportGenerator.js';
 import { mdToHtml } from '../../reports/mdToHtml.js';
+import { loopbackBypassAllowed } from '../middleware/tokenAuth.js';
 
 /**
  * ReportRoutes — 周报后端接口 (B-周报设计文档 §4)。
@@ -60,6 +61,10 @@ export class ReportRoutes extends BaseRouteHandler {
       if (timingSafeEqual(a, b)) return true;
     }
     if (this.adminSessions && presented && this.adminSessions.verify(presented)) return true;
+    // X-005: loopback operator with local auto-login enabled needs no token —
+    // mirrors the API gate and tokenAuth so the stats page's weekly-report
+    // table loads on 127.0.0.1 just like the analytics endpoint does.
+    if (loopbackBypassAllowed(req)) return true;
     return false;
   }
 

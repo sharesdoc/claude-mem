@@ -183,7 +183,7 @@ export function ScopePicker({ mode, value, onChange, active, onActivate }: Scope
 
   /* ── popover body per mode ─────────────────────────────────────────────── */
   function renderHeader(title: string, onPrevYear: () => void, onNextYear: () => void,
-    onPrevMonth?: () => void, onNextMonth?: () => void, nextDisabled?: boolean) {
+    onPrevMonth?: () => void, onNextMonth?: () => void, nextMonthDisabled?: boolean, nextYearDisabled?: boolean) {
     return (
       <div className="sp-head">
         <div className="sp-nav-group">
@@ -192,8 +192,8 @@ export function ScopePicker({ mode, value, onChange, active, onActivate }: Scope
         </div>
         <span className="sp-title">{title}</span>
         <div className="sp-nav-group">
-          {onNextMonth && <button type="button" className="sp-nav" onClick={onNextMonth} disabled={nextDisabled} aria-label={t('stats.pickerNextMonth')}>›</button>}
-          <button type="button" className="sp-nav" onClick={onNextYear} disabled={nextDisabled} aria-label={t('stats.pickerNextYear')}>»</button>
+          {onNextMonth && <button type="button" className="sp-nav" onClick={onNextMonth} disabled={nextMonthDisabled} aria-label={t('stats.pickerNextMonth')}>›</button>}
+          <button type="button" className="sp-nav" onClick={onNextYear} disabled={nextYearDisabled} aria-label={t('stats.pickerNextYear')}>»</button>
         </div>
       </div>
     );
@@ -215,7 +215,12 @@ export function ScopePicker({ mode, value, onChange, active, onActivate }: Scope
         <button key={d} type="button" className={cls} disabled={disabled} onClick={() => pick(iso)}>{d}</button>
       );
     }
-    const nextDisabled = year > today.getFullYear() || (year === today.getFullYear() && month >= today.getMonth());
+    // Next-month and next-year arrows disable independently: from a past month
+    // in the current year, → (next month) stays enabled but » (next year) must
+    // be blocked so it can't jump to a fully-future year.
+    const ty = today.getFullYear(), tm = today.getMonth();
+    const nextMonthDisabled = year > ty || (year === ty && month >= tm);
+    const nextYearDisabled = year >= ty;
     const step = (dy: number, dm: number) => {
       const nm = new Date(year, month + dm, 1); nm.setFullYear(nm.getFullYear() + dy);
       setNav({ year: nm.getFullYear(), month: nm.getMonth() });
@@ -223,7 +228,7 @@ export function ScopePicker({ mode, value, onChange, active, onActivate }: Scope
     return (
       <>
         {renderHeader(`${year}-${pad2(month + 1)}`,
-          () => step(-1, 0), () => step(1, 0), () => step(0, -1), () => step(0, 1), nextDisabled)}
+          () => step(-1, 0), () => step(1, 0), () => step(0, -1), () => step(0, 1), nextMonthDisabled, nextYearDisabled)}
         <div className="sp-dow">{dow.map((w, i) => <span key={i}>{w}</span>)}</div>
         <div className="sp-grid sp-grid--day">{cells}</div>
       </>
@@ -250,7 +255,7 @@ export function ScopePicker({ mode, value, onChange, active, onActivate }: Scope
     const nextDisabled = year >= today.getFullYear();
     return (
       <>
-        {renderHeader(`${year} · ${count}W`, () => setNav(n => ({ ...n, year: n.year - 1 })), () => setNav(n => ({ ...n, year: n.year + 1 })), undefined, undefined, nextDisabled)}
+        {renderHeader(`${year} · ${count}W`, () => setNav(n => ({ ...n, year: n.year - 1 })), () => setNav(n => ({ ...n, year: n.year + 1 })), undefined, undefined, undefined, nextDisabled)}
         <div className="sp-grid sp-grid--week">{cells}</div>
       </>
     );
@@ -271,7 +276,7 @@ export function ScopePicker({ mode, value, onChange, active, onActivate }: Scope
     const nextDisabled = year >= today.getFullYear();
     return (
       <>
-        {renderHeader(String(year), () => setNav(n => ({ ...n, year: n.year - 1 })), () => setNav(n => ({ ...n, year: n.year + 1 })), undefined, undefined, nextDisabled)}
+        {renderHeader(String(year), () => setNav(n => ({ ...n, year: n.year - 1 })), () => setNav(n => ({ ...n, year: n.year + 1 })), undefined, undefined, undefined, nextDisabled)}
         <div className="sp-grid sp-grid--month">{cells}</div>
       </>
     );
@@ -296,7 +301,7 @@ export function ScopePicker({ mode, value, onChange, active, onActivate }: Scope
     const nextDisabled = year >= today.getFullYear();
     return (
       <>
-        {renderHeader(String(year), () => setNav(n => ({ ...n, year: n.year - 1 })), () => setNav(n => ({ ...n, year: n.year + 1 })), undefined, undefined, nextDisabled)}
+        {renderHeader(String(year), () => setNav(n => ({ ...n, year: n.year - 1 })), () => setNav(n => ({ ...n, year: n.year + 1 })), undefined, undefined, undefined, nextDisabled)}
         <div className="sp-grid sp-grid--quarter">{cells}</div>
       </>
     );
