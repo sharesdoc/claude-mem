@@ -117,9 +117,16 @@ export function ScopePicker({ mode, value, onChange, active, onActivate }: Scope
 
   // Seed the nav cursor from the committed value each time the popover opens.
   const seedNav = useCallback(() => {
-    if (mode === 'day' || mode === 'week') {
+    if (mode === 'day') {
       const [y, m] = value.split('-').map(Number);
       setNav({ year: y || today.getFullYear(), month: (m || 1) - 1 });
+    } else if (mode === 'week') {
+      // Open on the selected week's ISO year, NOT the Monday's calendar year —
+      // they differ at boundaries (e.g. 2025-12-29 is ISO 2026-W01), and using
+      // the calendar year would show the wrong grid with no highlight.
+      const [y, m, d] = value.split('-').map(Number);
+      const iso = y ? isoWeekOf(new Date(y, m - 1, d)) : { year: today.getFullYear(), week: 1 };
+      setNav({ year: iso.year, month: 0 });
     } else {
       const y = Number(value.split('-')[0]) || today.getFullYear();
       setNav({ year: y, month: 0 });
