@@ -968,7 +968,11 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                       };
                       return (
                         <tr key={u}>
-                          <td>{st?.latest_date ?? today}</td>
+                          {/* Show the SELECTED day (what generate/delete operate on),
+                              not the user's latest report date — otherwise the date
+                              column contradicts the row's actions when a past day is
+                              picked (e.g. column says 06-13 but 重新生成 targets 06-12). */}
+                          <td>{today}</td>
                           <td>{u}</td>
                           <td>
                             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
