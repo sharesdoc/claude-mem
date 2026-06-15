@@ -118,6 +118,9 @@ export class ReportRoutes extends BaseRouteHandler {
     const week = (reqWeek && WEEK_RE.test(reqWeek)) ? reqWeek : weekMondayOf(Date.now(), tzOffsetMs);
     const weekEnd = this.fmtYMD(new Date(`${week}T00:00:00Z`).getTime() + 6 * 86400000);
 
+    // has_current = whether a report exists for the SELECTED week (`week`), not
+    // literally "the current week" — the name is kept for backward compatibility.
+    // latest_week is the user's most recent report overall (drives `viewable`).
     const rows = this.dbManager.getConnection().prepare(`
       SELECT user_label,
              MAX(week_start) AS latest_week,

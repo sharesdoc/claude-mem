@@ -695,7 +695,13 @@ export class DataRoutes extends BaseRouteHandler {
     const quarterStart = Date.UTC(cy, Math.floor(cm / 3) * 3, 1) - tzOffsetMs;
     // history: up to 36 calendar months before the current month
     const historyStart = Date.UTC(cy, cm - 35, 1) - tzOffsetMs;
-    const qStartMonth = Math.floor(cm / 3) * 3;
+    const qStartMonth = Math.floor(cm / 3) * 3;   // 0/3/6/9 — first month of the current quarter
+
+    // ── Window contract: every time-scoped query/aggregation below filters on
+    // the half-open interval [since, until) (inclusive start, EXCLUSIVE end).
+    // `since` is the period's start; `until` (added below) is its end. Keeping
+    // the end exclusive means adjacent periods never double-count a boundary row
+    // (a row at exactly `until` belongs to the NEXT period). ──────────────────
     let since = is24h ? Date.now() - 24 * 3600000
       : scope === 'day' ? localMidnightToday
       : scope === 'week' ? weekStart
@@ -720,6 +726,10 @@ export class DataRoutes extends BaseRouteHandler {
     // back to the current period) — never 500 on a bad query string.
     //   day     → YYYY-MM-DD          week → YYYY-MM-DD (that week's Monday)
     //   month   → YYYY-MM             quarter → YYYY-Q  (Q = 1..4)
+    // tz note: `Date.UTC(y,m,d)` is the UTC epoch of that wall-clock midnight as
+    // if it were UTC; subtracting tzOffsetMs shifts it to the true UTC instant of
+    // midnight in the VIEWER's timezone — the same convention used for since/until
+    // above, so a selected period lines up with the user's local calendar days.
     const anchor = typeof req.query.anchor === 'string' ? req.query.anchor.trim() : '';
     if (anchor) {
       if (scope === 'day' && /^\d{4}-\d{2}-\d{2}$/.test(anchor)) {
@@ -918,14 +928,17 @@ export class DataRoutes extends BaseRouteHandler {
     // boundaries follow the viewer's computer, matching every other section.
     let summaryBusinessDays = 0;
     {
+      // Floor `since` to its local-midnight so we iterate whole days even when
+      // since isn't midnight (e.g. the 24h scope starts at now-24h).
       const sinceShifted = new Date(since + tzOffsetMs);
       let cur = Date.UTC(sinceShifted.getUTCFullYear(), sinceShifted.getUTCMonth(), sinceShifted.getUTCDate()) - tzOffsetMs;
-      const end = Math.min(until - 1, localMidnightToday);
+      const end = Math.min(until - 1, localMidnightToday);   // until is exclusive → last real day is until-1, capped at today
       while (cur <= end) {
-        const dow = new Date(cur + tzOffsetMs).getUTCDay();
-        if (dow !== 0 && dow !== 6) summaryBusinessDays++;
+        const dow = new Date(cur + tzOffsetMs).getUTCDay();  // weekday in the viewer's TZ
+        if (dow !== 0 && dow !== 6) summaryBusinessDays++;    // skip Sun(0)/Sat(6)
         cur += 86400000;
       }
+      // Never return 0: it's the denominator for per-day averages downstream.
       if (summaryBusinessDays === 0) summaryBusinessDays = 1;
     }
 

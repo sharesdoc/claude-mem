@@ -92,8 +92,15 @@ export class DailyReportRoutes extends BaseRouteHandler {
     const tzOffsetMs = this.tzOffsetMs(req);
     // Optional ?date=YYYY-MM-DD selects a specific past day so the stats page's
     // daily-report table can follow the chosen period; defaults to today.
+    // NOTE: the response field is still called `today`/`has_today` for backward
+    // compatibility, but when ?date is given it means "the SELECTED day" — the
+    // frontend uses it as the generate/delete target, keeping the table's date
+    // column, button state, and actions all aligned to the picked day.
     const reqDate = (req.query.date as string | undefined)?.trim();
     const today = (reqDate && DATE_RE.test(reqDate)) ? reqDate : dayOf(Date.now(), tzOffsetMs);
+    // `yesterday` = the day before the (possibly past) target. Build it from the
+    // target's calendar parts → its local-midnight UTC epoch → minus one day,
+    // rather than from Date.now(), so it tracks the selected day, not the real today.
     const [ty, tm, td] = today.split('-').map(Number);
     const yesterday = dayOf(Date.UTC(ty, tm - 1, td) - tzOffsetMs - DAY_MS, tzOffsetMs);
 

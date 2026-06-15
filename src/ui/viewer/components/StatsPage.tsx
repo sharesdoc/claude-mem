@@ -50,20 +50,27 @@ function localDateKey(date = new Date()): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
-/* ── Current-period anchors (defaults for the ScopePickers) ───────────────── */
-function curDayAnchor(): string { return localDateKey(); }
+/* ── Current-period anchors (defaults for the ScopePickers) ───────────────────
+ * Each returns the anchor string for the CURRENT period in the exact per-scope
+ * format the backend's ?anchor= expects (see DataRoutes handleGetAnalytics):
+ *   day → YYYY-MM-DD   week → YYYY-MM-DD (this week's Monday)
+ *   month → YYYY-MM    quarter → YYYY-Q (Q=1..4)
+ * Used to seed anchorByScope on mount so every picker button opens showing the
+ * present day/week/month/quarter rather than a blank.
+ * ──────────────────────────────────────────────────────────────────────────── */
+function curDayAnchor(): string { return localDateKey(); }            // today, local
 function curWeekAnchor(): string {
   const d = new Date(); d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); // back to Monday
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));                    // step back to this week's Monday
   return localDateKey(d);
 }
 function curMonthAnchor(): string {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;   // YYYY-MM
 }
 function curQuarterAnchor(): string {
   const d = new Date();
-  return `${d.getFullYear()}-${Math.floor(d.getMonth() / 3) + 1}`;
+  return `${d.getFullYear()}-${Math.floor(d.getMonth() / 3) + 1}`;            // YYYY-Q (Q=1..4)
 }
 
 function dayLabelColor(bucket: string): string {
@@ -627,6 +634,10 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     <span className="stats-tabs">
       {SCOPES.map(s => (
         (s === 'day' || s === 'week' || s === 'month' || s === 'quarter') ? (
+          // onActivate: clicking the button makes this the page scope.
+          // onChange: picking a value stores the new anchor AND ensures this
+          // scope is active; both setAnchor and changeScope feed the
+          // loadAnalytics effect deps so the page refetches for the new period.
           <ScopePicker key={s} mode={s as ScopeMode} value={anchorByScope[s as ScopeMode]}
             active={scope === s}
             onActivate={() => changeScope(s)}

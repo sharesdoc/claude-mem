@@ -12,6 +12,15 @@ import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
  * unless CLAUDE_MEM_SERVER_LOCAL_AUTO_LOGIN=false. Read fresh per check so
  * flipping the setting takes effect without a worker restart; only invoked
  * on requests that failed every other authenticator.
+ *
+ * `isAutoLoginAllowed` is the strict part: it rejects the bypass when proxy
+ * headers (X-Forwarded-For / X-Real-IP) or a non-loopback Host are present, so
+ * a request tunneled/proxied in from outside cannot impersonate a local one.
+ *
+ * Exported (not just used by `tokenAuth` below) so the report routes' own
+ * `authorized()` checks can apply the EXACT same rule — otherwise the stats
+ * page's daily/weekly tables would 401 on loopback while the analytics endpoint
+ * (which goes through tokenAuth) succeeds. Single source of truth = no drift.
  */
 export function loopbackBypassAllowed(req: Request): boolean {
   if (!isAutoLoginAllowed(req)) return false;
