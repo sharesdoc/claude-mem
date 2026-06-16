@@ -188,22 +188,25 @@ export class ReportGenerator {
     };
 
     const digests = this.digestByProject(projAgg, obsRows, summRows);
+    const reportedMs = digests.reduce((s, d) => s + d.totalMs, 0);
+    const excludedMs = totalMs - reportedMs;
+    const excludedPct = totalMs > 0 ? Math.round((excludedMs / totalMs) * 100) : 0;
 
     // ── 正文生成优先级 ────────────────────────────────────────────────
     //   ① 用 obs/summaries 提炼(信息最完整,有重点、有结论)
     //   ② 当本周无 obs/summaries 可炼、但有 prompt 时:降级用 prompt 原文让 AI
     //      归纳任务清单(过去的 prompt 不会回溯生成 observation,此路保证有内容)
     //   ③ 仍失败(无 Key / 无可用数据)→ 确定性简版(只汇总,不臆造)
-    let aiBody = await this.synthesize(user, weekStart, weekEnd, stats, digests, model);
+    let aiBody = await this.synthesize(user, weekStart, weekEnd, stats, digests, model, excludedMs, excludedPct);
     if (aiBody === null && digests.length === 0 && stats.prompts > 0) {
       const timeOf = new Map(projAgg.map(p => [p.project, p.total_ms]));
       const promptDigests = this.digestPromptsByProject(start, end, user, timeOf);
       if (promptDigests.length > 0) {
-        aiBody = await this.synthesizeFromPrompts(user, weekStart, weekEnd, stats, promptDigests, model);
+        aiBody = await this.synthesizeFromPrompts(user, weekStart, weekEnd, stats, promptDigests, model, excludedMs, excludedPct);
       }
     }
-    const body = aiBody ?? this.fallbackBody(stats, digests);
-    const markdown = this.assemble(user, weekStart, weekEnd, stats, body);
+    const body = aiBody ?? this.fallbackBody(stats, digests, excludedMs, excludedPct);
+    const markdown = this.assemble(user, weekStart, weekEnd, stats, body, excludedMs, excludedPct);
 
     return {
       user_label: user, week_start: weekStart, week_end: weekEnd, markdown, stats,
@@ -235,8 +238,11 @@ export class ReportGenerator {
     .sort((a, b) => b.totalMs - a.totalMs);
   }
 
-  /** 标题 + 概览统计表(确定性、事实)+ 正文(AI 或降级)。 */
-  private assemble(user: string, weekStart: string, weekEnd: string, stats: ReportStats, body: string): string {
+  /** 标题 + 概览统计表(确定性、事实)+ 正文(AI 或降级) + 琐碎忽略说明。 */
+  private assemble(user: string, weekStart: string, weekEnd: string, stats: ReportStats, body: string, excludedMs: number, excludedPct: number): string {
+    const filterNote = excludedMs > 0
+      ? `> 💡 周报自动忽略不足 ${Math.round(MIN_PROJECT_MS / 3600000)} 小时的琐碎事务（共 ${fmtDuration(excludedMs)}，占总AI时长的 ${excludedPct}%）\n`
+      : '';
     const overview = [
       `# 周报 · ${user} · ${weekStart} ~ ${weekEnd}`,
       '',
@@ -249,12 +255,13 @@ export class ReportGenerator {
       '| --- | --- | --- | --- | --- | --- | --- |',
       `| ${fmtDuration(stats.totalMs)} | ${fmtDuration(Math.round(stats.totalMs / 5))} | ${stats.projects} | ${stats.prompts} | ${stats.obs} | ${stats.summaries} | ${stats.sessions} |`,
       '',
+      filterNote,
     ].join('\n');
     return `${overview}\n${body.trim()}\n`;
   }
 
   /** 降级:确定性简版正文(只汇总,不臆造下周建议/经验教训)。 */
-  private fallbackBody(stats: ReportStats, digests: ProjectDigest[]): string {
+  private fallbackBody(stats: ReportStats, digests: ProjectDigest[], _excludedMs: number, _excludedPct: number): string {
     const top = digests.filter(d => d.completed.length || d.totalMs > 0).slice(0, 6);
     const topNames = top.slice(0, 3).map(d => d.project.split('/').pop() || d.project);
     const L: string[] = [];
@@ -295,7 +302,7 @@ export class ReportGenerator {
    * Key 经 resolveApiKey() 解析(env 优先,settings.json 兜底);缺失或任何
    * 失败/超时 → 返回 null(降级)。
    */
-  private async synthesize(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: ProjectDigest[], model: string): Promise<string | null> {
+  private async synthesize(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: ProjectDigest[], model: string, excludedMs: number, excludedPct: number): Promise<string | null> {
     const apiKey = this.resolveApiKey();
     if (!apiKey) return null;
     if (digests.length === 0) return null; // 过滤后无值得一提的项目
@@ -309,10 +316,14 @@ export class ReportGenerator {
       return lines.join('\n');
     }).join('\n\n');
 
+    const exclNote = excludedMs > 0
+      ? `（已自动忽略不足 ${Math.round(MIN_PROJECT_MS / 3600000)} 小时的琐碎项目,共 ${fmtDuration(excludedMs)},占总AI时长的 ${excludedPct}%）\n`
+      : '';
     const facts =
       `用户:${user}\n周期:${weekStart} ~ ${weekEnd}\n` +
-      `总AI耗时:${fmtDuration(stats.totalMs)};项目数:${stats.projects};任务数:${stats.prompts};观察:${stats.obs};总结:${stats.summaries};会话:${stats.sessions}\n\n` +
-      `各项目(已按耗时从多到少排序):\n${projectBlocks}`;
+      `总AI耗时:${fmtDuration(stats.totalMs)};项目数:${stats.projects};任务数:${stats.prompts};观察:${stats.obs};总结:${stats.summaries};会话:${stats.sessions}\n` +
+      exclNote +
+      `各项目(已剔除 AI 工时不足 ${Math.round(MIN_PROJECT_MS / 3600000)} 小时的琐碎项目,按耗时从多到少排序):\n${projectBlocks}`;
 
     const instruction =
       '你是工程团队的技术主管。请依据某员工本周的真实工作数据,撰写一份**简洁、有重点、面向汇报**的中文周报正文。' +
@@ -407,7 +418,7 @@ export class ReportGenerator {
    * 真实指令**客观归纳**工作任务清单(强调"任务请求、未必全部完成",不臆造成果)。
    * 沿用与 synthesize 相同的四章结构,便于前端与下载格式一致。失败/无 Key → null。
    */
-  private async synthesizeFromPrompts(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: PromptDigest[], model: string): Promise<string | null> {
+  private async synthesizeFromPrompts(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: PromptDigest[], model: string, _excludedMs: number, _excludedPct: number): Promise<string | null> {
     const apiKey = this.resolveApiKey();
     if (!apiKey || digests.length === 0) return null;
 

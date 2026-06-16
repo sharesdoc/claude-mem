@@ -159,15 +159,18 @@ export class DailyReportGenerator {
     const promptCountOf = new Map(projAgg.map(p => [p.project, p.prompts]));
     const reportedPrompts = digests.reduce((s, d) => s + (promptCountOf.get(d.project) ?? 0), 0);
     const totalMs = projAgg.reduce((s, p) => s + p.total_ms, 0);
+    const reportedMs = digests.reduce((s, d) => s + d.totalMs, 0);
+    const excludedMs = totalMs - reportedMs;
+    const excludedPct = totalMs > 0 ? Math.round((excludedMs / totalMs) * 100) : 0;
     const stats: DailyReportStats = {
       totalMs, projects: digests.length,
       prompts: reportedPrompts, obs: obsRows.length, summaries: summRows.length, sessions: sessRow?.sessions ?? 0,
     };
 
     // 正文:① 有内容 → AI 提炼简短日报;② 失败/无 Key → 确定性简版。
-    const aiBody = await this.synthesize(user, reportDate, stats, digests, model);
-    const body = aiBody ?? this.fallbackBody(stats, digests);
-    const markdown = this.assemble(user, reportDate, stats, body);
+    const aiBody = await this.synthesize(user, reportDate, stats, digests, model, excludedMs, excludedPct);
+    const body = aiBody ?? this.fallbackBody(stats, digests, excludedMs, excludedPct);
+    const markdown = this.assemble(user, reportDate, stats, body, excludedMs, excludedPct);
 
     return {
       user_label: user, report_date: reportDate, markdown, stats,
@@ -195,8 +198,11 @@ export class DailyReportGenerator {
     .sort((a, b) => b.totalMs - a.totalMs);
   }
 
-  /** 标题 + 概览统计表(确定性、事实)+ 正文(AI 或降级)。 */
-  private assemble(user: string, reportDate: string, stats: DailyReportStats, body: string): string {
+  /** 标题 + 概览统计表(确定性、事实)+ 正文(AI 或降级) + 琐碎忽略说明。 */
+  private assemble(user: string, reportDate: string, stats: DailyReportStats, body: string, excludedMs: number, excludedPct: number): string {
+    const filterNote = excludedMs > 0
+      ? `> 💡 日报自动忽略不足 ${Math.round(MIN_PROJECT_MS / 60000)} 分钟的琐碎事务（共 ${fmtDuration(excludedMs)}，占总AI时长的 ${excludedPct}%）\n`
+      : '';
     const overview = [
       `# 日报 · ${user} · ${reportDate}`,
       '',
@@ -208,12 +214,13 @@ export class DailyReportGenerator {
       '| --- | --- | --- | --- | --- | --- |',
       `| ${fmtDuration(stats.totalMs)} | ${stats.projects} | ${stats.prompts} | ${stats.obs} | ${stats.summaries} | ${stats.sessions} |`,
       '',
+      filterNote,
     ].join('\n');
     return `${overview}\n${body.trim()}\n`;
   }
 
   /** 降级:确定性简版正文(只汇总,不臆造)。 */
-  private fallbackBody(stats: DailyReportStats, digests: ProjectDigest[]): string {
+  private fallbackBody(stats: DailyReportStats, digests: ProjectDigest[], _excludedMs: number, _excludedPct: number): string {
     const top = digests.slice(0, 8);
     const topNames = top.slice(0, 3).map(d => d.project.split('/').pop() || d.project);
     const L: string[] = [];
@@ -254,7 +261,7 @@ export class DailyReportGenerator {
    * 用 Qwen 把当日数据提炼成**简短**的日报正文(两章:概述 + 重点工作)。
    * 缺 Key / 无内容 / 失败超时 → 返回 null(降级)。
    */
-  private async synthesize(user: string, reportDate: string, stats: DailyReportStats, digests: ProjectDigest[], model: string): Promise<string | null> {
+  private async synthesize(user: string, reportDate: string, stats: DailyReportStats, digests: ProjectDigest[], model: string, excludedMs: number, excludedPct: number): Promise<string | null> {
     const apiKey = this.resolveApiKey();
     if (!apiKey) return null;
     if (digests.length === 0) return null;
@@ -268,10 +275,14 @@ export class DailyReportGenerator {
       return lines.join('\n');
     }).join('\n\n');
 
+    const exclNote = excludedMs > 0
+      ? `（已自动忽略不足 ${Math.round(MIN_PROJECT_MS / 60000)} 分钟的琐碎事务,共 ${fmtDuration(excludedMs)},占总AI时长的 ${excludedPct}%）`
+      : '';
     const facts =
       `用户:${user}\n日期:${reportDate}\n` +
-      `总AI耗时:${fmtDuration(stats.totalMs)};项目数:${stats.projects};任务数:${stats.prompts};观察:${stats.obs};总结:${stats.summaries};会话:${stats.sessions}\n\n` +
-      `各项目(已剔除 AI 工时不足 10 分钟的琐碎项目,按耗时从多到少排序):\n${projectBlocks}`;
+      `总AI耗时:${fmtDuration(stats.totalMs)};项目数:${stats.projects};任务数:${stats.prompts};观察:${stats.obs};总结:${stats.summaries};会话:${stats.sessions}\n` +
+      `${exclNote}\n` +
+      `各项目(已剔除 AI 工时不足 ${Math.round(MIN_PROJECT_MS / 60000)} 分钟的琐碎项目,按耗时从多到少排序):\n${projectBlocks}`;
 
     const instruction =
       '你是工程团队的技术主管。请依据某员工**今天**的真实工作数据,撰写一份**简短、罗列重点**的中文日报正文。' +
