@@ -192,9 +192,9 @@ export class DailyReportGenerator {
         observations: os.slice(0, 6).map(o => ({ type: o.type, title: (o.title || o.subtitle || o.narrative || '').trim() })).filter(o => o.title),
       };
     })
-    // 日报只罗列“值得一提”的项目:① AI 工时 ≥ 10 分钟(连同其任务,不足者直接忽略);
-    // ② 且有具体工作内容(总结/收获/观察记录)。按耗时从多到少排序。
-    .filter(d => d.totalMs >= MIN_PROJECT_MS && (d.completed.length > 0 || d.learned.length > 0 || d.observations.length > 0))
+    // 日报只罗列”值得一提”的项目:AI 工时 ≥ 10 分钟,按耗时从多到少排序。
+    // 项目以时间为首要标准,缺失 summaries/observations 不影响纳入统计。
+    .filter(d => d.totalMs >= MIN_PROJECT_MS)
     .sort((a, b) => b.totalMs - a.totalMs);
   }
 

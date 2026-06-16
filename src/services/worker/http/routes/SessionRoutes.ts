@@ -10,6 +10,7 @@ import { DatabaseManager } from '../../DatabaseManager.js';
 import { ClaudeProvider } from '../../ClaudeProvider.js';
 import { GeminiProvider, isGeminiSelected, isGeminiAvailable } from '../../GeminiProvider.js';
 import { OpenRouterProvider, isOpenRouterSelected, isOpenRouterAvailable } from '../../OpenRouterProvider.js';
+import { QwenProvider, isQwenSelected, isQwenAvailable } from '../../QwenProvider.js';
 import type { WorkerService } from '../../../worker-service.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { SessionEventBroadcaster } from '../../events/SessionEventBroadcaster.js';
@@ -32,6 +33,7 @@ export class SessionRoutes extends BaseRouteHandler {
     private sdkAgent: ClaudeProvider,
     private geminiAgent: GeminiProvider,
     private openRouterAgent: OpenRouterProvider,
+    private qwenAgent: QwenProvider,
     private eventBroadcaster: SessionEventBroadcaster,
     private workerService: WorkerService,
     private completionHandler: SessionCompletionHandler,
@@ -39,7 +41,15 @@ export class SessionRoutes extends BaseRouteHandler {
     super();
   }
 
-  private getActiveAgent(): ClaudeProvider | GeminiProvider | OpenRouterProvider {
+  private getActiveAgent(): ClaudeProvider | GeminiProvider | OpenRouterProvider | QwenProvider {
+    if (isQwenSelected()) {
+      if (isQwenAvailable()) {
+        logger.debug('SESSION', 'Using Qwen agent');
+        return this.qwenAgent;
+      } else {
+        throw new Error('Qwen provider selected but no DASHSCOPE_API_KEY configured.');
+      }
+    }
     if (isOpenRouterSelected()) {
       if (isOpenRouterAvailable()) {
         logger.debug('SESSION', 'Using OpenRouter agent');
@@ -56,14 +66,29 @@ export class SessionRoutes extends BaseRouteHandler {
         throw new Error('Gemini provider selected but no API key configured. Set CLAUDE_MEM_GEMINI_API_KEY in settings or GEMINI_API_KEY environment variable.');
       }
     }
+    // Qwen 有 key 就自动选,无需显式配置 CLAUDE_MEM_PROVIDER
+    if (isQwenAvailable()) {
+      logger.debug('SESSION', 'Auto-selecting Qwen agent (DASHSCOPE_API_KEY available)');
+      return this.qwenAgent;
+    }
     return this.sdkAgent;
   }
 
-  private getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' {
+  private getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' | 'qwen' {
+    if (isQwenSelected() && isQwenAvailable()) {
+      return 'qwen';
+    }
     if (isOpenRouterSelected() && isOpenRouterAvailable()) {
       return 'openrouter';
     }
-    return (isGeminiSelected() && isGeminiAvailable()) ? 'gemini' : 'claude';
+    if (isGeminiSelected() && isGeminiAvailable()) {
+      return 'gemini';
+    }
+    // Qwen 兜底: 有 key 就用 Qwen (无需设置 CLAUDE_MEM_PROVIDER)
+    if (isQwenAvailable()) {
+      return 'qwen';
+    }
+    return 'claude';
   }
 
   public async ensureGeneratorRunning(sessionDbId: number, source: string): Promise<void> {
@@ -92,7 +117,7 @@ export class SessionRoutes extends BaseRouteHandler {
 
   private async startGeneratorWithProvider(
     session: ReturnType<typeof this.sessionManager.getSession>,
-    provider: 'claude' | 'gemini' | 'openrouter',
+    provider: 'claude' | 'gemini' | 'openrouter' | 'qwen',
     source: string
   ): Promise<void> {
     if (!session) return;
@@ -104,8 +129,14 @@ export class SessionRoutes extends BaseRouteHandler {
       session.abortController = new AbortController();
     }
 
-    const agent = provider === 'openrouter' ? this.openRouterAgent : (provider === 'gemini' ? this.geminiAgent : this.sdkAgent);
-    const agentName = provider === 'openrouter' ? 'OpenRouter' : (provider === 'gemini' ? 'Gemini' : 'Claude SDK');
+    const agent = provider === 'qwen' ? this.qwenAgent
+      : provider === 'openrouter' ? this.openRouterAgent
+      : provider === 'gemini' ? this.geminiAgent
+      : this.sdkAgent;
+    const agentName = provider === 'qwen' ? 'Qwen'
+      : provider === 'openrouter' ? 'OpenRouter'
+      : provider === 'gemini' ? 'Gemini'
+      : 'Claude SDK';
 
     const pendingStore = this.sessionManager.getPendingMessageStore();
     const actualQueueDepth = await pendingStore.getPendingCount(session.sessionDbId);
@@ -222,6 +253,8 @@ export class SessionRoutes extends BaseRouteHandler {
     last_assistant_message: z.string().optional(),
     agentId: z.string().optional(),
     platformSource: z.string().optional(),
+    project: z.string().optional(),
+    user_prompt: z.string().optional(),
   }).passthrough();
 
   private handleObservationsByClaudeId = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
@@ -266,6 +299,9 @@ export class SessionRoutes extends BaseRouteHandler {
   private handleSummarizeByClaudeId = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     const { contentSessionId, last_assistant_message, agentId } = req.body;
     const platformSource = normalizePlatformSource(req.body.platformSource);
+    // 远程客户端通过 hook 上报的 project 与 user_prompt,用于补全会话上下文。
+    const project = typeof req.body.project === 'string' ? req.body.project : '';
+    const hookUserPrompt = typeof req.body.user_prompt === 'string' ? req.body.user_prompt : '';
 
     if (agentId) {
       res.json({ status: 'skipped', reason: 'subagent_context' });
@@ -274,7 +310,8 @@ export class SessionRoutes extends BaseRouteHandler {
 
     const store = this.dbManager.getSessionStore();
 
-    const sessionDbId = store.createSDKSession(contentSessionId, '', '', undefined, platformSource);
+    // 创建/更新会话时带入 project 和 hookUserPrompt,确保 generator 有足够上下文生成总结。
+    const sessionDbId = store.createSDKSession(contentSessionId, project, hookUserPrompt, undefined, platformSource);
     const promptNumber = store.getPromptNumberFromUserPrompts(contentSessionId);
 
     const userPrompt = PrivacyCheckValidator.checkUserPromptPrivacy(

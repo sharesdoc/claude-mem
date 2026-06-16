@@ -233,8 +233,8 @@ export class ReportGenerator {
         observations: os.slice(0, 6).map(o => ({ type: o.type, title: (o.title || o.subtitle || o.narrative || '').trim() })).filter(o => o.title),
       };
     })
-    // 排除:本周耗时 ≤ 1 小时、或没有具体工作内容(无总结/收获/观察)的项目。
-    .filter(d => d.totalMs > MIN_PROJECT_MS && (d.completed.length > 0 || d.learned.length > 0 || d.observations.length > 0))
+    // 排除:本周耗时 ≤ 1 小时的项目。以时间为首要标准,缺失 summaries/observations 不影响纳入统计。
+    .filter(d => d.totalMs > MIN_PROJECT_MS)
     .sort((a, b) => b.totalMs - a.totalMs);
   }
 

@@ -7,6 +7,7 @@ import { stripMemoryTagsFromPrompt } from '../../utils/tag-stripping.js';
 import { HOOK_EXIT_CODES } from '../../shared/hook-constants.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
 import { shouldTrackProject } from '../../shared/should-track-project.js';
+import { getProjectContext } from '../../utils/project-name.js';
 import { resolveRuntimeContext, logServerBetaFallback } from '../../services/hooks/runtime-selector.js';
 import { isServerBetaClientError } from '../../services/hooks/server-beta-client.js';
 
@@ -119,6 +120,11 @@ export const summarizeHandler: EventHandler = {
       }
     }
 
+    // 从 cwd 推导项目名,从 input.prompt 取最后一条用户提示词,
+    // 确保远程客户端的 summarize 请求携带足够上下文供服务端生成总结。
+    const project = input.cwd ? getProjectContext(input.cwd).primary : '';
+    const userPrompt = input.prompt || '';
+
     const queueResult = await executeWithWorkerFallback<{ status?: string }>(
       '/api/sessions/summarize',
       'POST',
@@ -126,6 +132,8 @@ export const summarizeHandler: EventHandler = {
         contentSessionId: sessionId,
         last_assistant_message: lastAssistantMessage,
         platformSource,
+        project,
+        user_prompt: userPrompt,
       },
     );
     if (isWorkerFallback(queueResult)) {

@@ -2098,6 +2098,13 @@ export class SessionStore {
           WHERE content_session_id = ? AND (project IS NULL OR project = '')
         `).run(project, contentSessionId);
       }
+      // 远程客户端 summarize 时上报的 user_prompt,确保 DB 中有值供 generator 使用。
+      if (userPrompt) {
+        this.db.prepare(`
+          UPDATE sdk_sessions SET user_prompt = ?
+          WHERE content_session_id = ? AND (user_prompt IS NULL OR user_prompt = '')
+        `).run(userPrompt, contentSessionId);
+      }
       if (resolved.customTitle) {
         this.db.prepare(`
           UPDATE sdk_sessions SET custom_title = ?
