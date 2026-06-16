@@ -1126,7 +1126,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                             <button type="button"
                               className={viewable ? 'stats-tab is-active' : 'stats-tab'}
                               disabled={busy || !viewable}
-                              onClick={() => window.open(urlOf('/daily-report'), '_blank')}>
+                              onClick={() => window.open(urlOf('/daily-report', { date: today }), '_blank')}>
                               {t('stats.dailyView')}
                             </button>
                           </td>

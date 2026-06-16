@@ -248,18 +248,24 @@ export class DailyReportRoutes extends BaseRouteHandler {
 
     const tokenQ = typeof req.query.token === 'string' ? req.query.token : '';
     const tzOffsetMs = this.tzOffsetMs(req);
-    const today = dayOf(Date.now(), tzOffsetMs);
-    const yesterday = dayOf(Date.now() - DAY_MS, tzOffsetMs);
+    // ?date=YYYY-MM-DD makes the SELECTED day the "current" (right) column; the
+    // left column is the day before it (empty if no report). Defaults to today.
+    const realToday = dayOf(Date.now(), tzOffsetMs);
+    const reqDate = (req.query.date as string | undefined)?.trim();
+    const today = (reqDate && DATE_RE.test(reqDate)) ? reqDate : realToday;
+    const [ty, tm, td] = today.split('-').map(Number);
+    const yesterday = dayOf(Date.UTC(ty, tm - 1, td) - tzOffsetMs - DAY_MS, tzOffsetMs);
     const cur = this.getReport(user, today);
     const prev = this.getReport(user, yesterday);
 
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.send(this.renderPage(user, today, cur, yesterday, prev, tokenQ));
+    res.send(this.renderPage(user, today, cur, yesterday, prev, tokenQ, today === realToday));
   });
 
   private renderPage(
     user: string, today: string, cur: DailyRow | undefined,
     yesterday: string, prev: DailyRow | undefined, token: string,
+    curIsToday: boolean,
   ): string {
     const esc = (s: string) => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string));
     const dl = (date: string) => {
@@ -267,21 +273,23 @@ export class DailyReportRoutes extends BaseRouteHandler {
       if (token) q.set('token', token);
       return `/api/daily-reports/download?${q.toString()}`;
     };
-    // 当日无日报时:显示「生成今日日报」按钮(内联 JS POST → 成功后刷新本页)。
-    const genButton = (date: string, label: string): string =>
+    // 当日无日报时:显示「生成日报」按钮(内联 JS POST → 成功后刷新本页)。
+    // "今日" 仅在该列确为真实今天时出现,避免查看过去某日时误称"今日"。
+    const genButton = (date: string, label: string, isRealToday: boolean): string =>
       `<div class="empty"><p>${esc(label)}</p>` +
-      `<button class="gen" onclick="genDaily('${esc(date)}')">⚡ 生成${esc(date === today ? '今日' : '')}日报</button>` +
+      `<button class="gen" onclick="genDaily('${esc(date)}')">⚡ 生成${esc(isRealToday ? '今日' : '')}日报</button>` +
       `<p class="hint" id="gen-hint"></p></div>`;
-    const column = (tag: string, date: string, row: DailyRow | undefined, isToday: boolean): string => {
+    const column = (tag: string, date: string, row: DailyRow | undefined, isRealToday: boolean): string => {
       const head = `<div class="col-head"><span class="col-tag">${esc(tag)}</span><span class="col-date">${esc(date)}</span>` +
         (row ? `<a class="dl" href="${dl(date)}">⬇ 下载 Markdown</a>` : '') + `</div>`;
       const body = row
         ? `<article class="md">${mdToHtml(row.markdown)}</article>`
-        : genButton(date, isToday ? '今日暂无日报。' : '当日暂无日报。');
+        : genButton(date, isRealToday ? '今日暂无日报。' : '当日暂无日报。', isRealToday);
       return `<section class="col">${head}${body}</section>`;
     };
     // 没有昨天的则只显示今天;两天皆无时今天列里就是「生成」按钮。
-    const single = !prev;
+    // 始终左右两列:左=前一日(无报表则显示空内容/生成按钮),右=当日。
+    const single = false;
     return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>日报 · ${esc(user)} · ${esc(today)}</title>
@@ -332,10 +340,10 @@ export class DailyReportRoutes extends BaseRouteHandler {
   .md a { color:var(--acc); }
 </style></head>
 <body>
-  <header class="top"><h1>📝 工作日报 · ${esc(user)}</h1><div class="sub">左:昨天(${esc(yesterday)}) · 右:今天(${esc(today)})${single ? ' · 昨天无记录,仅显示今天' : ''}</div></header>
+  <header class="top"><h1>📝 工作日报 · ${esc(user)}</h1><div class="sub">左:前一日(${esc(yesterday)}) · 右:当日(${esc(today)})${single ? ' · 前一日无记录,仅显示当日' : ''}</div></header>
   <div class="grid">
-    ${single ? '' : column('昨天', yesterday, prev, false)}
-    ${column('今天', today, cur, true)}
+    ${single ? '' : column('前一日', yesterday, prev, false)}
+    ${column('当日', today, cur, curIsToday)}
   </div>
 </body></html>`;
   }

@@ -353,7 +353,8 @@ export class ReportRoutes extends BaseRouteHandler {
         : `<div class="empty">该周暂无周报。可在统计页点击「刷新本周」生成。</div>`;
       return `<section class="col">${head}${body}</section>`;
     };
-    const single = !prev;
+    // 始终左右两列:左=上一周(无报表则显示空内容),右=所选周。
+    const single = false;
     return `<!doctype html><html lang="zh"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>周报 · ${esc(user)} · ${esc(week)}</title>
@@ -393,10 +394,10 @@ export class ReportRoutes extends BaseRouteHandler {
   .md a { color:var(--acc); }
 </style></head>
 <body>
-  <header class="top"><h1>📋 工作周报 · ${esc(user)}</h1><div class="sub">左:上周(${esc(prevWeek)}) · 右:本周(${esc(week)})${single ? ' · 上周无记录,仅显示本周' : ''}</div></header>
+  <header class="top"><h1>📋 工作周报 · ${esc(user)}</h1><div class="sub">左:上一周(${esc(prevWeek)}) · 右:当周(${esc(week)})${single ? ' · 上一周无记录,仅显示当周' : ''}</div></header>
   <div class="grid">
-    ${single ? '' : column('上周', prevWeek, prev)}
-    ${column('本周', week, cur)}
+    ${single ? '' : column('上一周', prevWeek, prev)}
+    ${column('当周', week, cur)}
   </div>
 </body></html>`;
   }
