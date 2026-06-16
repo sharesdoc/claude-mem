@@ -2193,14 +2193,43 @@ export class SessionStore {
     return row?.completed_at_epoch ?? null;
   }
 
-  updatePromptCompletedAt(contentSessionId: string, promptNumber: number, completedAtEpoch: number): void {
-    // No NULL guard — later callers (e.g. Stop hook) overwrite earlier
-    // estimates (e.g. premature SDK result messages) with the authoritative
-    // processing-complete timestamp.
-    this.db.prepare(`
-      UPDATE user_prompts SET completed_at_epoch = ?
-      WHERE content_session_id = ? AND prompt_number = ?
-    `).run(completedAtEpoch, contentSessionId, promptNumber);
+  /**
+   * 写入 prompt 完成时间,按来源区分写入强度:
+   * - transcript: transcript 末条 assistant 墙钟时间,最高可信度 → 无条件覆盖
+   * - sdk_result: Claude SDK result 消息的 Date.now()(可能偏早) → 仅填 NULL
+   * - stop_hook (默认): Stop hook 的 Date.now()(可能偏晚) → 仅填 NULL
+   */
+  updatePromptCompletedAt(
+    contentSessionId: string,
+    promptNumber: number,
+    completedAtEpoch: number,
+    source: 'transcript' | 'sdk_result' | 'stop_hook' = 'stop_hook',
+  ): void {
+    if (source === 'transcript') {
+      // 最高优先级:无条件覆盖,transcript 时间是最准的
+      this.db.prepare(`
+        UPDATE user_prompts SET completed_at_epoch = ?
+        WHERE content_session_id = ? AND prompt_number = ?
+      `).run(completedAtEpoch, contentSessionId, promptNumber);
+    } else {
+      // sdk_result / stop_hook:仅填 NULL,不覆盖已有值
+      this.db.prepare(`
+        UPDATE user_prompts SET completed_at_epoch = ?
+        WHERE content_session_id = ? AND prompt_number = ?
+          AND completed_at_epoch IS NULL
+      `).run(completedAtEpoch, contentSessionId, promptNumber);
+    }
+  }
+
+  /** 获取 session 最后一条 observation 的时间戳,用于 completed_at 截断。 */
+  getLastObservationEpoch(contentSessionId: string): number | null {
+    const row = this.db.prepare(`
+      SELECT MAX(o.created_at_epoch) AS last_obs
+      FROM observations o
+      JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id
+      WHERE s.content_session_id = ?
+    `).get(contentSessionId) as { last_obs: number | null } | undefined;
+    return row?.last_obs ?? null;
   }
 
   getMaxPromptNumber(contentSessionId: string): number | null {

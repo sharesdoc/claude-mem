@@ -326,17 +326,34 @@ export class SessionRoutes extends BaseRouteHandler {
       return;
     }
 
-    // Record completion time at Stop hook — mirrors claude-task-timer's end signal.
-    // This is the authoritative processing-complete timestamp. Overwrites any
-    // earlier SDK result timestamps (which may fire prematurely before tool calls
-    // complete). Uses the hook's own timestamp if provided, falling back to now.
-    const stopHookTimestamp = req.body.timestamp;
-    const completedAtEpoch = typeof stopHookTimestamp === 'number' ? stopHookTimestamp
-      : typeof stopHookTimestamp === 'string' ? new Date(stopHookTimestamp).getTime()
-      : Date.now();
+    // ── 完成时间写入(按来源优先级) ──────────────────────────────────
+    // 1. transcript 末条 assistant 墙钟时间 → 最高可信度,无条件覆盖
+    // 2. observation 截断(15min) → 兜底,仅填 NULL
+    // 3. Date.now() → 最差,仅填 NULL
     const lastPromptNumber = store.getPromptNumberFromUserPrompts(contentSessionId);
     if (lastPromptNumber > 0) {
-      store.updatePromptCompletedAt(contentSessionId, lastPromptNumber, completedAtEpoch);
+      const transcriptCompletedAt = typeof req.body.transcript_completed_at_epoch === 'number'
+        ? req.body.transcript_completed_at_epoch : null;
+
+      if (transcriptCompletedAt && Number.isFinite(transcriptCompletedAt) && transcriptCompletedAt > 0) {
+        // transcript 时间:最高优先级,无条件覆盖
+        store.updatePromptCompletedAt(contentSessionId, lastPromptNumber, transcriptCompletedAt, 'transcript');
+      } else {
+        // 无 transcript 时间 → 回落:取 Stop hook 时间戳或 Date.now()
+        const stopHookTimestamp = req.body.timestamp;
+        let completedAtEpoch = typeof stopHookTimestamp === 'number' ? stopHookTimestamp
+          : typeof stopHookTimestamp === 'string' ? new Date(stopHookTimestamp).getTime()
+          : Date.now();
+
+        // observation 截断:防止跨夜/闲置 session 的时间膨胀
+        const T_MS = 15 * 60 * 1000; // 15 分钟宽限
+        const lastObsEpoch = store.getLastObservationEpoch(contentSessionId);
+        if (lastObsEpoch && lastObsEpoch > 0 && (completedAtEpoch - lastObsEpoch) > T_MS) {
+          completedAtEpoch = lastObsEpoch;
+        }
+
+        store.updatePromptCompletedAt(contentSessionId, lastPromptNumber, completedAtEpoch, 'stop_hook');
+      }
     }
 
     const cleanedLastAssistantMessage = last_assistant_message

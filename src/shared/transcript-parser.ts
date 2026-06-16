@@ -141,3 +141,92 @@ export function extractLastMessageFromJsonl(
   }
   return lastEmptyText ?? '';
 }
+
+// ── transcript timestamp extraction ─────────────────────────────────────
+
+export interface AssistantEntry {
+  text: string;
+  timestampEpoch: number;
+}
+
+/**
+ * 提取 transcript 中最后一条主链 assistant 消息的文本和墙钟时间。
+ *
+ * 与 extractLastMessage 同源同一解析循环,但额外返回 line.timestamp,
+ * 并过滤子代理(sidechain)消息。Gemini transcript(单 JSON messages 数组,
+ * 无逐行 timestamp)→ 直接返回 null。
+ *
+ * 返回 null 意味着没有可用的主链 assistant 时间戳,应回落其他来源。
+ */
+export function extractLastAssistantEntry(transcriptPath: string): AssistantEntry | null {
+  if (!transcriptPath || !existsSync(transcriptPath)) {
+    return null;
+  }
+
+  let content: string;
+  try {
+    content = readFileSync(transcriptPath, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+  if (!content) return null;
+
+  // Gemini 格式无逐行 timestamp,直接返回 null 让调用方回落
+  const geminiCheck = isGeminiTranscriptFormat(content);
+  if (geminiCheck.isGemini) return null;
+
+  return extractLastAssistantEntryFromJsonl(content);
+}
+
+function extractLastAssistantEntryFromJsonl(content: string): AssistantEntry | null {
+  const lines = content.split('\n');
+  // 当前时间 + 60s 容差,用于过滤未来时间戳(时钟偏差/损坏)
+  const nowEpoch = Date.now();
+  const FUTURE_SKEW_MS = 60_000;
+
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const rawLine = lines[i];
+    if (!rawLine) continue;
+
+    let line: any;
+    try {
+      line = JSON.parse(rawLine);
+    } catch {
+      continue;
+    }
+
+    // 只取主链(非 sidechain) assistant 消息
+    if (line.type !== 'assistant' && line.role !== 'assistant') continue;
+    if (line.isSidechain) continue;
+
+    // 必须有文本内容
+    if (!line.message?.content) continue;
+
+    let text = '';
+    const msgContent = line.message.content;
+    if (typeof msgContent === 'string') {
+      text = msgContent;
+    } else if (Array.isArray(msgContent)) {
+      text = msgContent
+        .filter((c: any): c is { type: 'text'; text: string } =>
+          !!c && typeof c === 'object' && c.type === 'text' && typeof c.text === 'string')
+        .map(c => c.text)
+        .join('\n');
+    }
+
+    if (!text || !text.trim()) continue;
+
+    // ── 时间戳 sanity clamp ──────────────────────────────────────────
+    const rawTs = line.timestamp;
+    if (!rawTs || typeof rawTs !== 'string') return null; // 无时间戳 → 回落
+
+    const parsed = Date.parse(rawTs);
+    if (Number.isNaN(parsed)) return null;             // 解析失败
+    if (parsed <= 0) return null;                       // 非法值
+    if (parsed > nowEpoch + FUTURE_SKEW_MS) return null; // 未来时间(时钟偏差)
+
+    return { text, timestampEpoch: parsed };
+  }
+
+  return null;
+}

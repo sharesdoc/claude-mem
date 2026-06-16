@@ -392,12 +392,14 @@ export class ClaudeProvider {
         }
 
         if (message.type === 'result' && message.subtype === 'success') {
-          // Initial completion estimate. The Stop hook later overwrites this
-          // with the authoritative timestamp (aligned with claude-task-timer).
+          // Initial completion estimate (may fire prematurely before tool calls
+          // complete). Writes with NULL guard — transcript timestamp (arriving
+          // later via Stop hook) takes priority as the authoritative source.
           this.dbManager.getSessionStore().updatePromptCompletedAt(
             session.contentSessionId,
             session.lastPromptNumber,
-            Date.now()
+            Date.now(),
+            'sdk_result',
           );
         }
       }

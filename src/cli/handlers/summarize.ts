@@ -2,7 +2,7 @@
 import type { EventHandler, NormalizedHookInput, HookResult } from '../types.js';
 import { executeWithWorkerFallback, isWorkerFallback } from '../../shared/worker-utils.js';
 import { logger } from '../../utils/logger.js';
-import { extractLastMessage } from '../../shared/transcript-parser.js';
+import { extractLastMessage, extractLastAssistantEntry } from '../../shared/transcript-parser.js';
 import { stripMemoryTagsFromPrompt } from '../../utils/tag-stripping.js';
 import { HOOK_EXIT_CODES } from '../../shared/hook-constants.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
@@ -41,9 +41,18 @@ export const summarizeHandler: EventHandler = {
     }
 
     let lastAssistantMessage = '';
+    // transcript 末条 assistant 墙钟时间,用作 completed_at 主源
+    let transcriptCompletedAtEpoch: number | null = null;
 
     if (input.lastAssistantMessage !== undefined) {
       lastAssistantMessage = stripMemoryTagsFromPrompt(input.lastAssistantMessage);
+      // 有直传 lastAssistantMessage 时仍尝试从 transcript 取时间戳
+      if (transcriptPath) {
+        try {
+          const entry = extractLastAssistantEntry(transcriptPath);
+          transcriptCompletedAtEpoch = entry?.timestampEpoch ?? null;
+        } catch { /* 回落 */ }
+      }
     } else {
       if (!transcriptPath) {
         logger.debug('HOOK', `No transcriptPath in Stop hook input for session ${sessionId} - skipping summary`);
@@ -51,7 +60,9 @@ export const summarizeHandler: EventHandler = {
       }
 
       try {
-        lastAssistantMessage = extractLastMessage(transcriptPath, 'assistant', true);
+        const entry = extractLastAssistantEntry(transcriptPath);
+        lastAssistantMessage = entry?.text ?? '';
+        transcriptCompletedAtEpoch = entry?.timestampEpoch ?? null;
         lastAssistantMessage = stripMemoryTagsFromPrompt(lastAssistantMessage);
       } catch (err) {
         logger.warn('HOOK', `Stop hook: failed to extract last assistant message for session ${sessionId}: ${err instanceof Error ? err.message : err}`);
@@ -134,6 +145,7 @@ export const summarizeHandler: EventHandler = {
         platformSource,
         project,
         user_prompt: userPrompt,
+        transcript_completed_at_epoch: transcriptCompletedAtEpoch,
       },
     );
     if (isWorkerFallback(queueResult)) {
