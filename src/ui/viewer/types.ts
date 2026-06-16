@@ -197,15 +197,33 @@ export interface AnalyticsResponse {
   }>;
 }
 
+export interface ReportStats {
+  totalMs: number; projects: number; prompts: number;
+  obs: number; summaries: number; sessions: number;
+}
+
 /** 周报列表项(GET /api/reports/list 返回)。 */
 export interface WeeklyReportItem {
   week_start: string;
   week_end: string;
   generated_at_epoch: number;
-  stats: {
-    totalMs: number; projects: number; prompts: number;
-    obs: number; summaries: number; sessions: number;
-  } | null;
+  /** 该周已结束后生成(涵盖整周)→ 锁定不再重生成,除非删除。 */
+  complete?: boolean;
+  stats: ReportStats | null;
+}
+
+/** History 页周网格的一行(GET /api/reports/history-weeks 返回)。 */
+export interface HistoryWeekRow {
+  week_start: string;
+  week_end: string;
+  /** 该周是否有任何活动(prompt/obs/summary)→ 无则置灰禁用、批量跳过。 */
+  hasContent: boolean;
+  /** 是否已存在该周周报。 */
+  has_report: boolean;
+  /** 是否已涵盖整周(锁定)。 */
+  complete: boolean;
+  generated_at_epoch: number | null;
+  stats: ReportStats | null;
 }
 
 /** 日报状态总览(GET /api/daily-reports/overview 返回)。 */
@@ -214,7 +232,11 @@ export interface DailyReportOverview {
   today: string;
   yesterday: string;
   /** 每个 user_label 的日报状态。无日报的用户不在此映射内。 */
-  users: Record<string, { latest_date: string; has_today: boolean; has_yesterday: boolean }>;
+  users: Record<string, {
+    latest_date: string; has_today: boolean; has_yesterday: boolean;
+    /** 所选日有无活动(无→灰显禁用)。 */ hasContent?: boolean;
+    /** 报表已涵盖整日(锁定)。 */ complete?: boolean;
+  }>;
 }
 
 /** 周报状态总览(GET /api/reports/overview 返回)。 */
@@ -223,5 +245,9 @@ export interface WeeklyReportOverview {
   week: string;
   week_end: string;
   /** 每个 user_label 的周报状态。无周报的用户不在此映射内。 */
-  users: Record<string, { latest_week: string; has_current: boolean }>;
+  users: Record<string, {
+    latest_week: string; has_current: boolean;
+    /** 所选周有无活动(无→灰显禁用)。 */ hasContent?: boolean;
+    /** 报表已涵盖整周(锁定)。 */ complete?: boolean;
+  }>;
 }

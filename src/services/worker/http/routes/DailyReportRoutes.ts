@@ -9,6 +9,10 @@ import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { DailyReportGenerator, upsertDailyReport, dayOf } from '../../reports/DailyReportGenerator.js';
 import { mdToHtml } from '../../reports/mdToHtml.js';
 import { loopbackBypassAllowed } from '../middleware/tokenAuth.js';
+import {
+  runPool, batchConcurrency, createBatchJob, recordOutcome, finishBatchJob, getBatchJob,
+  dayEndEpoch, isPeriodComplete, rosterAllUsers, activeUsersInRange, type BatchOutcome,
+} from '../../reports/batch.js';
 
 /**
  * DailyReportRoutes — 日报后端接口(对照周报 ReportRoutes,做简)。
@@ -44,6 +48,8 @@ export class DailyReportRoutes extends BaseRouteHandler {
   setupRoutes(app: express.Application): void {
     app.get('/api/daily-reports/overview', this.handleOverview.bind(this));
     app.post('/api/daily-reports/generate', this.handleGenerate.bind(this));
+    app.post('/api/daily-reports/batch', this.handleBatch.bind(this));
+    app.get('/api/daily-reports/batch/:jobId', this.handleBatchStatus.bind(this));
     app.post('/api/daily-reports/delete', this.handleDelete.bind(this));
     app.get('/api/daily-reports/download', this.handleDownload.bind(this));
     app.get('/daily-report', this.handleReportPage.bind(this));
@@ -85,6 +91,7 @@ export class DailyReportRoutes extends BaseRouteHandler {
     ).get(user, date) as DailyRow | undefined;
   }
 
+
   // ── GET /api/daily-reports/overview ────────────────────────────────
   // 返回:今天/昨天的本地日期 + 每个用户的日报状态(最近日期、今天/昨天是否已生成)。
   private handleOverview = this.wrapHandler((req: Request, res: Response): void => {
@@ -104,37 +111,105 @@ export class DailyReportRoutes extends BaseRouteHandler {
     const [ty, tm, td] = today.split('-').map(Number);
     const yesterday = dayOf(Date.UTC(ty, tm - 1, td) - tzOffsetMs - DAY_MS, tzOffsetMs);
 
+    // Per-user report status for the target day. `today_gen` is the report's
+    // generated_at_epoch (0 if none) → used to derive `complete`.
     const rows = this.dbManager.getConnection().prepare(`
       SELECT user_label,
              MAX(report_date) AS latest_date,
              MAX(CASE WHEN report_date = ? THEN 1 ELSE 0 END) AS has_today,
+             MAX(CASE WHEN report_date = ? THEN generated_at_epoch ELSE 0 END) AS today_gen,
              MAX(CASE WHEN report_date = ? THEN 1 ELSE 0 END) AS has_yesterday
       FROM daily_reports GROUP BY user_label
-    `).all(today, yesterday) as Array<{ user_label: string; latest_date: string; has_today: number; has_yesterday: number }>;
+    `).all(today, today, yesterday) as Array<{ user_label: string; latest_date: string; has_today: number; today_gen: number; has_yesterday: number }>;
+    const reportByUser = new Map(rows.map(r => [r.user_label, r]));
 
-    const users: Record<string, { latest_date: string; has_today: boolean; has_yesterday: boolean }> = {};
-    for (const r of rows) {
-      users[r.user_label] = { latest_date: r.latest_date, has_today: !!r.has_today, has_yesterday: !!r.has_yesterday };
+    // The day's [start,end) and which users actually did anything in it.
+    const db = this.dbManager.getConnection();
+    const dayEnd = dayEndEpoch(today, tzOffsetMs);
+    const dayStart = dayEnd - DAY_MS;
+    const active = activeUsersInRange(db, dayStart, dayEnd);
+
+    // Roster = every known user ∪ anyone with a report row, so the table can
+    // list everyone and grey out those with no content for the selected day.
+    const roster = new Set<string>([...rosterAllUsers(db), ...rows.map(r => r.user_label)]);
+
+    const users: Record<string, {
+      latest_date: string; has_today: boolean; has_yesterday: boolean; hasContent: boolean; complete: boolean;
+    }> = {};
+    for (const u of roster) {
+      const r = reportByUser.get(u);
+      users[u] = {
+        latest_date: r?.latest_date ?? '',
+        has_today: !!r?.has_today,
+        has_yesterday: !!r?.has_yesterday,
+        hasContent: active.has(u),
+        complete: !!r?.has_today && isPeriodComplete(r?.today_gen, dayEnd),
+      };
     }
     res.json({ today, yesterday, users });
   });
 
+  /**
+   * Generate (or refresh) one user's daily report, with the shared skip rule:
+   * unless `force`, a report that already covers the full day (complete) is left
+   * untouched. Returns the batch outcome so the same path serves single + batch.
+   */
+  private async generateOne(user: string, date: string, tzOffsetMs: number, force: boolean): Promise<BatchOutcome> {
+    if (!force) {
+      const existing = this.getReport(user, date);
+      if (existing && isPeriodComplete(existing.generated_at_epoch, dayEndEpoch(date, tzOffsetMs))) return 'skipped';
+    }
+    const report = await new DailyReportGenerator(this.dbManager.getConnection())
+      .generate(user, date, tzOffsetMs, this.model());
+    upsertDailyReport(this.dbManager.getConnection(), report);
+    return 'generated';
+  }
+
   // ── POST /api/daily-reports/generate ───────────────────────────────
   private handleGenerate = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
-    const body = (req.body ?? {}) as { user?: string; date?: string; tz?: number };
+    const body = (req.body ?? {}) as { user?: string; date?: string; tz?: number; force?: boolean };
     const user = (body.user ?? '').trim();
     const tzOffsetMs = body.tz != null && !Number.isNaN(Number(body.tz)) ? Number(body.tz) * 60000 : this.tzOffsetMs(req);
     const date = (body.date ?? '').trim() || dayOf(Date.now(), tzOffsetMs);
     if (!user) { this.badRequest(res, 'missing user'); return; }
     if (!DATE_RE.test(date)) { this.badRequest(res, 'invalid date (expect YYYY-MM-DD)'); return; }
 
-    const report = await new DailyReportGenerator(this.dbManager.getConnection())
-      .generate(user, date, tzOffsetMs, this.model());
-    upsertDailyReport(this.dbManager.getConnection(), report);
+    const outcome = await this.generateOne(user, date, tzOffsetMs, body.force === true);
+    logger.info('WORKER', 'Daily report generate', { user, date, outcome });
+    res.json({ ok: true, outcome, skipped: outcome === 'skipped', report_date: date });
+  });
 
-    logger.info('WORKER', 'Daily report generated', { user: report.user_label, date, aiModel: report.model || '(none)' });
-    res.json({ ok: true, report_date: report.report_date, generated_at_epoch: report.generated_at_epoch });
+  // ── POST /api/daily-reports/batch ──────────────────────────────────
+  // Kick off async batch generation of ALL content-bearing users' reports for
+  // `date`; returns a jobId the client polls. Empty-day users are filtered out
+  // (never queued); already-complete reports are tallied as 'skipped'.
+  private handleBatch = this.wrapHandler((req: Request, res: Response): void => {
+    if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
+    const body = (req.body ?? {}) as { date?: string; tz?: number; force?: boolean };
+    const tzOffsetMs = body.tz != null && !Number.isNaN(Number(body.tz)) ? Number(body.tz) * 60000 : this.tzOffsetMs(req);
+    const date = (body.date ?? '').trim() || dayOf(Date.now(), tzOffsetMs);
+    if (!DATE_RE.test(date)) { this.badRequest(res, 'invalid date (expect YYYY-MM-DD)'); return; }
+    const force = body.force === true;
+
+    const dayEnd = dayEndEpoch(date, tzOffsetMs);
+    const candidates = [...activeUsersInRange(this.dbManager.getConnection(), dayEnd - DAY_MS, dayEnd)];
+    const job = createBatchJob(candidates.length);
+    res.json({ jobId: job.id, total: job.total });
+
+    // Run after responding; pool size from config (default 6).
+    void runPool(candidates, batchConcurrency(),
+      (user) => this.generateOne(user, date, tzOffsetMs, force),
+      (outcome) => recordOutcome(job.id, outcome),
+    ).then(() => { finishBatchJob(job.id); logger.info('WORKER', 'Daily batch done', { date, ...getBatchJob(job.id) }); });
+  });
+
+  // ── GET /api/daily-reports/batch/:jobId ────────────────────────────
+  private handleBatchStatus = this.wrapHandler((req: Request, res: Response): void => {
+    if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
+    const job = getBatchJob(String(req.params.jobId));
+    if (!job) { this.notFound(res, 'job not found'); return; }
+    res.json(job);
   });
 
   // ── POST /api/daily-reports/delete ─────────────────────────────────

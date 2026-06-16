@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { AnalyticsResponse, WeeklyReportItem, DailyReportOverview, WeeklyReportOverview } from '../types';
+import { AnalyticsResponse, DailyReportOverview, WeeklyReportOverview, HistoryWeekRow } from '../types';
 import { useLocale } from '../hooks/useLocale';
 import { authFetch } from '../utils/api';
 import { ScopePicker, ScopeMode } from './ScopePicker';
@@ -301,8 +301,15 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const [historyUser, setHistoryUser] = useState<string | null>(null);
 
   // ── Weekly reports (History view) ────────────────────────────────
-  const [historyReports, setHistoryReports] = useState<WeeklyReportItem[]>([]);
+  // The active user's full 26-week grid (content/report/complete per week).
+  const [historyWeeks, setHistoryWeeks] = useState<HistoryWeekRow[]>([]);
   const [reportsBusy, setReportsBusy] = useState(false);
+
+  // ── Batch generation (async job + polling) ───────────────────────
+  // One batch at a time; tracks live progress for the inline progress bar.
+  const [batchJob, setBatchJob] = useState<
+    { section: 'daily' | 'weekly' | 'history'; total: number; generated: number; skipped: number; failed: number; running: boolean } | null
+  >(null);
 
   // ── Daily reports (日报 table on the All-Projects stats page) ─────
   // Per-user status (latest date + whether today/yesterday exist). Users with
@@ -486,37 +493,85 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   }, [analytics]);
   const historyActiveUser = (historyUser && historyUsers.includes(historyUser)) ? historyUser : historyUsers[0];
 
-  const loadReports = useCallback(async (user: string | undefined) => {
-    if (!user) { setHistoryReports([]); return; }
+  // History view: load the active user's full 26-week grid (content/report/
+  // complete per week) — replaces the old "existing reports only" list so empty
+  // weeks can render greyed/disabled.
+  const loadHistoryWeeks = useCallback(async (user: string | undefined) => {
+    if (!user) { setHistoryWeeks([]); return; }
     try {
-      const resp = await authFetch('/api/reports/list?user=' + encodeURIComponent(user));
-      if (resp.ok) { const d = await resp.json() as { reports: WeeklyReportItem[] }; setHistoryReports(d.reports ?? []); }
-      else setHistoryReports([]);
-    } catch { setHistoryReports([]); }
+      const tz = -new Date().getTimezoneOffset();
+      const resp = await authFetch(`/api/reports/history-weeks?user=${encodeURIComponent(user)}&tz=${tz}`);
+      if (resp.ok) { const d = await resp.json() as { weeks: HistoryWeekRow[] }; setHistoryWeeks(d.weeks ?? []); }
+      else setHistoryWeeks([]);
+    } catch { setHistoryWeeks([]); }
   }, []);
 
   useEffect(() => {
     if (scope !== 'history') return;
-    void loadReports(historyActiveUser);
-  }, [scope, historyActiveUser, loadReports]);
+    void loadHistoryWeeks(historyActiveUser);
+  }, [scope, historyActiveUser, loadHistoryWeeks]);
 
-  const refreshThisWeek = useCallback(async (user: string) => {
+  // Generate/refresh one specific week for the active user (per-row button), then
+  // refresh the grid. Respects the skip-if-complete rule unless `force`.
+  const generateHistoryWeek = useCallback(async (user: string, week: string, force = false) => {
     setReportsBusy(true);
     try {
       const tz = -new Date().getTimezoneOffset();
-      // 显式传入本周周一,只生成当前周的周报(不依赖后端默认值)
-      const now = new Date(); const wd = now.getDay() || 7;
-      const mon = new Date(now); mon.setDate(now.getDate() - wd + 1);
-      const week = `${mon.getFullYear()}-${String(mon.getMonth()+1).padStart(2,'0')}-${String(mon.getDate()).padStart(2,'0')}`;
       await authFetch('/api/reports/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user, week, tz }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, week, tz, force }),
       });
-      await loadReports(user);
-    } catch { /* surfaced via empty/unchanged list */ }
+      await loadHistoryWeeks(user);
+    } catch { /* surfaced via unchanged grid */ }
     finally { setReportsBusy(false); }
-  }, [loadReports]);
+  }, [loadHistoryWeeks]);
+
+  const deleteHistoryWeek = useCallback(async (user: string, week: string) => {
+    setReportsBusy(true);
+    try {
+      await authFetch('/api/reports/delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, week }),
+      });
+      await loadHistoryWeeks(user);
+    } catch { /* surfaced via unchanged grid */ }
+    finally { setReportsBusy(false); }
+  }, [loadHistoryWeeks]);
+
+  // ── Async batch generation driver (shared by all 3 batch buttons) ──
+  // POST to start → get {jobId,total} → poll GET .../:jobId every ~1s, updating
+  // the inline progress bar, until done (or 404 if the worker restarted). Then
+  // refresh the relevant data source. One batch at a time (button disabled while
+  // batchJob.running). tz is injected here so callers pass only date/week/user.
+  const startBatch = useCallback(async (
+    section: 'daily' | 'weekly' | 'history',
+    postUrl: string,
+    body: Record<string, unknown>,
+    reload: () => Promise<void>,
+  ) => {
+    setBatchJob({ section, total: 0, generated: 0, skipped: 0, failed: 0, running: true });
+    const finish = async () => { setBatchJob(j => j ? { ...j, running: false } : j); await reload(); setTimeout(() => setBatchJob(null), 2500); };
+    try {
+      const tz = -new Date().getTimezoneOffset();
+      const resp = await authFetch(postUrl, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, tz }),
+      });
+      const { jobId, total } = await resp.json() as { jobId: string; total: number };
+      setBatchJob(j => j ? { ...j, total } : j);
+      if (!total) { await finish(); return; }
+      const poll = async () => {
+        try {
+          const r = await authFetch(`${postUrl}/${jobId}`);
+          if (r.status === 404) { await finish(); return; } // job expired / worker restarted
+          const job = await r.json() as { total: number; generated: number; skipped: number; failed: number; done: boolean };
+          setBatchJob(j => j ? { ...j, total: job.total, generated: job.generated, skipped: job.skipped, failed: job.failed } : j);
+          if (job.done) { await finish(); } else { setTimeout(poll, 1000); }
+        } catch { await finish(); }
+      };
+      setTimeout(poll, 800);
+    } catch { setBatchJob(j => j ? { ...j, running: false } : j); }
+  }, []);
 
   // ── 日报:状态总览 + 生成/删除(供 All-Projects 页「日报」表) ──────
   const loadDailyOverview = useCallback(async () => {
@@ -626,6 +681,24 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const svgH = 220;
   const plotW = svgW - svgPadding.left - svgPadding.right;
   const plotH = svgH - svgPadding.top - svgPadding.bottom;
+
+  // Inline batch-progress indicator for a section's title bar. Shows
+  // "12/26 (✓8 skip3 ✗1)" + a thin progress bar while a batch for that section
+  // is running (or its brief post-done summary). Null otherwise.
+  const batchBar = (section: 'daily' | 'weekly' | 'history') => {
+    if (!batchJob || batchJob.section !== section) return null;
+    const finished = batchJob.generated + batchJob.skipped + batchJob.failed;
+    const pct = batchJob.total > 0 ? Math.round((finished / batchJob.total) * 100) : 100;
+    return (
+      <span style={{ marginLeft: 12, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 400, color: 'var(--color-text-muted)' }}>
+        <span>{batchJob.running ? t('stats.batchRunning') : t('stats.batchDone')} {finished}/{batchJob.total}
+          {' '}(✓{batchJob.generated} {t('stats.batchSkipped')}{batchJob.skipped}{batchJob.failed ? ` ✗${batchJob.failed}` : ''})</span>
+        <span style={{ width: 80, height: 4, background: 'var(--color-border-primary)', borderRadius: 2, overflow: 'hidden' }}>
+          <span style={{ display: 'block', height: '100%', width: `${pct}%`, background: 'var(--color-accent-primary)', transition: 'width 0.3s' }} />
+        </span>
+      </span>
+    );
+  };
 
   // Scope bar: 24h/history stay plain tabs; the four dated scopes become
   // ScopePickers whose label is the selected period. Shared by both the
@@ -809,48 +882,75 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
               {renderTable(t('stats.weekHistory'), t('stats.historyWeek'), activeWeeks, r => r.week)}
               {renderTable(t('stats.historyTitle'), t('stats.historyMonth'), activeMonths, r => r.month)}
 
-              {/* Weekly reports — click to open a full report page in a new tab */}
+              {/* Weekly reports — the active user's full 26-week grid. Weeks with
+                  no content are greyed/disabled; complete weeks are locked (no
+                  regenerate, delete to unlock). "刷新全部历史周" batch-fills the rest. */}
               <div className="stats-section">
                 <div className="stats-section-title">
                   {t('stats.weeklyReports')}
                   <button type="button" className="stats-tab" style={{ marginLeft: 12 }}
-                    disabled={reportsBusy}
-                    onClick={() => activeUser && void refreshThisWeek(activeUser)}>
-                    {reportsBusy ? '…' : t('stats.refreshThisWeek')}
+                    disabled={batchJob?.running || !activeUser}
+                    onClick={() => activeUser && void startBatch('history', '/api/reports/batch',
+                      { mode: 'history', user: activeUser }, () => loadHistoryWeeks(activeUser))}>
+                    {t('stats.batchRefreshAllWeeks')}
                   </button>
+                  {batchBar('history')}
                 </div>
-                {historyReports.length === 0 ? (
+                {historyWeeks.length === 0 ? (
                   <div className="stats-no-data-banner">{t('stats.noReports')}</div>
                 ) : (
                   <div className="stats-user-table-wrap">
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                      {historyReports.map(r => {
+                      {historyWeeks.map(w => {
                         const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
                         const urlOf = (path: string) => {
-                          const q = new URLSearchParams({ user: activeUser, week: r.week_start });
+                          const q = new URLSearchParams({ user: activeUser, week: w.week_start });
                           if (tokenQ) q.set('token', tokenQ);
                           return `${path}?${q.toString()}`;
                         };
+                        const muted = !w.hasContent;
                         return (
-                          <div key={r.week_start} style={{
+                          <div key={w.week_start} style={{
                             display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px',
                             border: '1px solid var(--color-border-primary)', borderRadius: 6,
+                            opacity: muted ? 0.55 : 1,
                           }}>
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div style={{ fontWeight: 600 }}>{r.week_start} ~ {r.week_end}</div>
+                              <div style={{ fontWeight: 600, color: muted ? 'var(--color-text-muted)' : 'var(--color-text-primary)' }}>
+                                {w.week_start} ~ {w.week_end}
+                                {w.complete && <span style={{ marginLeft: 8, fontSize: 11, color: 'var(--color-text-muted)' }}>· {t('stats.reportComplete')}</span>}
+                              </div>
                               <div style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>
-                                {t('stats.reportGenerated')}: {new Date(r.generated_at_epoch).toLocaleString()}
-                                {r.stats && ` · ${formatProcessingTime(r.stats.totalMs)} · ${r.stats.projects} ${t('stats.projects')}`}
+                                {!w.hasContent ? t('stats.noContent')
+                                  : w.has_report ? `${t('stats.reportGenerated')}: ${new Date(w.generated_at_epoch!).toLocaleString()}${w.stats ? ` · ${formatProcessingTime(w.stats.totalMs)} · ${w.stats.projects} ${t('stats.projects')}` : ''}`
+                                  : t('stats.notGenerated')}
                               </div>
                             </div>
-                            <button type="button" className="stats-tab is-active"
-                              onClick={() => window.open(urlOf('/report'), '_blank')}>
-                              {t('stats.openReport')}
-                            </button>
-                            <button type="button" className="stats-tab"
-                              onClick={() => window.open(urlOf('/api/reports/download'), '_blank')}>
-                              {t('stats.downloadReport')}
-                            </button>
+                            {/* 生成/重新生成 — hidden when no content or already complete (locked). */}
+                            {w.hasContent && !w.complete && (
+                              <button type="button" className="stats-tab is-active" disabled={reportsBusy}
+                                onClick={() => void generateHistoryWeek(activeUser, w.week_start)}>
+                                {w.has_report ? t('stats.dailyRegenerate') : t('stats.dailyGenerate')}
+                              </button>
+                            )}
+                            {w.has_report && (
+                              <button type="button" className="stats-tab is-active"
+                                onClick={() => window.open(urlOf('/report'), '_blank')}>
+                                {t('stats.openReport')}
+                              </button>
+                            )}
+                            {w.has_report && (
+                              <button type="button" className="stats-tab"
+                                onClick={() => window.open(urlOf('/api/reports/download'), '_blank')}>
+                                {t('stats.downloadReport')}
+                              </button>
+                            )}
+                            {w.has_report && (
+                              <button type="button" className="stats-tab" disabled={reportsBusy}
+                                onClick={() => { if (window.confirm(t('stats.weeklyConfirmDelete'))) void deleteHistoryWeek(activeUser, w.week_start); }}>
+                                {t('stats.dailyDelete')}
+                              </button>
+                            )}
                           </div>
                         );
                       })}
@@ -950,9 +1050,18 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
           )}
 
           {/* 日报 — 仅在「当日(Today)」scope 显示;每个用户一行;操作=生成/重新生成/删除/下载;链接→新页显示最近两天日报 */}
-          {scope === 'day' && isAllProjects && userSummary.length > 0 && (
+          {scope === 'day' && isAllProjects && dailyOverview && Object.keys(dailyOverview.users).length > 0 && (
             <div className="stats-section">
-              <div className="stats-section-title">{t('stats.dailyReports')}</div>
+              <div className="stats-section-title">
+                {t('stats.dailyReports')}
+                <button type="button" className="stats-tab" style={{ marginLeft: 12 }}
+                  disabled={batchJob?.running}
+                  onClick={() => void startBatch('daily', '/api/daily-reports/batch',
+                    { date: dailyOverview.today }, () => loadDailyOverview())}>
+                  {t('stats.batchGenerate')}
+                </button>
+                {batchBar('daily')}
+              </div>
               <div className="stats-user-table-wrap">
                 <table className="stats-user-table">
                   <thead><tr>
@@ -962,14 +1071,18 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                     <th>{t('stats.dailyLink')}</th>
                   </tr></thead>
                   <tbody>
-                    {userSummary.map(row => {
-                      const u = row.user_label;
-                      const today = dailyOverview?.today ?? '';
-                      const st = dailyOverview?.users?.[u];
+                    {/* All users (active first), so users with no content for the
+                        selected day still show — greyed + disabled. */}
+                    {Object.keys(dailyOverview.users)
+                      .sort((a, b) => Number(!!dailyOverview.users[b].hasContent) - Number(!!dailyOverview.users[a].hasContent) || a.localeCompare(b))
+                      .map(u => {
+                      const today = dailyOverview.today ?? '';
+                      const st = dailyOverview.users[u];
                       const hasToday = !!st?.has_today;
-                      // View 高亮的前提:该页(最近两天)确有可看的日报。
+                      const hasContent = !!st?.hasContent;
+                      const complete = !!st?.complete;
                       const viewable = !!(st?.has_today || st?.has_yesterday);
-                      const busy = dailyBusyUsers.has(u);
+                      const busy = dailyBusyUsers.has(u) || !!batchJob?.running;
                       const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
                       const tz = -new Date().getTimezoneOffset();
                       const urlOf = (path: string, extra?: Record<string, string>) => {
@@ -978,19 +1091,23 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                         return `${path}?${q.toString()}`;
                       };
                       return (
-                        <tr key={u}>
-                          {/* Show the SELECTED day (what generate/delete operate on),
-                              not the user's latest report date — otherwise the date
-                              column contradicts the row's actions when a past day is
-                              picked (e.g. column says 06-13 but 重新生成 targets 06-12). */}
-                          <td>{today}</td>
-                          <td>{u}</td>
+                        <tr key={u} style={{ opacity: hasContent ? 1 : 0.5 }}>
+                          {/* Selected day (what actions operate on); greyed when no content. */}
+                          <td style={{ color: hasContent ? undefined : 'var(--color-text-muted)' }}>{today}</td>
+                          <td style={{ color: hasContent ? undefined : 'var(--color-text-muted)' }}>{u}</td>
                           <td>
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                              <button type="button" className="stats-tab is-active" disabled={busy}
-                                onClick={() => void generateDaily(u, today)}>
-                                {hasToday ? t('stats.dailyRegenerate') : t('stats.dailyGenerate')}
-                              </button>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                              {/* No content → no generate; complete → locked badge; else generate/regenerate. */}
+                              {!hasContent ? (
+                                <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{t('stats.noContent')}</span>
+                              ) : complete ? (
+                                <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{t('stats.reportComplete')}</span>
+                              ) : (
+                                <button type="button" className="stats-tab is-active" disabled={busy}
+                                  onClick={() => void generateDaily(u, today)}>
+                                  {hasToday ? t('stats.dailyRegenerate') : t('stats.dailyGenerate')}
+                                </button>
+                              )}
                               {hasToday && (
                                 <button type="button" className="stats-tab" disabled={busy}
                                   onClick={() => { if (window.confirm(t('stats.dailyConfirmDelete'))) void deleteDaily(u, today); }}>
@@ -1008,7 +1125,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                           <td>
                             <button type="button"
                               className={viewable ? 'stats-tab is-active' : 'stats-tab'}
-                              disabled={busy}
+                              disabled={busy || !viewable}
                               onClick={() => window.open(urlOf('/daily-report'), '_blank')}>
                               {t('stats.dailyView')}
                             </button>
@@ -1022,10 +1139,19 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
             </div>
           )}
 
-          {/* 周报 — 仅在「本周(Week)」scope 显示;每用户一行(仅当前周);格式同日报表 */}
-          {scope === 'week' && isAllProjects && userSummary.length > 0 && (
+          {/* 周报 — 仅在「本周(Week)」scope 显示;枚举全部用户(无内容置灰),格式同日报表 */}
+          {scope === 'week' && isAllProjects && weeklyOverview && Object.keys(weeklyOverview.users).length > 0 && (
             <div className="stats-section">
-              <div className="stats-section-title">{t('stats.weeklyReports')}</div>
+              <div className="stats-section-title">
+                {t('stats.weeklyReports')}
+                <button type="button" className="stats-tab" style={{ marginLeft: 12 }}
+                  disabled={batchJob?.running}
+                  onClick={() => void startBatch('weekly', '/api/reports/batch',
+                    { mode: 'week', week: weeklyOverview.week }, () => loadWeeklyOverview())}>
+                  {t('stats.batchGenerate')}
+                </button>
+                {batchBar('weekly')}
+              </div>
               <div className="stats-user-table-wrap">
                 <table className="stats-user-table">
                   <thead><tr>
@@ -1035,15 +1161,17 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                     <th>{t('stats.dailyLink')}</th>
                   </tr></thead>
                   <tbody>
-                    {userSummary.map(row => {
-                      const u = row.user_label;
-                      const week = weeklyOverview?.week ?? '';
-                      const weekEnd = weeklyOverview?.week_end ?? '';
-                      const st = weeklyOverview?.users?.[u];
+                    {Object.keys(weeklyOverview.users)
+                      .sort((a, b) => Number(!!weeklyOverview.users[b].hasContent) - Number(!!weeklyOverview.users[a].hasContent) || a.localeCompare(b))
+                      .map(u => {
+                      const week = weeklyOverview.week ?? '';
+                      const weekEnd = weeklyOverview.week_end ?? '';
+                      const st = weeklyOverview.users[u];
                       const hasCurrent = !!st?.has_current;
-                      // View 高亮的前提:该用户有可看的周报(本周或更早一周)。
-                      const viewable = !!st;
-                      const busy = weeklyBusyUsers.has(u);
+                      const hasContent = !!st?.hasContent;
+                      const complete = !!st?.complete;
+                      const viewable = !!st && (hasCurrent || !!st.latest_week);
+                      const busy = weeklyBusyUsers.has(u) || !!batchJob?.running;
                       const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
                       const urlOf = (path: string) => {
                         const q = new URLSearchParams({ user: u, week });
@@ -1051,15 +1179,21 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                         return `${path}?${q.toString()}`;
                       };
                       return (
-                        <tr key={u}>
-                          <td>{week ? `${week} ~ ${weekEnd}` : ''}</td>
-                          <td>{u}</td>
+                        <tr key={u} style={{ opacity: hasContent ? 1 : 0.5 }}>
+                          <td style={{ color: hasContent ? undefined : 'var(--color-text-muted)' }}>{week ? `${week} ~ ${weekEnd}` : ''}</td>
+                          <td style={{ color: hasContent ? undefined : 'var(--color-text-muted)' }}>{u}</td>
                           <td>
-                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                              <button type="button" className="stats-tab is-active" disabled={busy}
-                                onClick={() => void generateWeekly(u, week)}>
-                                {hasCurrent ? t('stats.dailyRegenerate') : t('stats.dailyGenerate')}
-                              </button>
+                            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                              {!hasContent ? (
+                                <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{t('stats.noContent')}</span>
+                              ) : complete ? (
+                                <span style={{ fontSize: 12, color: 'var(--color-text-muted)' }}>{t('stats.reportComplete')}</span>
+                              ) : (
+                                <button type="button" className="stats-tab is-active" disabled={busy}
+                                  onClick={() => void generateWeekly(u, week)}>
+                                  {hasCurrent ? t('stats.dailyRegenerate') : t('stats.dailyGenerate')}
+                                </button>
+                              )}
                               {hasCurrent && (
                                 <button type="button" className="stats-tab" disabled={busy}
                                   onClick={() => { if (window.confirm(t('stats.weeklyConfirmDelete'))) void deleteWeekly(u, week); }}>
@@ -1077,7 +1211,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                           <td>
                             <button type="button"
                               className={viewable ? 'stats-tab is-active' : 'stats-tab'}
-                              disabled={busy}
+                              disabled={busy || !viewable}
                               onClick={() => window.open(urlOf('/report'), '_blank')}>
                               {t('stats.dailyView')}
                             </button>

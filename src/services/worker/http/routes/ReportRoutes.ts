@@ -9,6 +9,10 @@ import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { ReportGenerator, upsertWeeklyReport, weekMondayOf } from '../../reports/ReportGenerator.js';
 import { mdToHtml } from '../../reports/mdToHtml.js';
 import { loopbackBypassAllowed } from '../middleware/tokenAuth.js';
+import {
+  runPool, batchConcurrency, createBatchJob, recordOutcome, finishBatchJob, getBatchJob,
+  weekEndEpoch, isPeriodComplete, rosterAllUsers, activeUsersInRange, userHasActivity, type BatchOutcome,
+} from '../../reports/batch.js';
 
 /**
  * ReportRoutes — 周报后端接口 (B-周报设计文档 §4)。
@@ -25,6 +29,8 @@ import { loopbackBypassAllowed } from '../middleware/tokenAuth.js';
 
 const WEEK_RE = /^\d{4}-\d{2}-\d{2}$/;
 const LIST_LIMIT = 12;
+const DAY_MS = 86400000;
+const HISTORY_WEEKS = 26;   // how far back the History page enumerates weeks
 
 interface ReportRow {
   user_label: string; week_start: string; week_end: string;
@@ -43,8 +49,11 @@ export class ReportRoutes extends BaseRouteHandler {
 
   setupRoutes(app: express.Application): void {
     app.get('/api/reports/list', this.handleList.bind(this));
+    app.get('/api/reports/history-weeks', this.handleHistoryWeeks.bind(this));
     app.get('/api/reports/overview', this.handleOverview.bind(this));
     app.post('/api/reports/generate', this.handleGenerate.bind(this));
+    app.post('/api/reports/batch', this.handleBatch.bind(this));
+    app.get('/api/reports/batch/:jobId', this.handleBatchStatus.bind(this));
     app.post('/api/reports/delete', this.handleDelete.bind(this));
     app.get('/api/reports/download', this.handleDownload.bind(this));
     app.get('/report', this.handleReportPage.bind(this));
@@ -91,6 +100,7 @@ export class ReportRoutes extends BaseRouteHandler {
     if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
     const user = (req.query.user as string | undefined)?.trim();
     if (!user) { this.badRequest(res, 'missing user'); return; }
+    const tzOffsetMs = this.tzOffsetMs(req);
     const rows = this.dbManager.getConnection().prepare(`
       SELECT week_start, week_end, generated_at_epoch, stats
       FROM weekly_reports WHERE user_label = ? COLLATE NOCASE
@@ -101,6 +111,8 @@ export class ReportRoutes extends BaseRouteHandler {
         week_start: r.week_start,
         week_end: r.week_end,
         generated_at_epoch: r.generated_at_epoch,
+        // complete = generated after the week fully elapsed → locked vs refreshable.
+        complete: isPeriodComplete(r.generated_at_epoch, weekEndEpoch(r.week_start, tzOffsetMs)),
         stats: r.stats ? JSON.parse(r.stats) : null,
       })),
     });
@@ -121,15 +133,33 @@ export class ReportRoutes extends BaseRouteHandler {
     // has_current = whether a report exists for the SELECTED week (`week`), not
     // literally "the current week" — the name is kept for backward compatibility.
     // latest_week is the user's most recent report overall (drives `viewable`).
+    // cur_gen = that week's report generated_at_epoch (0 if none) → derives `complete`.
     const rows = this.dbManager.getConnection().prepare(`
       SELECT user_label,
              MAX(week_start) AS latest_week,
-             MAX(CASE WHEN week_start = ? THEN 1 ELSE 0 END) AS has_current
+             MAX(CASE WHEN week_start = ? THEN 1 ELSE 0 END) AS has_current,
+             MAX(CASE WHEN week_start = ? THEN generated_at_epoch ELSE 0 END) AS cur_gen
       FROM weekly_reports GROUP BY user_label
-    `).all(week) as Array<{ user_label: string; latest_week: string; has_current: number }>;
+    `).all(week, week) as Array<{ user_label: string; latest_week: string; has_current: number; cur_gen: number }>;
+    const reportByUser = new Map(rows.map(r => [r.user_label, r]));
 
-    const users: Record<string, { latest_week: string; has_current: boolean }> = {};
-    for (const r of rows) users[r.user_label] = { latest_week: r.latest_week, has_current: !!r.has_current };
+    // The week's [start,end) and which users actually did anything in it; roster
+    // lists everyone so the table can grey out users with no content that week.
+    const db = this.dbManager.getConnection();
+    const weekEndE = weekEndEpoch(week, tzOffsetMs);
+    const active = activeUsersInRange(db, weekEndE - 7 * DAY_MS, weekEndE);
+    const roster = new Set<string>([...rosterAllUsers(db), ...rows.map(r => r.user_label)]);
+
+    const users: Record<string, { latest_week: string; has_current: boolean; hasContent: boolean; complete: boolean }> = {};
+    for (const u of roster) {
+      const r = reportByUser.get(u);
+      users[u] = {
+        latest_week: r?.latest_week ?? '',
+        has_current: !!r?.has_current,
+        hasContent: active.has(u),
+        complete: !!r?.has_current && isPeriodComplete(r?.cur_gen, weekEndE),
+      };
+    }
     res.json({ week, week_end: weekEnd, users });
   });
 
@@ -153,22 +183,126 @@ export class ReportRoutes extends BaseRouteHandler {
     res.json({ ok: true, deleted: info.changes });
   });
 
+  /**
+   * Generate (or refresh) one user's weekly report, with the shared skip rule:
+   * unless `force`, a report that already covers the full week (complete) is left
+   * untouched. Returns the batch outcome so single + batch share one code path.
+   */
+  private async generateOne(user: string, week: string, tzOffsetMs: number, force: boolean): Promise<BatchOutcome> {
+    if (!force) {
+      const existing = this.getReport(user, week);
+      if (existing && isPeriodComplete(existing.generated_at_epoch, weekEndEpoch(week, tzOffsetMs))) return 'skipped';
+    }
+    const report = await new ReportGenerator(this.dbManager.getConnection())
+      .generate(user, week, tzOffsetMs, this.model());
+    upsertWeeklyReport(this.dbManager.getConnection(), report);
+    return 'generated';
+  }
+
+  /**
+   * Build the History page's week grid for one user: the last HISTORY_WEEKS ISO
+   * weeks (Mondays), each annotated with whether the period had content, whether
+   * a report exists, and whether it's complete (locked). Empty-content weeks are
+   * greyed/disabled in the UI and excluded from batch generation.
+   */
+  private historyWeekRows(user: string, tzOffsetMs: number): Array<{
+    week_start: string; week_end: string; hasContent: boolean; complete: boolean;
+    has_report: boolean; generated_at_epoch: number | null; stats: unknown;
+  }> {
+    const db = this.dbManager.getConnection();
+    const thisMonday = weekMondayOf(Date.now(), tzOffsetMs);
+    const [my, mm, md] = thisMonday.split('-').map(Number);
+    const thisMondayWall = Date.UTC(my, mm - 1, md);
+    const repRows = db.prepare(
+      'SELECT week_start, week_end, generated_at_epoch, stats FROM weekly_reports WHERE user_label = ? COLLATE NOCASE',
+    ).all(user) as Array<{ week_start: string; week_end: string; generated_at_epoch: number; stats: string | null }>;
+    const repByWeek = new Map(repRows.map(r => [r.week_start, r]));
+    const out = [];
+    for (let i = 0; i < HISTORY_WEEKS; i++) {
+      const wall = thisMondayWall - i * 7 * DAY_MS;
+      const week_start = this.fmtYMD(wall);
+      const week_end = this.fmtYMD(wall + 6 * DAY_MS);
+      const wkEnd = weekEndEpoch(week_start, tzOffsetMs);
+      const rep = repByWeek.get(week_start);
+      out.push({
+        week_start, week_end,
+        hasContent: userHasActivity(db, user, wkEnd - 7 * DAY_MS, wkEnd),
+        has_report: !!rep,
+        complete: !!rep && isPeriodComplete(rep.generated_at_epoch, wkEnd),
+        generated_at_epoch: rep?.generated_at_epoch ?? null,
+        stats: rep?.stats ? JSON.parse(rep.stats) : null,
+      });
+    }
+    return out;
+  }
+
+  // ── GET /api/reports/history-weeks?user=&tz= ───────────────────────
+  // The History page's full 26-week grid for one user (content/report/complete
+  // flags per week); empty-content weeks render greyed + disabled.
+  private handleHistoryWeeks = this.wrapHandler((req: Request, res: Response): void => {
+    if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
+    const user = (req.query.user as string | undefined)?.trim();
+    if (!user) { this.badRequest(res, 'missing user'); return; }
+    res.json({ weeks: this.historyWeekRows(user, this.tzOffsetMs(req)) });
+  });
+
   // ── POST /api/reports/generate ─────────────────────────────────────
   private handleGenerate = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
-    const body = (req.body ?? {}) as { user?: string; week?: string; tz?: number };
+    const body = (req.body ?? {}) as { user?: string; week?: string; tz?: number; force?: boolean };
     const user = (body.user ?? '').trim();
     const tzOffsetMs = body.tz != null && !Number.isNaN(Number(body.tz)) ? Number(body.tz) * 60000 : this.tzOffsetMs(req);
     const week = (body.week ?? '').trim() || weekMondayOf(Date.now(), tzOffsetMs);
     if (!user) { this.badRequest(res, 'missing user'); return; }
     if (!WEEK_RE.test(week)) { this.badRequest(res, 'invalid week (expect YYYY-MM-DD Monday)'); return; }
 
-    const report = await new ReportGenerator(this.dbManager.getConnection())
-      .generate(user, week, tzOffsetMs, this.model());
-    upsertWeeklyReport(this.dbManager.getConnection(), report);
+    const outcome = await this.generateOne(user, week, tzOffsetMs, body.force === true);
+    logger.info('WORKER', 'Weekly report generate', { user, week, outcome });
+    res.json({ ok: true, outcome, skipped: outcome === 'skipped', week_start: week });
+  });
 
-    logger.info('WORKER', 'Weekly report generated', { user: report.user_label, week, aiModel: report.model || '(none)' });
-    res.json({ ok: true, week_start: report.week_start, generated_at_epoch: report.generated_at_epoch });
+  // ── POST /api/reports/batch ────────────────────────────────────────
+  // mode 'week'    → all content-bearing users for the given `week`.
+  // mode 'history' → all content-bearing past weeks of one `user`.
+  // Returns a jobId the client polls; empty periods are never queued; complete
+  // reports tally as 'skipped'.
+  private handleBatch = this.wrapHandler((req: Request, res: Response): void => {
+    if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
+    const body = (req.body ?? {}) as { mode?: string; week?: string; user?: string; tz?: number; force?: boolean };
+    const tzOffsetMs = body.tz != null && !Number.isNaN(Number(body.tz)) ? Number(body.tz) * 60000 : this.tzOffsetMs(req);
+    const force = body.force === true;
+    const db = this.dbManager.getConnection();
+
+    // Build the (user, week) task list for the requested mode.
+    let tasks: Array<{ user: string; week: string }> = [];
+    if (body.mode === 'history') {
+      const user = (body.user ?? '').trim();
+      if (!user) { this.badRequest(res, 'missing user'); return; }
+      tasks = this.historyWeekRows(user, tzOffsetMs)
+        .filter(w => w.hasContent && !w.complete)
+        .map(w => ({ user, week: w.week_start }));
+    } else {
+      const week = (body.week ?? '').trim() || weekMondayOf(Date.now(), tzOffsetMs);
+      if (!WEEK_RE.test(week)) { this.badRequest(res, 'invalid week (expect YYYY-MM-DD Monday)'); return; }
+      const weekEndE = weekEndEpoch(week, tzOffsetMs);
+      tasks = [...activeUsersInRange(db, weekEndE - 7 * DAY_MS, weekEndE)].map(user => ({ user, week }));
+    }
+
+    const job = createBatchJob(tasks.length);
+    res.json({ jobId: job.id, total: job.total });
+
+    void runPool(tasks, batchConcurrency(),
+      (t) => this.generateOne(t.user, t.week, tzOffsetMs, force),
+      (outcome) => recordOutcome(job.id, outcome),
+    ).then(() => { finishBatchJob(job.id); logger.info('WORKER', 'Weekly batch done', { mode: body.mode ?? 'week', ...getBatchJob(job.id) }); });
+  });
+
+  // ── GET /api/reports/batch/:jobId ──────────────────────────────────
+  private handleBatchStatus = this.wrapHandler((req: Request, res: Response): void => {
+    if (!this.authorized(req)) { this.unauthorized(res, 'invalid access token'); return; }
+    const job = getBatchJob(String(req.params.jobId));
+    if (!job) { this.notFound(res, 'job not found'); return; }
+    res.json(job);
   });
 
   // ── GET /api/reports/download ──────────────────────────────────────
