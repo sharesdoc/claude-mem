@@ -31,7 +31,7 @@ make_sandbox() {
 total_rows() {
   sqlite3 "$1" "SELECT (SELECT COUNT(*) FROM sdk_sessions)+(SELECT COUNT(*) FROM user_prompts)
     +(SELECT COUNT(*) FROM observations)+(SELECT COUNT(*) FROM session_summaries)
-    +(SELECT COUNT(*) FROM weekly_reports)+(SELECT COUNT(*) FROM sync_inbox);"
+    +(SELECT COUNT(*) FROM daily_reports)+(SELECT COUNT(*) FROM weekly_reports)+(SELECT COUNT(*) FROM sync_inbox);"
 }
 
 # ── X-001 删除原子性：瞬时锁下清理应等待并原子完成 ──────────────

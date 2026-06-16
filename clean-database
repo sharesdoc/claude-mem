@@ -65,7 +65,7 @@ ${BOLD}Usage:${RESET}
 
 ${BOLD}Per-user data covers:${RESET}
   • sdk_sessions / observations / session_summaries     (by user_label)
-  • weekly_reports / sync_inbox                          (by user_label)
+  • daily_reports / weekly_reports / sync_inbox          (by user_label)
   • user_prompts / pending_messages                      (via the user's sessions)
 
 ${BOLD}Safety:${RESET}
@@ -135,6 +135,7 @@ list_users() {
       SELECT user_label FROM sdk_sessions
       UNION SELECT user_label FROM observations
       UNION SELECT user_label FROM session_summaries
+      UNION SELECT user_label FROM daily_reports
       UNION SELECT user_label FROM weekly_reports
       UNION SELECT user_label FROM sync_inbox
     ) WHERE user_label IS NOT NULL AND user_label != ''
@@ -149,6 +150,7 @@ user_exists() {
       SELECT user_label FROM sdk_sessions   WHERE user_label = '$u'
       UNION ALL SELECT user_label FROM observations      WHERE user_label = '$u'
       UNION ALL SELECT user_label FROM session_summaries WHERE user_label = '$u'
+      UNION ALL SELECT user_label FROM daily_reports     WHERE user_label = '$u'
       UNION ALL SELECT user_label FROM weekly_reports    WHERE user_label = '$u'
       UNION ALL SELECT user_label FROM sync_inbox        WHERE user_label = '$u'
     );")" -gt 0 ]]
@@ -286,7 +288,7 @@ cmd_stats() {
   echo ""
 
   {
-    echo "User|Sessions|Prompts|Observations|Summaries|WeeklyReports|FirstActivity|LastActivity"
+    echo "User|Sessions|Prompts|Observations|Summaries|DailyReports|WeeklyReports|FirstActivity|LastActivity"
     local u uq
     while IFS= read -r u; do
       [[ -z "$u" ]] && continue
@@ -300,6 +302,7 @@ cmd_stats() {
                (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq')),
           (SELECT COUNT(*) FROM observations WHERE user_label = '$uq'),
           (SELECT COUNT(*) FROM session_summaries WHERE user_label = '$uq'),
+          (SELECT COUNT(*) FROM daily_reports WHERE user_label = '$uq'),
           (SELECT COUNT(*) FROM weekly_reports WHERE user_label = '$uq'),
           COALESCE((SELECT MIN(date(started_at)) FROM sdk_sessions WHERE user_label = '$uq'), '-'),
           COALESCE((SELECT MAX(date(started_at)) FROM sdk_sessions WHERE user_label = '$uq'), '-');
@@ -376,6 +379,7 @@ cmd_backup_user() {
       (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');
     DELETE FROM observations      WHERE user_label IS NOT '$uq';
     DELETE FROM session_summaries WHERE user_label IS NOT '$uq';
+    DELETE FROM daily_reports     WHERE user_label IS NOT '$uq';
     DELETE FROM weekly_reports    WHERE user_label IS NOT '$uq';
     DELETE FROM sync_inbox        WHERE user_label IS NOT '$uq';
     DELETE FROM sdk_sessions      WHERE user_label IS NOT '$uq';
@@ -417,17 +421,18 @@ cmd_clean_user() {
   printf "  ${BOLD}%s${RESET}\n" "========== Clean User: $user =========="
   echo ""
 
-  local sessions prompts pending obs sums weekly inbox
+  local sessions prompts pending obs sums daily weekly inbox
   sessions=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sdk_sessions WHERE user_label = '$uq';")
   prompts=$(sqlite3 "$DB" "SELECT COUNT(*) FROM user_prompts WHERE content_session_id IN (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');")
   pending=$(sqlite3 "$DB" "SELECT COUNT(*) FROM pending_messages WHERE content_session_id IN (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');")
   obs=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations WHERE user_label = '$uq';")
   sums=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries WHERE user_label = '$uq';")
+  daily=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_reports WHERE user_label = '$uq';")
   weekly=$(sqlite3 "$DB" "SELECT COUNT(*) FROM weekly_reports WHERE user_label = '$uq';")
   inbox=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sync_inbox WHERE user_label = '$uq';")
 
   printf "  Will delete: %s sessions, %s prompts, %s pending_messages,\n" "$sessions" "$prompts" "$pending"
-  printf "               %s observations, %s summaries, %s weekly_reports, %s sync_inbox rows\n" "$obs" "$sums" "$weekly" "$inbox"
+  printf "               %s observations, %s summaries, %s daily_reports, %s weekly_reports, %s sync_inbox rows\n" "$obs" "$sums" "$daily" "$weekly" "$inbox"
   echo ""
 
   confirm_or_abort
@@ -450,6 +455,7 @@ cmd_clean_user() {
       (SELECT content_session_id FROM sdk_sessions WHERE user_label = '$uq');
     DELETE FROM observations      WHERE user_label = '$uq';
     DELETE FROM session_summaries WHERE user_label = '$uq';
+    DELETE FROM daily_reports     WHERE user_label = '$uq';
     DELETE FROM weekly_reports    WHERE user_label = '$uq';
     DELETE FROM sync_inbox        WHERE user_label = '$uq';
     DELETE FROM sdk_sessions      WHERE user_label = '$uq';
@@ -461,6 +467,7 @@ cmd_clean_user() {
     SELECT (SELECT COUNT(*) FROM sdk_sessions      WHERE user_label = '$uq')
          + (SELECT COUNT(*) FROM observations      WHERE user_label = '$uq')
          + (SELECT COUNT(*) FROM session_summaries WHERE user_label = '$uq')
+         + (SELECT COUNT(*) FROM daily_reports     WHERE user_label = '$uq')
          + (SELECT COUNT(*) FROM weekly_reports    WHERE user_label = '$uq')
          + (SELECT COUNT(*) FROM sync_inbox        WHERE user_label = '$uq');")
   if [[ "$remain" -eq 0 ]]; then
@@ -490,18 +497,19 @@ cmd_clean_all() {
   printf "  ${BOLD}%s${RESET}\n" "========== Clean ALL Users =========="
   echo ""
 
-  local sessions prompts pending obs sums weekly inbox
+  local sessions prompts pending obs sums daily weekly inbox
   sessions=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sdk_sessions;")
   prompts=$(sqlite3 "$DB" "SELECT COUNT(*) FROM user_prompts;")
   pending=$(sqlite3 "$DB" "SELECT COUNT(*) FROM pending_messages;")
   obs=$(sqlite3 "$DB" "SELECT COUNT(*) FROM observations;")
   sums=$(sqlite3 "$DB" "SELECT COUNT(*) FROM session_summaries;")
+  daily=$(sqlite3 "$DB" "SELECT COUNT(*) FROM daily_reports;")
   weekly=$(sqlite3 "$DB" "SELECT COUNT(*) FROM weekly_reports;")
   inbox=$(sqlite3 "$DB" "SELECT COUNT(*) FROM sync_inbox;")
 
   printf "  Users: %s\n" "$(list_users | tr '\n' ' ')"
   printf "  Will delete: %s sessions, %s prompts, %s pending_messages,\n" "$sessions" "$prompts" "$pending"
-  printf "               %s observations, %s summaries, %s weekly_reports, %s sync_inbox rows\n" "$obs" "$sums" "$weekly" "$inbox"
+  printf "               %s observations, %s summaries, %s daily_reports, %s weekly_reports, %s sync_inbox rows\n" "$obs" "$sums" "$daily" "$weekly" "$inbox"
   echo ""
 
   confirm_or_abort
@@ -522,6 +530,7 @@ cmd_clean_all() {
     DELETE FROM pending_messages;
     DELETE FROM observations;
     DELETE FROM session_summaries;
+    DELETE FROM daily_reports;
     DELETE FROM weekly_reports;
     DELETE FROM sync_inbox;
     DELETE FROM sdk_sessions;
@@ -535,6 +544,7 @@ cmd_clean_all() {
          + (SELECT COUNT(*) FROM pending_messages)
          + (SELECT COUNT(*) FROM observations)
          + (SELECT COUNT(*) FROM session_summaries)
+         + (SELECT COUNT(*) FROM daily_reports)
          + (SELECT COUNT(*) FROM weekly_reports)
          + (SELECT COUNT(*) FROM sync_inbox);")
   if [[ "$remain" -eq 0 ]]; then
