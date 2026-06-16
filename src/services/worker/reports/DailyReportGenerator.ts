@@ -179,7 +179,7 @@ export class DailyReportGenerator {
     // 正文:① 有内容 → AI 提炼简短日报;② 无 summaries/observations 但
     // 有 prompt → 降级用 prompt 原文归纳;③ 仍失败 → 确定性简版。
     let aiBody = await this.synthesize(user, reportDate, stats, digests, model, excludedMs, excludedPct);
-    if (aiBody === null && stats.prompts > 0 && (stats.obs === 0 || stats.summaries === 0)) {
+    if (aiBody === null && stats.prompts > 0 && stats.obs === 0 && stats.summaries === 0) {
       const timeOf = new Map(projAgg.map(p => [p.project, p.total_ms]));
       const promptDigests = this.digestPromptsByProject(start, end, user, timeOf);
       if (promptDigests.length > 0) {
