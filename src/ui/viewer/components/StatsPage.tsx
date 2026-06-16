@@ -312,9 +312,20 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
 
   // ── Batch generation (async job + polling) ───────────────────────
   // One batch at a time; tracks live progress for the inline progress bar.
+  // startedAt drives the elapsed-time display so a single slow task (one report
+  // can take 1–3 min of multi-step AI) never *looks* frozen.
   const [batchJob, setBatchJob] = useState<
-    { section: 'daily' | 'weekly' | 'history'; total: number; generated: number; skipped: number; failed: number; running: boolean } | null
+    { section: 'daily' | 'weekly' | 'history'; total: number; generated: number; skipped: number; failed: number; running: boolean; startedAt: number } | null
   >(null);
+  // Ticks once per second while a batch runs so the elapsed timer advances even
+  // between status polls (and even while a single task is still in flight).
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!batchJob?.running) return;
+    const id = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(id);
+  }, [batchJob?.running]);
+  const BATCH_LS_KEY = 'claude-mem.activeBatch';
 
   // ── Daily reports (日报 table on the All-Projects stats page) ─────
   // Per-user status (latest date + whether today/yesterday exist). Users with
@@ -548,14 +559,41 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   // the inline progress bar, until done (or 404 if the worker restarted). Then
   // refresh the relevant data source. One batch at a time (button disabled while
   // batchJob.running). tz is injected here so callers pass only date/week/user.
+  // Poll an already-started job to completion, updating the progress bar. Shared
+  // by startBatch (fresh) and the resume-on-mount effect (after a page refresh).
+  const pollBatch = useCallback((
+    section: 'daily' | 'weekly' | 'history',
+    postUrl: string, jobId: string, startedAt: number,
+    reload: () => Promise<void>,
+  ) => {
+    try { localStorage.setItem(BATCH_LS_KEY, JSON.stringify({ section, postUrl, jobId, startedAt })); } catch { /* ignore */ }
+    setBatchJob(j => ({ section, total: j?.total ?? 1, generated: 0, skipped: 0, failed: 0, running: true, startedAt }));
+    const finish = async () => {
+      try { localStorage.removeItem(BATCH_LS_KEY); } catch { /* ignore */ }
+      setBatchJob(j => j ? { ...j, running: false } : j);
+      await reload();
+      setTimeout(() => setBatchJob(null), 2500);
+    };
+    const poll = async () => {
+      try {
+        const r = await authFetch(`${postUrl}/${jobId}`);
+        if (r.status === 404) { await finish(); return; } // job expired / worker restarted
+        const job = await r.json() as { total: number; generated: number; skipped: number; failed: number; done: boolean };
+        setBatchJob(j => j ? { ...j, total: job.total, generated: job.generated, skipped: job.skipped, failed: job.failed } : j);
+        if (job.done) { await finish(); } else { setTimeout(poll, 1000); }
+      } catch { await finish(); }
+    };
+    setTimeout(poll, 700);
+  }, []);
+
   const startBatch = useCallback(async (
     section: 'daily' | 'weekly' | 'history',
     postUrl: string,
     body: Record<string, unknown>,
     reload: () => Promise<void>,
   ) => {
-    setBatchJob({ section, total: 0, generated: 0, skipped: 0, failed: 0, running: true });
-    const finish = async () => { setBatchJob(j => j ? { ...j, running: false } : j); await reload(); setTimeout(() => setBatchJob(null), 2500); };
+    const startedAt = Date.now();
+    setBatchJob({ section, total: 0, generated: 0, skipped: 0, failed: 0, running: true, startedAt });
     try {
       const tz = -new Date().getTimezoneOffset();
       const resp = await authFetch(postUrl, {
@@ -564,19 +602,16 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       });
       const { jobId, total } = await resp.json() as { jobId: string; total: number };
       setBatchJob(j => j ? { ...j, total } : j);
-      if (!total) { await finish(); return; }
-      const poll = async () => {
-        try {
-          const r = await authFetch(`${postUrl}/${jobId}`);
-          if (r.status === 404) { await finish(); return; } // job expired / worker restarted
-          const job = await r.json() as { total: number; generated: number; skipped: number; failed: number; done: boolean };
-          setBatchJob(j => j ? { ...j, total: job.total, generated: job.generated, skipped: job.skipped, failed: job.failed } : j);
-          if (job.done) { await finish(); } else { setTimeout(poll, 1000); }
-        } catch { await finish(); }
-      };
-      setTimeout(poll, 800);
+      if (!total) {
+        // Nothing to do (all complete / no content) — show "done" briefly.
+        setBatchJob(j => j ? { ...j, running: false } : j);
+        await reload();
+        setTimeout(() => setBatchJob(null), 2000);
+        return;
+      }
+      pollBatch(section, postUrl, jobId, startedAt, reload);
     } catch { setBatchJob(j => j ? { ...j, running: false } : j); }
-  }, []);
+  }, [pollBatch]);
 
   // ── 日报:状态总览 + 生成/删除(供 All-Projects 页「日报」表) ──────
   const loadDailyOverview = useCallback(async () => {
@@ -687,6 +722,20 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     void loadWeeklyOverview();
   }, [scope, loadWeeklyOverview]);
 
+  // Resume a batch that was still running when the page was refreshed: re-attach
+  // the progress bar to the persisted jobId instead of silently abandoning it.
+  // Runs once on mount; the backend job keeps going across reloads.
+  useEffect(() => {
+    let saved: { section: 'daily' | 'weekly' | 'history'; postUrl: string; jobId: string; startedAt: number } | null = null;
+    try { const raw = localStorage.getItem(BATCH_LS_KEY); if (raw) saved = JSON.parse(raw); } catch { saved = null; }
+    if (!saved) return;
+    const reload = saved.section === 'daily' ? () => loadDailyOverview()
+      : saved.section === 'weekly' ? () => loadWeeklyOverview()
+      : () => loadHistoryWeeks(historyActiveUser);
+    pollBatch(saved.section, saved.postUrl, saved.jobId, saved.startedAt, reload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const svgPadding = { top: 16, right: 8, bottom: 32, left: 42 };
   const svgW = chartWidth;
   const svgH = 220;
@@ -694,18 +743,29 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   const plotH = svgH - svgPadding.top - svgPadding.bottom;
 
   // Inline batch-progress indicator for a section's title bar. Shows
-  // "12/26 (✓8 skip3 ✗1)" + a thin progress bar while a batch for that section
-  // is running (or its brief post-done summary). Null otherwise.
+  // "12/26 (✓8 skip3 ✗1) · 0:45" + a progress bar. A single report can take
+  // 1–3 min of multi-step AI, so while a task is in flight the bar is
+  // INDETERMINATE (animated) and an elapsed timer ticks — it must never look
+  // frozen even when stuck at 0/1 for a while.
   const batchBar = (section: 'daily' | 'weekly' | 'history') => {
     if (!batchJob || batchJob.section !== section) return null;
     const finished = batchJob.generated + batchJob.skipped + batchJob.failed;
     const pct = batchJob.total > 0 ? Math.round((finished / batchJob.total) * 100) : 100;
+    // Indeterminate while running AND no task has finished yet (e.g. single slow
+    // task at 0/1) — a determinate 0% bar reads as "stuck".
+    const indeterminate = batchJob.running && finished === 0 && batchJob.total > 0;
+    const elapsedS = Math.max(0, Math.floor((Date.now() - batchJob.startedAt) / 1000));
+    const mm = Math.floor(elapsedS / 60), ss = elapsedS % 60;
+    const elapsed = `${mm}:${String(ss).padStart(2, '0')}`;
     return (
       <span style={{ marginLeft: 12, display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 12, fontWeight: 400, color: 'var(--color-text-muted)' }}>
         <span>{batchJob.running ? t('stats.batchRunning') : t('stats.batchDone')} {finished}/{batchJob.total}
-          {' '}(✓{batchJob.generated} {t('stats.batchSkipped')}{batchJob.skipped}{batchJob.failed ? ` ✗${batchJob.failed}` : ''})</span>
+          {' '}(✓{batchJob.generated} {t('stats.batchSkipped')}{batchJob.skipped}{batchJob.failed ? ` ✗${batchJob.failed}` : ''})
+          {batchJob.running && <span style={{ marginLeft: 6, fontVariantNumeric: 'tabular-nums' }}>· {elapsed}</span>}</span>
         <span style={{ width: 80, height: 4, background: 'var(--color-border-primary)', borderRadius: 2, overflow: 'hidden' }}>
-          <span style={{ display: 'block', height: '100%', width: `${pct}%`, background: 'var(--color-accent-primary)', transition: 'width 0.3s' }} />
+          {indeterminate
+            ? <span className="batch-bar-indeterminate" style={{ display: 'block', height: '100%', width: '40%', background: 'var(--color-accent-primary)', borderRadius: 2 }} />
+            : <span style={{ display: 'block', height: '100%', width: `${pct}%`, background: 'var(--color-accent-primary)', transition: 'width 0.3s' }} />}
         </span>
       </span>
     );

@@ -3588,6 +3588,14 @@
     .sp-q-sub { font-size: 10px; color: var(--color-text-muted); }
     .sp-cell.is-selected .sp-q-sub { color: var(--color-text-button); }
 
+    /* Batch progress — indeterminate sweep while a single task is in flight
+       (a static 0% bar would read as "frozen"; a single report can take 1–3 min). */
+    @keyframes batch-bar-sweep {
+      0%   { transform: translateX(-110%); }
+      100% { transform: translateX(260%); }
+    }
+    .batch-bar-indeterminate { animation: batch-bar-sweep 1.1s ease-in-out infinite; }
+
     /* ── Line chart ────────────────────────────────────────────────── */
     .stats-line-chart {
       width: 100%;
