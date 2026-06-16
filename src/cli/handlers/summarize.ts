@@ -41,16 +41,15 @@ export const summarizeHandler: EventHandler = {
     }
 
     let lastAssistantMessage = '';
-    // transcript 末条 assistant 墙钟时间,用作 completed_at 主源
+    // transcript 末条 assistant 墙钟时间,用作 completed_at 主源(独立取,不回退)
     let transcriptCompletedAtEpoch: number | null = null;
 
     if (input.lastAssistantMessage !== undefined) {
       lastAssistantMessage = stripMemoryTagsFromPrompt(input.lastAssistantMessage);
-      // 有直传 lastAssistantMessage 时仍尝试从 transcript 取时间戳
+      // 有直传文本时仍尝试从 transcript 取时间戳
       if (transcriptPath) {
         try {
-          const entry = extractLastAssistantEntry(transcriptPath);
-          transcriptCompletedAtEpoch = entry?.timestampEpoch ?? null;
+          transcriptCompletedAtEpoch = extractLastAssistantEntry(transcriptPath)?.timestampEpoch ?? null;
         } catch { /* 回落 */ }
       }
     } else {
@@ -60,10 +59,11 @@ export const summarizeHandler: EventHandler = {
       }
 
       try {
-        const entry = extractLastAssistantEntry(transcriptPath);
-        lastAssistantMessage = entry?.text ?? '';
-        transcriptCompletedAtEpoch = entry?.timestampEpoch ?? null;
+        // 文本提取:仍用 extractLastMessage(不依赖 timestamp 存在)
+        lastAssistantMessage = extractLastMessage(transcriptPath, 'assistant', true);
         lastAssistantMessage = stripMemoryTagsFromPrompt(lastAssistantMessage);
+        // 时间戳提取:独立走 extractLastAssistantEntry(需要 time+isSidechain 过滤)
+        transcriptCompletedAtEpoch = extractLastAssistantEntry(transcriptPath)?.timestampEpoch ?? null;
       } catch (err) {
         logger.warn('HOOK', `Stop hook: failed to extract last assistant message for session ${sessionId}: ${err instanceof Error ? err.message : err}`);
         return { continue: true, suppressOutput: true, exitCode: HOOK_EXIT_CODES.SUCCESS };

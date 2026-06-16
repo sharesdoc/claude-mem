@@ -217,13 +217,14 @@ function extractLastAssistantEntryFromJsonl(content: string): AssistantEntry | n
     if (!text || !text.trim()) continue;
 
     // ── 时间戳 sanity clamp ──────────────────────────────────────────
+    // 坏行跳过继续扫描,不 return null 放弃整次提取
     const rawTs = line.timestamp;
-    if (!rawTs || typeof rawTs !== 'string') return null; // 无时间戳 → 回落
+    if (!rawTs || typeof rawTs !== 'string') continue;
 
     const parsed = Date.parse(rawTs);
-    if (Number.isNaN(parsed)) return null;             // 解析失败
-    if (parsed <= 0) return null;                       // 非法值
-    if (parsed > nowEpoch + FUTURE_SKEW_MS) return null; // 未来时间(时钟偏差)
+    if (Number.isNaN(parsed)) continue;
+    if (parsed <= 0) continue;
+    if (parsed > nowEpoch + FUTURE_SKEW_MS) continue;
 
     return { text, timestampEpoch: parsed };
   }
