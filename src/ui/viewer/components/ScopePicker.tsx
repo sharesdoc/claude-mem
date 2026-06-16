@@ -120,6 +120,13 @@ function isoWeeksInYear(year: number): number {
  * in display form; week stores a Monday DATE but shows the ISO `YYYY-WW` it maps
  * to; quarter stores `YYYY-Q` (Q=1..4) but shows `YYYY-QN`.
  * ──────────────────────────────────────────────────────────────────────────── */
+/** Short descriptive prefix shown before the value (日/周/月/季 · D/W/M/Q). */
+function labelPrefix(mode: ScopeMode, locale: 'en' | 'zh'): string {
+  const zh: Record<ScopeMode, string> = { day: '日', week: '周', month: '月', quarter: '季' };
+  const en: Record<ScopeMode, string> = { day: 'D', week: 'W', month: 'M', quarter: 'Q' };
+  return (locale === 'zh' ? zh : en)[mode];
+}
+
 function buttonLabel(mode: ScopeMode, value: string): string {
   switch (mode) {
     case 'day':
@@ -408,7 +415,7 @@ export function ScopePicker({ mode, value, onChange, active, onActivate }: Scope
         aria-haspopup="dialog"
         aria-expanded={open}
       >
-        {buttonLabel(mode, value)}
+        {labelPrefix(mode, locale)} {buttonLabel(mode, value)}
       </button>
 
       {open && pos && createPortal(
