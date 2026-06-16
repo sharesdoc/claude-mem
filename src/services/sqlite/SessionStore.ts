@@ -3127,6 +3127,116 @@ export class SessionStore {
     return deleted;
   }
 
+  /**
+   * Permanently delete a single user prompt AND every process record that
+   * belongs to it: the observations recorded during that prompt, its pending
+   * queue rows, and the sync_inbox watermark entries for both. The deletion
+   * runs in one transaction so the prompt and its trail vanish together.
+   *
+   * What is intentionally NOT touched:
+   *   - session_summaries — summaries are session-scoped (one row per
+   *     memory_session_id, summarising every prompt in the session), so
+   *     deleting one prompt must not drop a summary shared by sibling prompts.
+   *   - user_prompts_fts — kept in sync automatically by the
+   *     user_prompts_ad AFTER DELETE trigger.
+   *
+   * Observations have no content_session_id column, so they are scoped via a
+   * JOIN through sdk_sessions on content_session_id, then filtered by
+   * prompt_number. This is precise even when a content_session_id maps to
+   * several memory_session_id rows (compaction/resume): prompt_number narrows
+   * it to exactly this prompt's observations without touching siblings.
+   *
+   * The returned observation rows carry the fields ChromaSync needs to
+   * reconstruct the per-field vector doc ids (obs_{id}_narrative/_text/_fact_N),
+   * so the caller can purge Chroma after the SQLite commit (best-effort).
+   *
+   * @param id - user_prompts.id of the prompt to remove.
+   * @returns null if no prompt matched the id; otherwise the project, the
+   *   prompt's Chroma doc id, the deleted observation rows, and per-table
+   *   delete counts.
+   */
+  deletePromptWithCascade(id: number): {
+    project: string;
+    promptChromaId: string;
+    observations: Array<{ id: number; narrative: string | null; text: string | null; facts: string | null }>;
+    counts: { observations: number; pending: number; syncInbox: number };
+  } | null {
+    const tx = this.db.transaction((promptId: number) => {
+      const prompt = this.db.prepare(
+        'SELECT content_session_id, prompt_number FROM user_prompts WHERE id = ?'
+      ).get(promptId) as { content_session_id: string; prompt_number: number } | undefined;
+      if (!prompt) return null;
+
+      const { content_session_id, prompt_number } = prompt;
+
+      const projectRow = this.db.prepare(
+        'SELECT project FROM sdk_sessions WHERE content_session_id = ? LIMIT 1'
+      ).get(content_session_id) as { project: string } | undefined;
+      const project = projectRow?.project ?? 'unknown';
+
+      // Observation rows scoped to exactly this prompt (see method doc).
+      const observations = this.db.prepare(
+        `SELECT o.id AS id, o.narrative AS narrative, o.text AS text, o.facts AS facts
+           FROM observations o
+           JOIN sdk_sessions s ON o.memory_session_id = s.memory_session_id
+          WHERE s.content_session_id = ? AND o.prompt_number = ?`
+      ).all(content_session_id, prompt_number) as Array<{
+        id: number; narrative: string | null; text: string | null; facts: string | null;
+      }>;
+      const obsIds = observations.map(o => o.id);
+
+      const pendingResult = this.db.prepare(
+        'DELETE FROM pending_messages WHERE content_session_id = ? AND prompt_number = ?'
+      ).run(content_session_id, prompt_number);
+
+      let observationsDeleted = 0;
+      let syncInbox = 0;
+      if (obsIds.length > 0) {
+        const obsPlaceholders = obsIds.map(() => '?').join(',');
+        observationsDeleted = this.db.prepare(
+          `DELETE FROM observations WHERE id IN (${obsPlaceholders})`
+        ).run(...obsIds).changes;
+
+        // sync_inbox.source_uid is TEXT; observation entries key on the obs id.
+        syncInbox += this.db.prepare(
+          `DELETE FROM sync_inbox
+             WHERE source_table = 'observations'
+               AND source_uid IN (${obsPlaceholders})`
+        ).run(...obsIds.map(String)).changes;
+      }
+
+      // sync_inbox entry for the prompt itself.
+      syncInbox += this.db.prepare(
+        `DELETE FROM sync_inbox
+           WHERE source_table = 'user_prompts' AND source_uid = ?`
+      ).run(String(promptId)).changes;
+
+      // The prompt row last; its AFTER DELETE trigger cleans the FTS index.
+      this.db.prepare('DELETE FROM user_prompts WHERE id = ?').run(promptId);
+
+      return {
+        project,
+        promptChromaId: `prompt_${promptId}`,
+        observations,
+        counts: {
+          observations: observationsDeleted,
+          pending: pendingResult.changes,
+          syncInbox,
+        },
+      };
+    });
+
+    const result = tx(id) as ReturnType<SessionStore['deletePromptWithCascade']>;
+    if (result) {
+      logger.info('SESSION', 'User prompt deleted with cascade', {
+        id,
+        project: result.project,
+        counts: result.counts,
+      });
+    }
+    return result;
+  }
+
   importSdkSession(session: {
     content_session_id: string;
     memory_session_id: string;

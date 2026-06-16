@@ -114,6 +114,67 @@ export class ChromaSync {
     }
   }
 
+  /**
+   * Reconstruct the Chroma document ids that `formatObservationDocs` would have
+   * emitted for an observation, from just its id + content fields. Kept next to
+   * formatObservationDocs so the id scheme (obs_{id}_narrative / _text /
+   * _fact_{index}) stays in lockstep — used by the prompt-delete path to purge
+   * an observation's vectors without re-reading the full Chroma collection.
+   */
+  static observationDocIds(obs: {
+    id: number;
+    narrative: string | null;
+    text: string | null;
+    facts: string | null;
+  }): string[] {
+    const ids: string[] = [];
+    if (obs.narrative) ids.push(`obs_${obs.id}_narrative`);
+    if (obs.text) ids.push(`obs_${obs.id}_text`);
+    const facts = obs.facts ? JSON.parse(obs.facts) : [];
+    if (Array.isArray(facts)) {
+      facts.forEach((_fact: unknown, index: number) => {
+        ids.push(`obs_${obs.id}_fact_${index}`);
+      });
+    }
+    return ids;
+  }
+
+  /**
+   * Delete specific documents by id from a project's collection. Best-effort,
+   * mirroring deleteCollectionForProject: used after the SQLite delete of a
+   * prompt is already committed, so a Chroma residue is not corruption (the
+   * collection is reconstructable from SQLite). Returns true on a clean call,
+   * false if the collection was absent; re-throws other transport errors so the
+   * caller can log + continue.
+   */
+  static async deleteDocumentsByIds(project: string, ids: string[]): Promise<boolean> {
+    if (ids.length === 0) return true;
+    const collectionName = ChromaSync.collectionNameFor(project);
+    const chromaMcp = ChromaMcpManager.getInstance();
+    try {
+      await chromaMcp.callTool('chroma_delete_documents', {
+        collection_name: collectionName,
+        ids
+      });
+      logger.info('CHROMA_SYNC', 'Documents deleted by id', {
+        project,
+        collectionName,
+        count: ids.length
+      });
+      return true;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/not.{0,3}found|does not exist|no such collection/i.test(message)) {
+        logger.debug('CHROMA_SYNC', 'Collection absent at delete time (treating as success)', {
+          project,
+          collectionName
+        });
+        return false;
+      }
+      throw error;
+    }
+  }
+
   private async ensureCollectionExists(): Promise<void> {
     if (this.collectionCreated) {
       return;

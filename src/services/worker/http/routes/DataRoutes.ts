@@ -416,32 +416,65 @@ export class DataRoutes extends BaseRouteHandler {
   });
 
   /**
-   * Permanently delete a single user prompt by id. Used by the viewer's
-   * per-card delete button. On success we broadcast a `prompt_deleted` SSE
-   * event so every connected client (including the originator) prunes the row
-   * from its live feed without a manual refresh.
+   * Permanently delete a single user prompt by id AND every process record it
+   * produced — its observations, pending queue rows, sync_inbox watermarks, and
+   * the matching Chroma vectors — so a deleted prompt leaves no orphan trail
+   * (notably: its text stops surfacing in semantic search). Session summaries
+   * are intentionally preserved (session-scoped, shared by sibling prompts).
+   *
+   * Order mirrors handleDeleteProjects: SQLite cascade commits first, then
+   * Chroma is purged best-effort. A Chroma failure after the SQLite commit is
+   * logged, not surfaced as an error — the collection is reconstructable from
+   * SQLite and must not block the response.
+   *
+   * On success we broadcast a `prompt_deleted` SSE event so every connected
+   * client (including the originator) prunes the row from its live feed.
    *
    * Request:  DELETE /api/prompt/:id
-   * Response: { deleted: true, id } | 404 if no such prompt.
+   * Response: { deleted: true, id, counts } | 404 if no such prompt.
    */
-  private handleDeletePromptById = this.wrapHandler((req: Request, res: Response): void => {
+  private handleDeletePromptById = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
     if (!this.authorizeWrite(req, res)) return;
 
     const id = this.parseIntParam(req, res, 'id');
     if (id === null) return;
 
     const store = this.dbManager.getSessionStore();
-    const deleted = store.deletePromptById(id);
+    const result = store.deletePromptWithCascade(id);
 
-    if (!deleted) {
+    if (!result) {
       this.notFound(res, `Prompt #${id} not found`);
       return;
     }
 
+    // SQLite is committed — the prompt and its trail are gone. Chroma is
+    // best-effort: skip entirely when disabled (avoid force-instantiating
+    // ChromaMcpManager), and never let a residue turn a successful delete into
+    // an error response.
+    const chromaEnabled = this.dbManager.getChromaSync() !== null;
+    if (chromaEnabled) {
+      try {
+        // Build ids inside the try: observationDocIds JSON.parses obs.facts, so
+        // a malformed-JSON throw must not turn an already-committed delete into
+        // a 500.
+        const chromaIds = [
+          result.promptChromaId,
+          ...result.observations.flatMap(obs => ChromaSync.observationDocIds(obs))
+        ];
+        await ChromaSync.deleteDocumentsByIds(result.project, chromaIds);
+      } catch (error) {
+        logger.warn('CHROMA_SYNC', 'Failed to purge chroma docs after prompt delete (SQL committed)', {
+          id,
+          project: result.project,
+          error: error instanceof Error ? error.message : String(error)
+        });
+      }
+    }
+
     this.sseBroadcaster.broadcast({ type: 'prompt_deleted', id });
 
-    logger.info('SESSION', 'Prompt deleted via /api/prompt/:id', { id });
-    res.json({ deleted: true, id });
+    logger.info('SESSION', 'Prompt deleted via /api/prompt/:id', { id, counts: result.counts });
+    res.json({ deleted: true, id, counts: result.counts });
   });
 
   private handleGetStats = this.wrapHandler((req: Request, res: Response): void => {
