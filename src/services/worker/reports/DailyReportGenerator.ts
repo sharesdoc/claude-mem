@@ -20,6 +20,8 @@ const AI_TIMEOUT_MS = 90000;
 const MAX_PROJECTS_IN_PROMPT = 10;
 // AI 工作时间不足该阈值的项目(连同其任务)在日报里直接忽略,滤掉琐碎噪音。
 const MIN_PROJECT_MS = 10 * 60000; // 10 分钟
+// prompt 降级提炼时,单项目最多送入 AI 的指令条数(去重后,防止 prompt 过长)。
+const MAX_PROMPTS_PER_PROJECT = 15;
 
 export interface DailyReportStats {
   totalMs: number;
@@ -50,6 +52,13 @@ interface ProjectDigest {
   completed: string[];
   learned: string[];
   observations: Array<{ type: string; title: string }>;
+}
+
+/** prompt 降级路径:单项目当日的用户指令原文聚合(去重、限量)。 */
+interface PromptDigest {
+  project: string;
+  totalMs: number;
+  prompts: string[];
 }
 
 /** 给定真实 epoch,返回其所在**本地**日期 'YYYY-MM-DD'。 */
@@ -167,8 +176,16 @@ export class DailyReportGenerator {
       prompts: reportedPrompts, obs: obsRows.length, summaries: summRows.length, sessions: sessRow?.sessions ?? 0,
     };
 
-    // 正文:① 有内容 → AI 提炼简短日报;② 失败/无 Key → 确定性简版。
-    const aiBody = await this.synthesize(user, reportDate, stats, digests, model, excludedMs, excludedPct);
+    // 正文:① 有内容 → AI 提炼简短日报;② 无 summaries/observations 但
+    // 有 prompt → 降级用 prompt 原文归纳;③ 仍失败 → 确定性简版。
+    let aiBody = await this.synthesize(user, reportDate, stats, digests, model, excludedMs, excludedPct);
+    if (aiBody === null && stats.prompts > 0 && (stats.obs === 0 || stats.summaries === 0)) {
+      const timeOf = new Map(projAgg.map(p => [p.project, p.total_ms]));
+      const promptDigests = this.digestPromptsByProject(start, end, user, timeOf);
+      if (promptDigests.length > 0) {
+        aiBody = await this.synthesizeFromPrompts(user, reportDate, stats, promptDigests, model, excludedMs, excludedPct);
+      }
+    }
     const body = aiBody ?? this.fallbackBody(stats, digests, excludedMs, excludedPct);
     const markdown = this.assemble(user, reportDate, stats, body, excludedMs, excludedPct);
 
@@ -303,6 +320,83 @@ export class DailyReportGenerator {
       { role: 'user', content: instruction },
     ]);
     if (body) logger.info('WORKER', 'Daily report synthesized', { user, date: reportDate, projects: digests.length });
+    return body;
+  }
+
+  /**
+   * prompt 降级:当日无 observations/session_summaries 时,从 user_prompts
+   * 提取原始指令文本,去重过滤后作为日报素材(参照周报 digestPromptsByProject)。
+   */
+  private digestPromptsByProject(start: number, end: number, user: string, timeOf: Map<string, number>): PromptDigest[] {
+    const rows = this.db.prepare(`
+      SELECT s.project AS project, up.prompt_text AS prompt_text
+      FROM user_prompts up
+      JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
+      WHERE up.created_at_epoch >= ? AND up.created_at_epoch < ?
+        AND COALESCE(NULLIF(s.user_label, ''), 'unknown') = ? COLLATE NOCASE
+      ORDER BY up.created_at_epoch ASC
+    `).all(start, end, user) as Array<{ project: string; prompt_text: string | null }>;
+
+    const byProject = new Map<string, { seen: Set<string>; list: string[] }>();
+    for (const r of rows) {
+      const raw = (r.prompt_text ?? '').replace(/\s+/g, ' ').trim();
+      if (raw.length < 4) continue;
+      if (raw.startsWith('/')) continue;
+      if (raw.startsWith('<')) continue;
+      const proj = r.project || 'unknown';
+      const bucket = byProject.get(proj) ?? { seen: new Set<string>(), list: [] };
+      const key = raw.slice(0, 60);
+      if (bucket.seen.has(key)) continue;
+      bucket.seen.add(key);
+      if (bucket.list.length < MAX_PROMPTS_PER_PROJECT) bucket.list.push(clip(raw, 200));
+      byProject.set(proj, bucket);
+    }
+    return Array.from(byProject.entries())
+      .map(([project, b]) => ({ project, totalMs: timeOf.get(project) ?? 0, prompts: b.list }))
+      .filter(d => d.prompts.length > 0)
+      .sort((a, b) => b.totalMs - a.totalMs)
+      .slice(0, MAX_PROJECTS_IN_PROMPT);
+  }
+
+  /**
+   * prompt 降级提炼:当日只有 prompt、没有 obs/summaries 时,让 Qwen 依据用户的
+   * 真实指令**客观归纳**工作任务清单。结构与 synthesize 一致(两章),但特别注明
+   * "依据 AI 指令记录归纳,供参考"。
+   */
+  private async synthesizeFromPrompts(user: string, reportDate: string, stats: DailyReportStats, digests: PromptDigest[], model: string, _excludedMs: number, _excludedPct: number): Promise<string | null> {
+    const apiKey = this.resolveApiKey();
+    if (!apiKey || digests.length === 0) return null;
+
+    const projectBlocks = digests.map(d => {
+      const lines = [`【${d.project}】 耗时 ${fmtDuration(d.totalMs)};今日指令 ${d.prompts.length} 条:`];
+      d.prompts.forEach((p, i) => lines.push(`  ${i + 1}. ${p}`));
+      return lines.join('\n');
+    }).join('\n\n');
+
+    const facts =
+      `用户:${user}\n日期:${reportDate}\n` +
+      `总AI耗时:${fmtDuration(stats.totalMs)};项目数:${stats.projects};任务数:${stats.prompts};会话:${stats.sessions}\n\n` +
+      `各项目今日的用户指令(prompt 原文,已按耗时从多到少排序):\n${projectBlocks}`;
+
+    const instruction =
+      '你是工程团队的技术主管。今天该员工没有结构化的工作总结,只有他向 AI 助手发出的**真实指令(prompt)记录**。' +
+      '请据此**归纳**他今天围绕各项目开展了哪些工作,撰写一份简短、有重点的中文日报正文。\n' +
+      '【重要·勿臆造】这些是"任务请求",不一定全部完成。请用"围绕…开展/推进/排查/调整"等客观措辞归纳,**绝不要编造指令中未出现的成果、数字或结论**。\n' +
+      '【语言】整份日报使用**简体中文**;仅专有名词、项目路径、代码标识、命令、commit 号等保留原文,其余一律用中文转述,绝不照抄英文整句。\n' +
+      '不要输出一级标题(#),直接从"## 一、"开始,严格两章、无多余章节:\n\n' +
+      '## 一、今日工作概述\n用一段话(80~150字)概括今天主要围绕哪些项目、做了哪些方向的工作。**结尾注明"(本概述依据用户 AI 指令记录归纳,供参考)"**。\n\n' +
+      '## 二、今日重点工作\n按项目分组、**按耗时从多到少**排列。每个项目用三级标题,格式严格为 `### 项目 <完整项目路径> · 耗时X`' +
+      '(`<完整项目路径>`逐字照抄数据中的项目标识,作为唯一 ID,严禁简写/翻译/占位)。其下用要点(`- `)归纳该项目今天的工作主题' +
+      '(把多条相近指令合并为一个任务方向),**单个项目要点不超过 6 条**。**数据中每个项目都必须单独出现**。\n\n' +
+      '全文务必简短克制,只罗列重点,避免冗长。直接输出 Markdown 正文,不要用三个反引号代码块把整篇包起来。\n\n数据如下:\n\n' + facts;
+
+    const sys = '你是严谨的技术主管。你只能依据用户的 AI 指令(prompt)记录客观归纳工作内容,用简体中文,精炼、重点突出,绝不臆造指令中未出现的成果。';
+
+    const body = await this.callQwen(apiKey, model, [
+      { role: 'system', content: sys },
+      { role: 'user', content: instruction },
+    ]);
+    if (body) logger.info('WORKER', 'Daily report synthesized from prompts (no obs/summaries)', { user, date: reportDate, projects: digests.length });
     return body;
   }
 
