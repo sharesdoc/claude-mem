@@ -303,7 +303,12 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   // ── Weekly reports (History view) ────────────────────────────────
   // The active user's full 26-week grid (content/report/complete per week).
   const [historyWeeks, setHistoryWeeks] = useState<HistoryWeekRow[]>([]);
-  const [reportsBusy, setReportsBusy] = useState(false);
+  // Per-week busy set: generating/deleting one week only disables THAT week's
+  // buttons, never the other weeks (each task limits its own period only).
+  const [historyBusyWeeks, setHistoryBusyWeeks] = useState<Set<string>>(new Set());
+  const markHistoryBusy = useCallback((week: string, busy: boolean) => {
+    setHistoryBusyWeeks(prev => { const n = new Set(prev); if (busy) n.add(week); else n.delete(week); return n; });
+  }, []);
 
   // ── Batch generation (async job + polling) ───────────────────────
   // One batch at a time; tracks live progress for the inline progress bar.
@@ -514,7 +519,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
   // Generate/refresh one specific week for the active user (per-row button), then
   // refresh the grid. Respects the skip-if-complete rule unless `force`.
   const generateHistoryWeek = useCallback(async (user: string, week: string, force = false) => {
-    setReportsBusy(true);
+    markHistoryBusy(week, true);
     try {
       const tz = -new Date().getTimezoneOffset();
       await authFetch('/api/reports/generate', {
@@ -523,11 +528,11 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       });
       await loadHistoryWeeks(user);
     } catch { /* surfaced via unchanged grid */ }
-    finally { setReportsBusy(false); }
-  }, [loadHistoryWeeks]);
+    finally { markHistoryBusy(week, false); }
+  }, [loadHistoryWeeks, markHistoryBusy]);
 
   const deleteHistoryWeek = useCallback(async (user: string, week: string) => {
-    setReportsBusy(true);
+    markHistoryBusy(week, true);
     try {
       await authFetch('/api/reports/delete', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -535,8 +540,8 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       });
       await loadHistoryWeeks(user);
     } catch { /* surfaced via unchanged grid */ }
-    finally { setReportsBusy(false); }
-  }, [loadHistoryWeeks]);
+    finally { markHistoryBusy(week, false); }
+  }, [loadHistoryWeeks, markHistoryBusy]);
 
   // ── Async batch generation driver (shared by all 3 batch buttons) ──
   // POST to start → get {jobId,total} → poll GET .../:jobId every ~1s, updating
@@ -928,7 +933,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                             </div>
                             {/* 生成/重新生成 — hidden when no content or already complete (locked). */}
                             {w.hasContent && !w.complete && (
-                              <button type="button" className="stats-tab is-active" disabled={reportsBusy}
+                              <button type="button" className="stats-tab is-active" disabled={historyBusyWeeks.has(w.week_start)}
                                 onClick={() => void generateHistoryWeek(activeUser, w.week_start)}>
                                 {w.has_report ? t('stats.dailyRegenerate') : t('stats.dailyGenerate')}
                               </button>
@@ -946,7 +951,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                               </button>
                             )}
                             {w.has_report && (
-                              <button type="button" className="stats-tab" disabled={reportsBusy}
+                              <button type="button" className="stats-tab" disabled={historyBusyWeeks.has(w.week_start)}
                                 onClick={() => { if (window.confirm(t('stats.weeklyConfirmDelete'))) void deleteHistoryWeek(activeUser, w.week_start); }}>
                                 {t('stats.dailyDelete')}
                               </button>
@@ -1082,7 +1087,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                       const hasContent = !!st?.hasContent;
                       const complete = !!st?.complete;
                       const viewable = !!(st?.has_today || st?.has_yesterday);
-                      const busy = dailyBusyUsers.has(u) || !!batchJob?.running;
+                      // Only this user's own generate disables this row — never a
+                      // batch or another user/date (each task limits its own period).
+                      const busy = dailyBusyUsers.has(u);
                       const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
                       const tz = -new Date().getTimezoneOffset();
                       const urlOf = (path: string, extra?: Record<string, string>) => {
@@ -1171,7 +1178,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                       const hasContent = !!st?.hasContent;
                       const complete = !!st?.complete;
                       const viewable = !!st && (hasCurrent || !!st.latest_week);
-                      const busy = weeklyBusyUsers.has(u) || !!batchJob?.running;
+                      // Only this user's own generate disables this row — never a
+                      // batch or another user/week (each task limits its own period).
+                      const busy = weeklyBusyUsers.has(u);
                       const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
                       const urlOf = (path: string) => {
                         const q = new URLSearchParams({ user: u, week });
