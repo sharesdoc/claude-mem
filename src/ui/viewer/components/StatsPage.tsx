@@ -588,17 +588,19 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     } catch { /* 保持旧值;失败不阻塞页面 */ }
   }, [anchorByScope.day]);
 
-  // 标记/解除某用户的忙碌态(用函数式更新,避免并发点击时相互覆盖 Set)。
-  const markBusy = useCallback((user: string, busy: boolean) => {
+  // 标记/解除某「用户+日期」的忙碌态(key=`user|date`,用函数式更新避免并发覆盖)。
+  // 必须带日期:否则生成 06-03 时切到 06-04,同一用户行会被误判为忙碌。
+  const markBusy = useCallback((key: string, busy: boolean) => {
     setDailyBusyUsers(prev => {
       const next = new Set(prev);
-      if (busy) next.add(user); else next.delete(user);
+      if (busy) next.add(key); else next.delete(key);
       return next;
     });
   }, []);
 
   const generateDaily = useCallback(async (user: string, date: string) => {
-    markBusy(user, true);
+    const key = `${user}|${date}`;
+    markBusy(key, true);
     try {
       const tz = -new Date().getTimezoneOffset();
       await authFetch('/api/daily-reports/generate', {
@@ -608,11 +610,12 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       });
       await loadDailyOverview();
     } catch { /* surfaced via unchanged status */ }
-    finally { markBusy(user, false); }
+    finally { markBusy(key, false); }
   }, [loadDailyOverview, markBusy]);
 
   const deleteDaily = useCallback(async (user: string, date: string) => {
-    markBusy(user, true);
+    const key = `${user}|${date}`;
+    markBusy(key, true);
     try {
       await authFetch('/api/daily-reports/delete', {
         method: 'POST',
@@ -621,7 +624,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       });
       await loadDailyOverview();
     } catch { /* surfaced via unchanged status */ }
-    finally { markBusy(user, false); }
+    finally { markBusy(key, false); }
   }, [loadDailyOverview, markBusy]);
 
   // 日报表只在「当日(Today)」scope 展示;进入该 scope 时拉取一次状态总览。
@@ -640,16 +643,18 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
     } catch { /* 保持旧值;失败不阻塞页面 */ }
   }, [anchorByScope.week]);
 
-  const markWeeklyBusy = useCallback((user: string, busy: boolean) => {
+  // key=`user|week`(带周一日期):生成某周时切到另一周,同一用户行不被误禁。
+  const markWeeklyBusy = useCallback((key: string, busy: boolean) => {
     setWeeklyBusyUsers(prev => {
       const next = new Set(prev);
-      if (busy) next.add(user); else next.delete(user);
+      if (busy) next.add(key); else next.delete(key);
       return next;
     });
   }, []);
 
   const generateWeekly = useCallback(async (user: string, week: string) => {
-    markWeeklyBusy(user, true);
+    const key = `${user}|${week}`;
+    markWeeklyBusy(key, true);
     try {
       const tz = -new Date().getTimezoneOffset();
       await authFetch('/api/reports/generate', {
@@ -659,11 +664,12 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       });
       await loadWeeklyOverview();
     } catch { /* surfaced via unchanged status */ }
-    finally { markWeeklyBusy(user, false); }
+    finally { markWeeklyBusy(key, false); }
   }, [loadWeeklyOverview, markWeeklyBusy]);
 
   const deleteWeekly = useCallback(async (user: string, week: string) => {
-    markWeeklyBusy(user, true);
+    const key = `${user}|${week}`;
+    markWeeklyBusy(key, true);
     try {
       await authFetch('/api/reports/delete', {
         method: 'POST',
@@ -672,7 +678,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
       });
       await loadWeeklyOverview();
     } catch { /* surfaced via unchanged status */ }
-    finally { markWeeklyBusy(user, false); }
+    finally { markWeeklyBusy(key, false); }
   }, [loadWeeklyOverview, markWeeklyBusy]);
 
   // 周报表只在「本周(Week)」scope 展示;进入该 scope 时拉取一次状态总览。
@@ -1087,9 +1093,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                       const hasContent = !!st?.hasContent;
                       const complete = !!st?.complete;
                       const viewable = !!(st?.has_today || st?.has_yesterday);
-                      // Only this user's own generate disables this row — never a
-                      // batch or another user/date (each task limits its own period).
-                      const busy = dailyBusyUsers.has(u);
+                      // Only this user's own generate FOR THIS DATE disables this
+                      // row — switching the date (or another user) stays enabled.
+                      const busy = dailyBusyUsers.has(`${u}|${today}`);
                       const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
                       const tz = -new Date().getTimezoneOffset();
                       const urlOf = (path: string, extra?: Record<string, string>) => {
@@ -1178,9 +1184,9 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                       const hasContent = !!st?.hasContent;
                       const complete = !!st?.complete;
                       const viewable = !!st && (hasCurrent || !!st.latest_week);
-                      // Only this user's own generate disables this row — never a
-                      // batch or another user/week (each task limits its own period).
-                      const busy = weeklyBusyUsers.has(u);
+                      // Only this user's own generate FOR THIS WEEK disables this
+                      // row — switching the week (or another user) stays enabled.
+                      const busy = weeklyBusyUsers.has(`${u}|${week}`);
                       const tokenQ = (() => { try { return localStorage.getItem('claude-mem-admin-token'); } catch { return null; } })();
                       const urlOf = (path: string) => {
                         const q = new URLSearchParams({ user: u, week });
