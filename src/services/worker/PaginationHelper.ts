@@ -236,7 +236,9 @@ export class PaginationHelper {
         up.created_at,
         up.created_at_epoch,
         up.completed_at_epoch,
-        up.think_time_ms
+        up.think_time_ms,
+        up.active_ms,
+        up.idle_ms
       FROM user_prompts up
       JOIN sdk_sessions s ON up.content_session_id = s.content_session_id
     `;

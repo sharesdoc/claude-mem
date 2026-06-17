@@ -35,6 +35,14 @@ export interface SyncState {
      * 旧 state 文件缺该字段时归零,触发一次全量完成回填重推(服务端幂等更新)。
      */
     prompt_completions: number;
+    /**
+     * 活跃度水位(epoch ms):已推送上游的 user_prompts 活跃度回填的最大
+     * activity_updated_epoch。completed_at_epoch 早已同步、之后才回填/修正
+     * active_ms/idle_ms 的行,完成水位不会推进 → 单独按 activity_updated_epoch
+     * 重推,否则服务端拿不到后补的活跃耗时。旧 state 缺该字段时归零,触发
+     * 一次全量活跃度重推(服务端 COALESCE 幂等更新)。
+     */
+    prompt_activity: number;
   };
   failures: {
     consecutive: number;
@@ -46,7 +54,7 @@ const ZERO_STATE: SyncState = Object.freeze({
   upstream_url: '',
   last_sync_at: 0,
   last_success_at: 0,
-  watermark: Object.freeze({ sessions: 0, observations: 0, summaries: 0, prompts: 0, prompt_completions: 0 }),
+  watermark: Object.freeze({ sessions: 0, observations: 0, summaries: 0, prompts: 0, prompt_completions: 0, prompt_activity: 0 }),
   failures: Object.freeze({ consecutive: 0, last_error: null }),
 }) as SyncState;
 
@@ -129,6 +137,7 @@ function normaliseState(input: Partial<SyncState> | null | undefined): SyncState
       summaries: numeric(wm.summaries),
       prompts: numeric(wm.prompts),
       prompt_completions: numeric(wm.prompt_completions),
+      prompt_activity: numeric(wm.prompt_activity),
     },
     failures: {
       consecutive: numeric(failures.consecutive),

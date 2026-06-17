@@ -108,6 +108,7 @@ export class SessionStore {
     this.ensurePromptCompletedAtColumn();
     this.ensureThinkTimeColumn();
     this.ensureActivityColumns();
+    this.ensureActivityUpdatedEpochColumn();
     this.ensureWeeklyReportsTable();
     this.ensureDailyReportsTable();
   }
@@ -357,6 +358,27 @@ export class SessionStore {
     // 未回填的行由耗时公式 COALESCE 回落到 completed_at_epoch - created_at_epoch。
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(44, new Date().toISOString());
+  }
+
+  /**
+   * v45 — activity_updated_epoch on user_prompts。
+   *
+   * active_ms/idle_ms 回填的单调时间戳(epoch ms),供 sync payload 的 activity
+   * 水位捕获:completed_at_epoch 早已同步、之后才回填/修正 active_ms 的行,完成
+   * 水位(completed_at_epoch)不会推进 → 按 activity_updated_epoch 独立重推,
+   * 否则服务端拿不到后补的活跃耗时(SyncRoutes 已支持 COALESCE 接收,仅缺收集)。
+   * 由 updatePromptActivity 写入;存量行保持 NULL,不触发重推。
+   */
+  private ensureActivityUpdatedEpochColumn(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(45) as SchemaVersion | undefined;
+    if (applied) return;
+
+    const cols = this.db.query('PRAGMA table_info(user_prompts)').all() as TableColumnInfo[];
+    if (!cols.some(c => c.name === 'activity_updated_epoch')) {
+      this.db.run('ALTER TABLE user_prompts ADD COLUMN activity_updated_epoch INTEGER');
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(45, new Date().toISOString());
   }
 
   /**
@@ -2262,11 +2284,12 @@ export class SessionStore {
     promptNumber: number,
     activeMs: number,
     idleMs: number,
+    activityUpdatedEpoch: number = Date.now(),
   ): void {
     this.db.prepare(`
-      UPDATE user_prompts SET active_ms = ?, idle_ms = ?
+      UPDATE user_prompts SET active_ms = ?, idle_ms = ?, activity_updated_epoch = ?
       WHERE content_session_id = ? AND prompt_number = ?
-    `).run(activeMs, idleMs, contentSessionId, promptNumber);
+    `).run(activeMs, idleMs, activityUpdatedEpoch, contentSessionId, promptNumber);
   }
 
   /**

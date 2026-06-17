@@ -372,13 +372,22 @@ export function computePerTurnActivity(
 
   const flush = () => {
     if (cur.firstAi === null) return; // 空 turn(无 AI 事件),不计入
-    const span = (cur.lastAi ?? cur.firstAi) - cur.firstAi;
+    const lastAi = cur.lastAi ?? cur.firstAi;
+    const span = lastAi - cur.firstAi;
+    let activeMs = Math.max(0, span - cur.idle);
+    // 单事件 turn(firstAi===lastAi → span=0)会把一次有效问答清零为 0。
+    // 回退到该 turn 全跨度(promptedAt → 末个 AI 事件),保证至少计入一次问答的活跃;
+    // 否则下游 COALESCE(active_ms, 墙钟) 会取到 0(非 NULL)而不回落,短任务/一次性
+    // 回答在所有已切 active_ms 的统计中被记为 0。多事件 turn 仍用精确 span - idle。
+    if (cur.count <= 1 && cur.promptedAt != null && lastAi > cur.promptedAt) {
+      activeMs = Math.max(activeMs, lastAi - cur.promptedAt);
+    }
     turns.push({
       promptIndex: turnIdx,
       promptedAt: cur.promptedAt,
       startedAt: cur.firstAi,
-      endedAt: cur.lastAi ?? cur.firstAi,
-      activeMs: Math.max(0, span - cur.idle),
+      endedAt: lastAi,
+      activeMs,
       idleMs: cur.idle,
       eventCount: cur.count,
     });

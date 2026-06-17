@@ -127,7 +127,7 @@ export class DailyReportGenerator {
     const projAgg = this.db.prepare(`
       SELECT s.project AS project, COUNT(*) AS prompts,
              COALESCE(SUM(CASE WHEN up.completed_at_epoch IS NOT NULL
-               THEN (COALESCE(up.active_ms, up.completed_at_epoch - up.created_at_epoch) + COALESCE(up.think_time_ms, 0))
+               THEN (COALESCE(NULLIF(up.active_ms, 0), up.completed_at_epoch - up.created_at_epoch) + COALESCE(up.think_time_ms, 0))
                ELSE 0 END), 0) AS total_ms
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id

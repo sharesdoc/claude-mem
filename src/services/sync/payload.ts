@@ -106,6 +106,8 @@ export interface PromptRow {
   active_ms: number | null;
   /** 挂起时长(liveness 计算),NULL=尚未回填 */
   idle_ms: number | null;
+  /** active/idle 回填时间戳(epoch ms),用于 activity 水位重推;NULL=未回填 */
+  activity_updated_epoch: number | null;
 }
 
 export interface CollectResult {
@@ -156,7 +158,7 @@ export function collectIncremental(
   `).all(watermark.summaries, limit);
 
   const prompts = db.query<PromptRow, [number, number]>(`
-    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms, active_ms, idle_ms
+    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms, active_ms, idle_ms, activity_updated_epoch
     FROM user_prompts
     WHERE id > ?
     ORDER BY id ASC
@@ -175,6 +177,16 @@ export function collectIncremental(
     limit,
     prompts,
   );
+  // 活跃度回填水位:completed_at_epoch 早已同步、之后才回填/修正 active_ms 的行,
+  // 完成水位不会推进 → 按 activity_updated_epoch 独立重推,否则服务端拿不到后补
+  // 的活跃耗时。与完成回填同样只收 id ≤ 水位的旧行(新行已在本批 prompts 内)。
+  const { backfills: activityBackfills, nextActivity } = collectActivityBackfills(
+    db,
+    watermark.prompts,
+    watermark.prompt_activity,
+    limit,
+    prompts,
+  );
 
   const observations = redactObservations(observationsRaw, denyList);
   const summaries = redactSummaries(summariesRaw, denyList);
@@ -189,7 +201,17 @@ export function collectIncremental(
   // 注意 nextLocalIds.sessions 仍按水位窗口内的 sessions 计算(闭包补带的是
   // 旧行,不得推进水位)。
   // 回填行 id 均 <= id 水位、新行 id 均 > id 水位,二者不会重复。
-  const allPrompts = [...prompts, ...promptBackfills];
+  // 去重合并:完成回填与活跃度回填可能命中同一行,按 (content_session_id,
+  // prompt_number) 去重,避免同批重复推送(服务端 inbox 也会去重,这里早去省带宽)。
+  const seenBackfill = new Set<string>();
+  const dedupedBackfills: PromptRow[] = [];
+  for (const p of [...promptBackfills, ...activityBackfills]) {
+    const key = `${p.content_session_id}:${p.prompt_number}`;
+    if (seenBackfill.has(key)) continue;
+    seenBackfill.add(key);
+    dedupedBackfills.push(p);
+  }
+  const allPrompts = [...prompts, ...dedupedBackfills];
   const allSessions = withReferencedSessions(db, sessions, observations, summaries, allPrompts);
 
   const batch: IngestBatch = {
@@ -209,6 +231,7 @@ export function collectIncremental(
     summaries: lastId(summariesRaw, watermark.summaries),
     prompts: lastId(prompts, watermark.prompts),
     prompt_completions: nextCompletions,
+    prompt_activity: nextActivity,
   };
 
   return { batch, nextLocalIds };
@@ -234,7 +257,7 @@ function collectPromptCompletionBackfills(
   freshPrompts: PromptRow[],
 ): { backfills: PromptRow[]; nextCompletions: number } {
   let backfills = db.query<PromptRow, [number, number, number]>(`
-    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms, active_ms, idle_ms
+    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms, active_ms, idle_ms, activity_updated_epoch
     FROM user_prompts
     WHERE id <= ? AND completed_at_epoch IS NOT NULL AND completed_at_epoch > ?
     ORDER BY completed_at_epoch ASC, id ASC
@@ -261,6 +284,52 @@ function collectPromptCompletionBackfills(
   }
 
   return { backfills, nextCompletions };
+}
+
+/**
+ * 收集需要重推的"活跃度回填"prompt 行,并计算下一个活跃度水位。
+ *
+ * 取已越过 id 水位(idWatermark)、active_ms 已回填且 activity_updated_epoch 晚于
+ * 活跃度水位(activityWatermark)的行,按 activity_updated_epoch 升序限量收集。
+ * 与完成回填同构:命中 limit 时水位只推进到本批最后一行(裁掉同毫秒并列尾部);
+ * 未命中则一并吸收本批新行(freshPrompts)自带的 activity_updated_epoch,避免下个
+ * tick 无谓重推。修复 completed 已同步后单独回填 active_ms 不被重推的缺口。
+ */
+function collectActivityBackfills(
+  db: Database,
+  idWatermark: number,
+  activityWatermark: number,
+  limit: number,
+  freshPrompts: PromptRow[],
+): { backfills: PromptRow[]; nextActivity: number } {
+  let backfills = db.query<PromptRow, [number, number, number]>(`
+    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms, active_ms, idle_ms, activity_updated_epoch
+    FROM user_prompts
+    WHERE id <= ? AND active_ms IS NOT NULL AND activity_updated_epoch IS NOT NULL AND activity_updated_epoch > ?
+    ORDER BY activity_updated_epoch ASC, id ASC
+    LIMIT ?
+  `).all(idWatermark, activityWatermark, limit);
+
+  const truncated = backfills.length === limit;
+  if (truncated) {
+    const lastTs = backfills[backfills.length - 1].activity_updated_epoch!;
+    const trimmed = backfills.filter(p => (p.activity_updated_epoch ?? 0) < lastTs);
+    if (trimmed.length > 0) backfills = trimmed;
+  }
+
+  let nextActivity = activityWatermark;
+  for (const p of backfills) {
+    if ((p.activity_updated_epoch ?? 0) > nextActivity) nextActivity = p.activity_updated_epoch!;
+  }
+  if (!truncated) {
+    for (const p of freshPrompts) {
+      if (p.activity_updated_epoch != null && p.activity_updated_epoch > nextActivity) {
+        nextActivity = p.activity_updated_epoch;
+      }
+    }
+  }
+
+  return { backfills, nextActivity };
 }
 
 const SESSION_COLS = `id, content_session_id, memory_session_id, project, platform_source, user_prompt,

@@ -46,7 +46,7 @@ describe('sync-state', () => {
       upstream_url: 'http://mem.acme.com',
       last_sync_at: 1700000000000,
       last_success_at: 1700000001000,
-      watermark: { sessions: 12, observations: 345, summaries: 67, prompts: 89, prompt_completions: 1700000002000 },
+      watermark: { sessions: 12, observations: 345, summaries: 67, prompts: 89, prompt_completions: 1700000002000, prompt_activity: 1700000002000 },
       failures: { consecutive: 2, last_error: 'timeout' },
     };
     writeState(written, path);
@@ -68,6 +68,8 @@ describe('sync-state', () => {
     expect(state.watermark.sessions).toBe(0);
     // 升级前的旧 state 文件缺 prompt_completions → 归零(触发一次性全量完成回填)
     expect(state.watermark.prompt_completions).toBe(0);
+    // 同理缺 prompt_activity → 归零(触发一次性全量活跃度回填)
+    expect(state.watermark.prompt_activity).toBe(0);
     expect(state.failures.consecutive).toBe(0);
     expect(state.failures.last_error).toBeNull();
   });

@@ -287,4 +287,52 @@ describe('POST /api/sync/ingest', () => {
       await close();
     }
   });
+
+  it('persists active_ms/idle_ms and COALESCE-updates them on activity backfill', async () => {
+    const db = buildDb();
+    const { url, close } = await spinUp(db);
+    try {
+      const session = {
+        id: 1, content_session_id: 'c1', memory_session_id: 'm1', project: 'p', platform_source: 'claude',
+        user_prompt: null, custom_title: null, started_at: '2026', started_at_epoch: 1000,
+        completed_at: null, completed_at_epoch: null, status: 'active', user_name: 'alice', user_label: 'alice',
+      };
+      const prompt = {
+        id: 1, content_session_id: 'c1', prompt_number: 1, prompt_text: 'hi',
+        created_at: '2026', created_at_epoch: 1000,
+      };
+
+      // 首推:已完成但活跃度尚未算 → INSERT 写入 active_ms/idle_ms = NULL。
+      const first = await fetch(`${url}/api/sync/ingest`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(basePayload({
+          sessions: [session],
+          prompts: [{ ...prompt, completed_at_epoch: 91000, think_time_ms: 5000, active_ms: null, idle_ms: null }],
+        })),
+      });
+      expect(first.status).toBe(200);
+
+      const before = db.prepare("SELECT active_ms, idle_ms FROM user_prompts WHERE content_session_id = 'c1' AND prompt_number = 1")
+        .get() as { active_ms: number | null; idle_ms: number | null };
+      expect(before.active_ms).toBeNull();
+      expect(before.idle_ms).toBeNull();
+
+      // 活跃度回填重推:同一行带上 active_ms/idle_ms,服务端 COALESCE 补全(NULL → 值)。
+      const second = await fetch(`${url}/api/sync/ingest`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(basePayload({
+          sessions: [session],
+          prompts: [{ ...prompt, completed_at_epoch: 91000, think_time_ms: 5000, active_ms: 12000, idle_ms: 3000 }],
+        })),
+      });
+      expect(second.status).toBe(200);
+
+      const after = db.prepare("SELECT active_ms, idle_ms FROM user_prompts WHERE content_session_id = 'c1' AND prompt_number = 1")
+        .get() as { active_ms: number | null; idle_ms: number | null };
+      expect(after.active_ms).toBe(12000);
+      expect(after.idle_ms).toBe(3000);
+    } finally {
+      await close();
+    }
+  });
 });

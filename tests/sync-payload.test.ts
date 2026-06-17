@@ -83,7 +83,7 @@ describe('collectIncremental', () => {
   it('respects per-table watermark (skips rows with id <= wm)', () => {
     const { batch, nextLocalIds } = collectIncremental(
       db,
-      { sessions: 1, observations: 3, summaries: 0, prompts: 0, prompt_completions: 0 },
+      { sessions: 1, observations: 3, summaries: 0, prompts: 0, prompt_completions: 0, prompt_activity: 0 },
       200,
       [],
       'johnson',
@@ -164,7 +164,7 @@ describe('collectIncremental', () => {
   });
 
   it('returns empty batch + unchanged watermark when no new rows', () => {
-    const wm = { sessions: 99, observations: 99, summaries: 99, prompts: 99, prompt_completions: 99 };
+    const wm = { sessions: 99, observations: 99, summaries: 99, prompts: 99, prompt_completions: 99, prompt_activity: 99 };
     const { batch, nextLocalIds } = collectIncremental(db, wm, 200, [], 'johnson');
     expect(batch.sessions).toHaveLength(0);
     expect(batch.observations).toHaveLength(0);
@@ -223,7 +223,7 @@ describe('prompt completion backfill', () => {
     db.prepare('UPDATE user_prompts SET completed_at_epoch = ? WHERE id = 1').run(1700000010000);
 
     // 三行均已越过 id 水位(prompts: 3),完成水位从 0 起步,batchSize=2
-    let wm = { sessions: 99, observations: 99, summaries: 99, prompts: 3, prompt_completions: 0 };
+    let wm = { sessions: 99, observations: 99, summaries: 99, prompts: 3, prompt_completions: 0, prompt_activity: 0 };
     const pushedIds: number[] = [];
     for (let i = 0; i < 4; i++) {
       const { batch, nextLocalIds } = collectIncremental(db, wm, 2, [], 'johnson');
@@ -235,5 +235,52 @@ describe('prompt completion backfill', () => {
       wm = nextLocalIds;
     }
     expect(pushedIds.sort((a, b) => a - b)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('prompt activity backfill', () => {
+  it('re-collects a prompt whose active_ms landed after the id watermark passed it', () => {
+    // prompt 已完成(completed_at_epoch 已回填),活跃度尚未算 → 首推 active_ms 为 NULL。
+    db.prepare('UPDATE user_prompts SET completed_at_epoch = ? WHERE id = 1').run(1700000080000);
+    const first = collectIncremental(db, zeroState().watermark, 200, [], 'johnson');
+    expect(first.batch.prompts).toHaveLength(1);
+    expect(first.batch.prompts[0].active_ms).toBeNull();
+    // active_ms 未回填,不推进活跃度水位(完成水位则随 completed_at_epoch 推进)。
+    expect(first.nextLocalIds.prompt_activity).toBe(0);
+
+    // 任务结束后算出活跃度,本地回填(id 水位已越过该行)。
+    db.prepare('UPDATE user_prompts SET active_ms = ?, idle_ms = ?, activity_updated_epoch = ? WHERE id = 1')
+      .run(12000, 3000, 1700000090000);
+
+    const second = collectIncremental(db, first.nextLocalIds, 200, [], 'johnson');
+    expect(second.batch.prompts.map(p => p.id)).toEqual([1]);
+    expect(second.batch.prompts[0].active_ms).toBe(12000);
+    expect(second.batch.prompts[0].idle_ms).toBe(3000);
+    expect(second.nextLocalIds.prompts).toBe(1); // id 水位不动(旧行)
+    expect(second.nextLocalIds.prompt_activity).toBe(1700000090000);
+
+    // 推完即止,不会无限重推。
+    const third = collectIncremental(db, second.nextLocalIds, 200, [], 'johnson');
+    expect(third.batch.prompts).toHaveLength(0);
+  });
+
+  it('dedupes completion + activity backfills that hit the same prompt in one batch', () => {
+    // 首推未完成、未算活跃 → 后续同时回填 completed 与 active(都晚于各自水位)。
+    // completion 与 activity 两个查询都命中同一行,去重后本批只出现一次。
+    const first = collectIncremental(db, zeroState().watermark, 200, [], 'johnson');
+    expect(first.batch.prompts).toHaveLength(1);
+
+    db.prepare('UPDATE user_prompts SET completed_at_epoch = ?, active_ms = ?, idle_ms = ?, activity_updated_epoch = ? WHERE id = 1')
+      .run(1700000080000, 12000, 3000, 1700000090000);
+
+    const second = collectIncremental(db, first.nextLocalIds, 200, [], 'johnson');
+    // 去重:同一行被两个回填查询命中,本批仍只推一次。
+    expect(second.batch.prompts).toHaveLength(1);
+    expect(second.batch.prompts[0].id).toBe(1);
+    expect(second.batch.prompts[0].active_ms).toBe(12000);
+    expect(second.batch.prompts[0].completed_at_epoch).toBe(1700000080000);
+    // 两个独立水位都推进。
+    expect(second.nextLocalIds.prompt_completions).toBe(1700000080000);
+    expect(second.nextLocalIds.prompt_activity).toBe(1700000090000);
   });
 });
