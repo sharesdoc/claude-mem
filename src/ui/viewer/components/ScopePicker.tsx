@@ -185,12 +185,13 @@ export function ScopePicker({ mode, value, onChange, active, onActivate }: Scope
   }, [mode, value, today]);
 
   // Trigger-button click. Two cases:
-  //  • not the active scope → switch the page to this scope AND open the popover
-  //    (so one click both selects the mode and lets you pick within it).
-  //  • already active → just toggle the popover open/closed.
+  //  • not the active scope → only switch the page to this scope (highlight it);
+  //    do NOT open the popover. The user must click again, on the now-active
+  //    button, to reveal the picker.
+  //  • already active → toggle the popover open/closed.
   // seedNav runs on every open so the grid starts on the committed value.
   const handleBtn = useCallback(() => {
-    if (!active) { onActivate(); seedNav(); setOpen(true); return; }
+    if (!active) { onActivate(); return; }
     setOpen(prev => { if (!prev) seedNav(); return !prev; });
   }, [active, onActivate, seedNav]);
 
