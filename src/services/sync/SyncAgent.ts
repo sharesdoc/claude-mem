@@ -257,15 +257,19 @@ function mergeWatermark(
   local: SyncState['watermark'],
 ): SyncState['watermark'] {
   const server = fromServer ?? {};
+  const completions = compositeMax(prev.prompt_completions, prev.prompt_completions_id, local.prompt_completions, local.prompt_completions_id);
+  const activity = compositeMax(prev.prompt_activity, prev.prompt_activity_id, local.prompt_activity, local.prompt_activity_id);
   return {
     sessions: pickMax(prev.sessions, server.sessions, local.sessions),
     observations: pickMax(prev.observations, server.observations, local.observations),
     summaries: pickMax(prev.summaries, server.summaries, local.summaries),
     prompts: pickMax(prev.prompts, server.prompts, local.prompts),
-    // 完成时间水位是纯客户端概念(epoch ms),服务端 next_watermark 不会下发。
-    prompt_completions: pickMax(prev.prompt_completions, local.prompt_completions),
-    // 活跃度水位同属纯客户端概念(activity_updated_epoch),服务端 next_watermark 不下发。
-    prompt_activity: pickMax(prev.prompt_activity, local.prompt_activity),
+    // 完成/活跃度水位是纯客户端概念(epoch ms + 配对 id),服务端 next_watermark 不下发。
+    // 复合 (epoch, id) 字典序合并:仅 epoch 相等时 id 取大,避免跨 epoch 的 id 错配漏推(X-001)。
+    prompt_completions: completions.epoch,
+    prompt_completions_id: completions.id,
+    prompt_activity: activity.epoch,
+    prompt_activity_id: activity.id,
   };
 }
 
@@ -275,6 +279,21 @@ function pickMax(...values: Array<number | undefined>): number {
     if (typeof v === 'number' && Number.isFinite(v) && v > max) max = v;
   }
   return max;
+}
+
+/**
+ * 复合水位 (epoch, id) 字典序取大:epoch 为主键,仅当 epoch 相等时才比较 id。
+ * 防止 prev/local 两侧的 id 分量属于不同 epoch 时被错配合并 —— 否则较大 epoch
+ * 一方的小 id 会被另一方的大 id 顶替,下次 `epoch = ? AND id > ?` 会跳过同毫秒
+ * 未推行(漏推,见 X-001)。
+ */
+function compositeMax(
+  prevEpoch: number, prevId: number,
+  localEpoch: number, localId: number,
+): { epoch: number; id: number } {
+  if (localEpoch > prevEpoch) return { epoch: localEpoch, id: localId };
+  if (prevEpoch > localEpoch) return { epoch: prevEpoch, id: prevId };
+  return { epoch: prevEpoch, id: Math.max(prevId, localId) };
 }
 
 function joinUrl(base: string, path: string): string {

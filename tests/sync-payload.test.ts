@@ -83,7 +83,7 @@ describe('collectIncremental', () => {
   it('respects per-table watermark (skips rows with id <= wm)', () => {
     const { batch, nextLocalIds } = collectIncremental(
       db,
-      { sessions: 1, observations: 3, summaries: 0, prompts: 0, prompt_completions: 0, prompt_activity: 0 },
+      { sessions: 1, observations: 3, summaries: 0, prompts: 0, prompt_completions: 0, prompt_completions_id: 0, prompt_activity: 0, prompt_activity_id: 0 },
       200,
       [],
       'johnson',
@@ -164,7 +164,7 @@ describe('collectIncremental', () => {
   });
 
   it('returns empty batch + unchanged watermark when no new rows', () => {
-    const wm = { sessions: 99, observations: 99, summaries: 99, prompts: 99, prompt_completions: 99, prompt_activity: 99 };
+    const wm = { sessions: 99, observations: 99, summaries: 99, prompts: 99, prompt_completions: 99, prompt_completions_id: 99, prompt_activity: 99, prompt_activity_id: 99 };
     const { batch, nextLocalIds } = collectIncremental(db, wm, 200, [], 'johnson');
     expect(batch.sessions).toHaveLength(0);
     expect(batch.observations).toHaveLength(0);
@@ -223,7 +223,7 @@ describe('prompt completion backfill', () => {
     db.prepare('UPDATE user_prompts SET completed_at_epoch = ? WHERE id = 1').run(1700000010000);
 
     // 三行均已越过 id 水位(prompts: 3),完成水位从 0 起步,batchSize=2
-    let wm = { sessions: 99, observations: 99, summaries: 99, prompts: 3, prompt_completions: 0, prompt_activity: 0 };
+    let wm = { sessions: 99, observations: 99, summaries: 99, prompts: 3, prompt_completions: 0, prompt_completions_id: 0, prompt_activity: 0, prompt_activity_id: 0 };
     const pushedIds: number[] = [];
     for (let i = 0; i < 4; i++) {
       const { batch, nextLocalIds } = collectIncremental(db, wm, 2, [], 'johnson');
@@ -282,5 +282,50 @@ describe('prompt activity backfill', () => {
     // 两个独立水位都推进。
     expect(second.nextLocalIds.prompt_completions).toBe(1700000080000);
     expect(second.nextLocalIds.prompt_activity).toBe(1700000090000);
+  });
+
+  it('pushes all same-millisecond activity backfills across batches (X-001 regression)', () => {
+    // 补插 prompt 2、3(seed 已有 1),首推把 3 行推走(id 水位越过)。
+    const ins = db.prepare(`INSERT INTO user_prompts (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch) VALUES ('c1', ?, 'p', '2026-05-17T00:00:00Z', ?)`);
+    ins.run(2, 1700000001000);
+    ins.run(3, 1700000002000);
+    const first = collectIncremental(db, zeroState().watermark, 200, [], 'johnson');
+    expect(first.nextLocalIds.prompts).toBe(3);
+
+    // 3 行全部同毫秒回填 activity(模拟一次 Stop 批量回填)。
+    db.prepare('UPDATE user_prompts SET active_ms = 1000, idle_ms = 0, activity_updated_epoch = 5000').run();
+
+    // batchSize=2 < 3 行同毫秒,多轮直到空。单时间戳水位会永久漏推 id=3。
+    let wm = first.nextLocalIds;
+    const pushed: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const res = collectIncremental(db, wm, 2, [], 'johnson');
+      if (res.batch.prompts.length === 0) break;
+      pushed.push(...res.batch.prompts.map(p => p.id));
+      wm = res.nextLocalIds;
+    }
+    expect(pushed.sort((a, b) => a - b)).toEqual([1, 2, 3]);
+  });
+
+  it('pushes all same-millisecond completion backfills across batches (X-001 symmetric)', () => {
+    // completion 水位与 activity 同源缺陷(单时间戳 > 过滤),同病同测。
+    const ins = db.prepare(`INSERT INTO user_prompts (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch) VALUES ('c1', ?, 'p', '2026-05-17T00:00:00Z', ?)`);
+    ins.run(2, 1700000001000);
+    ins.run(3, 1700000002000);
+    const first = collectIncremental(db, zeroState().watermark, 200, [], 'johnson');
+    expect(first.nextLocalIds.prompts).toBe(3);
+
+    // 3 行全部同毫秒 completed_at_epoch。
+    db.prepare('UPDATE user_prompts SET completed_at_epoch = 5000').run();
+
+    let wm = first.nextLocalIds;
+    const pushed: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const res = collectIncremental(db, wm, 2, [], 'johnson');
+      if (res.batch.prompts.length === 0) break;
+      pushed.push(...res.batch.prompts.map(p => p.id));
+      wm = res.nextLocalIds;
+    }
+    expect(pushed.sort((a, b) => a - b)).toEqual([1, 2, 3]);
   });
 });

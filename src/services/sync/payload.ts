@@ -170,20 +170,24 @@ export function collectIncremental(
   // 服务端该行 completed_at_epoch 永远 NULL → viewer 显示 "Task status unclear"。
   // 这里按完成时间二级水位(prompt_completions)重推已越过 id 水位、且完成时间
   // 新于上次推送的行;服务端按 (content_session_id, prompt_number) 幂等补全。
-  const { backfills: promptBackfills, nextCompletions } = collectPromptCompletionBackfills(
+  const { backfills: promptBackfills, nextCompletions, nextCompletionsId } = collectPromptCompletionBackfills(
     db,
     watermark.prompts,
     watermark.prompt_completions,
+    watermark.prompt_completions_id,
     limit,
     prompts,
   );
   // 活跃度回填水位:completed_at_epoch 早已同步、之后才回填/修正 active_ms 的行,
   // 完成水位不会推进 → 按 activity_updated_epoch 独立重推,否则服务端拿不到后补
   // 的活跃耗时。与完成回填同样只收 id ≤ 水位的旧行(新行已在本批 prompts 内)。
-  const { backfills: activityBackfills, nextActivity } = collectActivityBackfills(
+  // 复合游标 (epoch, id):同毫秒并列回填命中 batchSize 时,水位推到本批最后一行,
+  // 下批 `epoch > ? OR (epoch = ? AND id > ?)` 接力,不再永久跳过同毫秒剩余行(X-001)。
+  const { backfills: activityBackfills, nextActivity, nextActivityId } = collectActivityBackfills(
     db,
     watermark.prompts,
     watermark.prompt_activity,
+    watermark.prompt_activity_id,
     limit,
     prompts,
   );
@@ -231,67 +235,74 @@ export function collectIncremental(
     summaries: lastId(summariesRaw, watermark.summaries),
     prompts: lastId(prompts, watermark.prompts),
     prompt_completions: nextCompletions,
+    prompt_completions_id: nextCompletionsId,
     prompt_activity: nextActivity,
+    prompt_activity_id: nextActivityId,
   };
 
   return { batch, nextLocalIds };
 }
 
 /**
- * 收集需要重推的"完成回填"prompt 行,并计算下一个完成时间水位。
+ * 收集需要重推的"完成回填"prompt 行,并计算下一个完成时间复合水位 (epoch, id)。
  *
- * 取已越过 id 水位(idWatermark)、completed_at_epoch 晚于完成水位
- * (completionWatermark)的行,按完成时间升序限量收集。水位推进规则:
- *  - 命中 limit(可能还有更多):水位只推进到本批最后一行的完成时间,且为
- *    避免同毫秒并列行被 `>` 过滤器跳过,裁掉与最后一行同完成时间的尾部并列
- *    行留到下个 tick(全批同毫秒时保留,否则无法推进);本批新行即使带有
- *    更新的完成时间也不得越过该边界,否则会跳过未收完的剩余回填。
- *  - 未命中 limit(已收完):可一并吸收本批新行自带的完成时间,避免这些行
- *    下个 tick 被无谓重推。
+ * 取已越过 id 水位(idWatermark)、completed_at_epoch 晚于完成复合水位
+ * (completionWatermark, completionIdWatermark)的行,按 (epoch, id) 升序限量收集。
+ * 水位推进规则:
+ *  - 命中 limit(可能还有更多):水位只推进到本批最后一行的 (lastEpoch, lastId),
+ *    本批行全部推送;下批用 `epoch > ? OR (epoch = ? AND id > ?)` 接力,同毫秒
+ *    并列剩余行不会被 `>` 永久跳过(取代单时间戳 + trimmed 裁剪 hack,见 X-001)。
+ *  - 未命中 limit(已收完):一并吸收本批新行(freshPrompts)自带的完成时间,
+ *    避免这些行下个 tick 被无谓重推。
  */
 function collectPromptCompletionBackfills(
   db: Database,
   idWatermark: number,
   completionWatermark: number,
+  completionIdWatermark: number,
   limit: number,
   freshPrompts: PromptRow[],
-): { backfills: PromptRow[]; nextCompletions: number } {
-  let backfills = db.query<PromptRow, [number, number, number]>(`
+): { backfills: PromptRow[]; nextCompletions: number; nextCompletionsId: number } {
+  const backfills = db.query<PromptRow, [number, number, number, number, number]>(`
     SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms, active_ms, idle_ms, activity_updated_epoch
     FROM user_prompts
-    WHERE id <= ? AND completed_at_epoch IS NOT NULL AND completed_at_epoch > ?
+    WHERE id <= ? AND completed_at_epoch IS NOT NULL
+      AND (completed_at_epoch > ? OR (completed_at_epoch = ? AND id > ?))
     ORDER BY completed_at_epoch ASC, id ASC
     LIMIT ?
-  `).all(idWatermark, completionWatermark, limit);
+  `).all(idWatermark, completionWatermark, completionWatermark, completionIdWatermark, limit);
 
   const truncated = backfills.length === limit;
-  if (truncated) {
-    const lastEpoch = backfills[backfills.length - 1].completed_at_epoch!;
-    const trimmed = backfills.filter(p => p.completed_at_epoch! < lastEpoch);
-    if (trimmed.length > 0) backfills = trimmed;
-  }
-
   let nextCompletions = completionWatermark;
+  let nextCompletionsId = completionIdWatermark;
   for (const p of backfills) {
-    if (p.completed_at_epoch! > nextCompletions) nextCompletions = p.completed_at_epoch!;
+    const e = p.completed_at_epoch!;
+    if (e > nextCompletions || (e === nextCompletions && p.id > nextCompletionsId)) {
+      nextCompletions = e;
+      nextCompletionsId = p.id;
+    }
   }
   if (!truncated) {
     for (const p of freshPrompts) {
-      if (p.completed_at_epoch != null && p.completed_at_epoch > nextCompletions) {
-        nextCompletions = p.completed_at_epoch;
+      if (p.completed_at_epoch == null) continue;
+      const e = p.completed_at_epoch;
+      if (e > nextCompletions || (e === nextCompletions && p.id > nextCompletionsId)) {
+        nextCompletions = e;
+        nextCompletionsId = p.id;
       }
     }
   }
 
-  return { backfills, nextCompletions };
+  return { backfills, nextCompletions, nextCompletionsId };
 }
 
 /**
- * 收集需要重推的"活跃度回填"prompt 行,并计算下一个活跃度水位。
+ * 收集需要重推的"活跃度回填"prompt 行,并计算下一个活跃度复合水位 (epoch, id)。
  *
  * 取已越过 id 水位(idWatermark)、active_ms 已回填且 activity_updated_epoch 晚于
- * 活跃度水位(activityWatermark)的行,按 activity_updated_epoch 升序限量收集。
- * 与完成回填同构:命中 limit 时水位只推进到本批最后一行(裁掉同毫秒并列尾部);
+ * 活跃度复合水位(activityWatermark, activityIdWatermark)的行,按 (epoch, id)
+ * 升序限量收集。与完成回填同构:命中 limit 时水位推到本批最后一行 (lastEpoch, lastId),
+ * 下批用 `epoch > ? OR (epoch = ? AND id > ?)` 接力(消除 trimmed 裁剪 hack,见 X-001);
  * 未命中则一并吸收本批新行(freshPrompts)自带的 activity_updated_epoch,避免下个
  * tick 无谓重推。修复 completed 已同步后单独回填 active_ms 不被重推的缺口。
  */
@@ -299,37 +310,41 @@ function collectActivityBackfills(
   db: Database,
   idWatermark: number,
   activityWatermark: number,
+  activityIdWatermark: number,
   limit: number,
   freshPrompts: PromptRow[],
-): { backfills: PromptRow[]; nextActivity: number } {
-  let backfills = db.query<PromptRow, [number, number, number]>(`
+): { backfills: PromptRow[]; nextActivity: number; nextActivityId: number } {
+  const backfills = db.query<PromptRow, [number, number, number, number, number]>(`
     SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms, active_ms, idle_ms, activity_updated_epoch
     FROM user_prompts
-    WHERE id <= ? AND active_ms IS NOT NULL AND activity_updated_epoch IS NOT NULL AND activity_updated_epoch > ?
+    WHERE id <= ? AND active_ms IS NOT NULL AND activity_updated_epoch IS NOT NULL
+      AND (activity_updated_epoch > ? OR (activity_updated_epoch = ? AND id > ?))
     ORDER BY activity_updated_epoch ASC, id ASC
     LIMIT ?
-  `).all(idWatermark, activityWatermark, limit);
+  `).all(idWatermark, activityWatermark, activityWatermark, activityIdWatermark, limit);
 
   const truncated = backfills.length === limit;
-  if (truncated) {
-    const lastTs = backfills[backfills.length - 1].activity_updated_epoch!;
-    const trimmed = backfills.filter(p => (p.activity_updated_epoch ?? 0) < lastTs);
-    if (trimmed.length > 0) backfills = trimmed;
-  }
-
   let nextActivity = activityWatermark;
+  let nextActivityId = activityIdWatermark;
   for (const p of backfills) {
-    if ((p.activity_updated_epoch ?? 0) > nextActivity) nextActivity = p.activity_updated_epoch!;
+    const e = p.activity_updated_epoch!;
+    if (e > nextActivity || (e === nextActivity && p.id > nextActivityId)) {
+      nextActivity = e;
+      nextActivityId = p.id;
+    }
   }
   if (!truncated) {
     for (const p of freshPrompts) {
-      if (p.activity_updated_epoch != null && p.activity_updated_epoch > nextActivity) {
-        nextActivity = p.activity_updated_epoch;
+      if (p.activity_updated_epoch == null) continue;
+      const e = p.activity_updated_epoch;
+      if (e > nextActivity || (e === nextActivity && p.id > nextActivityId)) {
+        nextActivity = e;
+        nextActivityId = p.id;
       }
     }
   }
 
-  return { backfills, nextActivity };
+  return { backfills, nextActivity, nextActivityId };
 }
 
 const SESSION_COLS = `id, content_session_id, memory_session_id, project, platform_source, user_prompt,

@@ -35,6 +35,7 @@ export interface SyncState {
      * 旧 state 文件缺该字段时归零,触发一次全量完成回填重推(服务端幂等更新)。
      */
     prompt_completions: number;
+    prompt_completions_id: number; // X-001: 配对 id 游标,同 epoch 批次最后推送的 id,与 prompt_completions 组成复合水位,避免同毫秒并列记录命中 batchSize 后被 > 永久跳过
     /**
      * 活跃度水位(epoch ms):已推送上游的 user_prompts 活跃度回填的最大
      * activity_updated_epoch。completed_at_epoch 早已同步、之后才回填/修正
@@ -43,6 +44,7 @@ export interface SyncState {
      * 一次全量活跃度重推(服务端 COALESCE 幂等更新)。
      */
     prompt_activity: number;
+    prompt_activity_id: number; // X-001: 配对 id 游标,与 prompt_activity 组成复合水位
   };
   failures: {
     consecutive: number;
@@ -54,7 +56,7 @@ const ZERO_STATE: SyncState = Object.freeze({
   upstream_url: '',
   last_sync_at: 0,
   last_success_at: 0,
-  watermark: Object.freeze({ sessions: 0, observations: 0, summaries: 0, prompts: 0, prompt_completions: 0, prompt_activity: 0 }),
+  watermark: Object.freeze({ sessions: 0, observations: 0, summaries: 0, prompts: 0, prompt_completions: 0, prompt_completions_id: 0, prompt_activity: 0, prompt_activity_id: 0 }),
   failures: Object.freeze({ consecutive: 0, last_error: null }),
 }) as SyncState;
 
@@ -137,7 +139,9 @@ function normaliseState(input: Partial<SyncState> | null | undefined): SyncState
       summaries: numeric(wm.summaries),
       prompts: numeric(wm.prompts),
       prompt_completions: numeric(wm.prompt_completions),
+      prompt_completions_id: numeric(wm.prompt_completions_id),
       prompt_activity: numeric(wm.prompt_activity),
+      prompt_activity_id: numeric(wm.prompt_activity_id),
     },
     failures: {
       consecutive: numeric(failures.consecutive),

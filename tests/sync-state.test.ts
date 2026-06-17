@@ -46,7 +46,7 @@ describe('sync-state', () => {
       upstream_url: 'http://mem.acme.com',
       last_sync_at: 1700000000000,
       last_success_at: 1700000001000,
-      watermark: { sessions: 12, observations: 345, summaries: 67, prompts: 89, prompt_completions: 1700000002000, prompt_activity: 1700000002000 },
+      watermark: { sessions: 12, observations: 345, summaries: 67, prompts: 89, prompt_completions: 1700000002000, prompt_completions_id: 0, prompt_activity: 1700000002000, prompt_activity_id: 0 },
       failures: { consecutive: 2, last_error: 'timeout' },
     };
     writeState(written, path);
