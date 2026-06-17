@@ -3174,14 +3174,19 @@ export class SessionStore {
       ).get(content_session_id) as { project: string } | undefined;
       const project = projectRow?.project ?? 'unknown';
 
-      // Observation rows scoped to exactly this prompt (see method doc).
+      // Observation rows scoped to exactly this prompt (see method doc). Extra
+      // columns (memory_session_id, content_hash, created_at_epoch) are needed
+      // to rebuild the sync_inbox source_uid — see below.
       const observations = this.db.prepare(
-        `SELECT o.id AS id, o.narrative AS narrative, o.text AS text, o.facts AS facts
+        `SELECT o.id AS id, o.narrative AS narrative, o.text AS text, o.facts AS facts,
+                o.memory_session_id AS memory_session_id, o.content_hash AS content_hash,
+                o.created_at_epoch AS created_at_epoch
            FROM observations o
            JOIN sdk_sessions s ON o.memory_session_id = s.memory_session_id
           WHERE s.content_session_id = ? AND o.prompt_number = ?`
       ).all(content_session_id, prompt_number) as Array<{
         id: number; narrative: string | null; text: string | null; facts: string | null;
+        memory_session_id: string; content_hash: string | null; created_at_epoch: number;
       }>;
       const obsIds = observations.map(o => o.id);
 
@@ -3197,19 +3202,26 @@ export class SessionStore {
           `DELETE FROM observations WHERE id IN (${obsPlaceholders})`
         ).run(...obsIds).changes;
 
-        // sync_inbox.source_uid is TEXT; observation entries key on the obs id.
+        // sync_inbox.source_uid for observations is `${memory_session_id}:${content_hash}`
+        // (fallback `${id}-${created_at_epoch}` when content_hash is null) — it must
+        // match exactly how SyncRoutes.applyBatch records it, or orphan watermarks
+        // remain and block re-sync of a deleted observation.
+        const obsSourceUids = observations.map(
+          o => `${o.memory_session_id}:${o.content_hash ?? `${o.id}-${o.created_at_epoch}`}`
+        );
         syncInbox += this.db.prepare(
           `DELETE FROM sync_inbox
              WHERE source_table = 'observations'
                AND source_uid IN (${obsPlaceholders})`
-        ).run(...obsIds.map(String)).changes;
+        ).run(...obsSourceUids).changes;
       }
 
-      // sync_inbox entry for the prompt itself.
+      // sync_inbox.source_uid for prompts is `${content_session_id}:${prompt_number}`
+      // (again matching SyncRoutes.applyBatch — not the numeric row id).
       syncInbox += this.db.prepare(
         `DELETE FROM sync_inbox
            WHERE source_table = 'user_prompts' AND source_uid = ?`
-      ).run(String(promptId)).changes;
+      ).run(`${content_session_id}:${prompt_number}`).changes;
 
       // The prompt row last; its AFTER DELETE trigger cleans the FTS index.
       this.db.prepare('DELETE FROM user_prompts WHERE id = ?').run(promptId);
