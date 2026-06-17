@@ -2,7 +2,7 @@
 import type { EventHandler, NormalizedHookInput, HookResult } from '../types.js';
 import { executeWithWorkerFallback, isWorkerFallback } from '../../shared/worker-utils.js';
 import { logger } from '../../utils/logger.js';
-import { extractLastMessage, extractLastAssistantEntry } from '../../shared/transcript-parser.js';
+import { extractLastMessage, extractLastAssistantEntry, computePerTurnActivity, type TurnActivity } from '../../shared/transcript-parser.js';
 import { stripMemoryTagsFromPrompt } from '../../utils/tag-stripping.js';
 import { HOOK_EXIT_CODES } from '../../shared/hook-constants.js';
 import { normalizePlatformSource } from '../../shared/platform-source.js';
@@ -34,6 +34,19 @@ export const summarizeHandler: EventHandler = {
     }
 
     const { sessionId, transcriptPath } = input;
+
+    // ── liveness 活跃/挂起时长(替代绝对时长 cap,避免误杀合法长任务) ──
+    // 用 transcript 逐行时间戳算 per-turn 活跃度,交 worker 按"区间归属"回填到 prompt。
+    // 失败/缺失则保持 null,worker 耗时公式回落到 completed_at_epoch - created_at_epoch。
+    const IDLE_THRESHOLD_MS = 15 * 60 * 1000; // 静默阈值,标定见 gap-dist-result.txt
+    let turnActivities: TurnActivity[] | null = null;
+    if (transcriptPath) {
+      try {
+        turnActivities = computePerTurnActivity(transcriptPath, IDLE_THRESHOLD_MS);
+      } catch (err) {
+        logger.debug('HOOK', `Stop hook: computePerTurnActivity failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
 
     if (!sessionId) {
       logger.warn('HOOK', 'summarize: No sessionId provided, skipping');
@@ -146,6 +159,7 @@ export const summarizeHandler: EventHandler = {
         project,
         user_prompt: userPrompt,
         transcript_completed_at_epoch: transcriptCompletedAtEpoch,
+        turn_activities: turnActivities,
       },
     );
     if (isWorkerFallback(queueResult)) {

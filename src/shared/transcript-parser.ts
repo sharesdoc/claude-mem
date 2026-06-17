@@ -231,3 +231,177 @@ function extractLastAssistantEntryFromJsonl(content: string): AssistantEntry | n
 
   return null;
 }
+
+// ── per-turn activity (liveness-based idle detection) ───────────────────
+
+export interface TurnActivity {
+  /** turn 序号(1-based,大致对齐 prompt_number,但应以 promptedAt↔created_at 配对为准) */
+  promptIndex: number;
+  /** 触发本 turn 的用户输入(split)时间戳 epoch ms,用于与 prompt.created_at 稳健配对 */
+  promptedAt: number | null;
+  /** 该 turn 首个 AI 事件 epoch ms(turn 起算点,不含前置 think time) */
+  startedAt: number;
+  /** 该 turn 末个 AI 事件 epoch ms */
+  endedAt: number;
+  /** 真实活跃时长(ms) = turn 跨度 − idleMs */
+  activeMs: number;
+  /** 挂起时长(ms):turn 内相邻 AI 事件间隔超过阈值的总和 */
+  idleMs: number;
+  /** turn 内 AI 事件数 */
+  eventCount: number;
+}
+
+interface TimedTranscriptEvent {
+  ts: number;
+  kind: 'ai' | 'split';
+}
+
+/** 未来时间戳容差:过滤时钟偏差/损坏行(与 extractLastAssistantEntryFromJsonl 同源) */
+const TRANSCRIPT_FUTURE_SKEW_MS = 60_000;
+
+/**
+ * 判定一行 transcript 属于"AI 活动"还是"用户分隔点"。
+ *
+ * - ai:    assistant 行(含 thinking/text/tool_use),或 user 行但 content 含
+ *          tool_result(工具回传,属 AI 工作流的一部分)
+ * - split: user 行且 content 不含 tool_result(真用户输入:字符串或含 text),
+ *          它开启新 turn,从而把"用户思考间隔(think time)"排除在执行时长之外
+ */
+function classifyTranscriptLine(line: any): 'ai' | 'split' | null {
+  const t = line?.type ?? line?.role;
+  if (t === 'assistant') return 'ai';
+  if (t === 'user') {
+    const msg = line?.message;
+    if (!msg || typeof msg !== 'object') return null;
+    const c = msg.content;
+    if (typeof c === 'string') return 'split';
+    if (Array.isArray(c)) {
+      const hasToolResult = c.some(
+        (x: any) => !!x && typeof x === 'object' && x.type === 'tool_result'
+      );
+      return hasToolResult ? 'ai' : 'split';
+    }
+  }
+  return null;
+}
+
+/**
+ * 收集 transcript 内所有主链(非 sidechain)带时间戳的事件,按时间升序返回。
+ * 跳过无 timestamp / 损坏 / 未来时间戳的行。
+ */
+function collectTimedTranscriptEvents(content: string): TimedTranscriptEvent[] {
+  const lines = content.split('\n');
+  const nowEpoch = Date.now();
+  const evts: TimedTranscriptEvent[] = [];
+  for (const rawLine of lines) {
+    if (!rawLine) continue;
+    let line: any;
+    try {
+      line = JSON.parse(rawLine);
+    } catch {
+      continue;
+    }
+    // 仅主链:子代理(sidechain)事件不计入宿主任务的活动度
+    if (line.isSidechain) continue;
+    const kind = classifyTranscriptLine(line);
+    if (!kind) continue;
+    const rawTs = line.timestamp;
+    if (!rawTs || typeof rawTs !== 'string') continue;
+    const ts = Date.parse(rawTs);
+    if (!Number.isFinite(ts) || ts <= 0) continue;
+    if (ts > nowEpoch + TRANSCRIPT_FUTURE_SKEW_MS) continue;
+    evts.push({ ts, kind });
+  }
+  evts.sort((a, b) => a.ts - b.ts);
+  return evts;
+}
+
+/**
+ * 按"真用户输入"(split 点)把 transcript 切成若干 turn(对应各次 prompt),
+ * 对每个 turn 用 liveness 检测计算真实活跃时长(activeMs)与挂起时长(idleMs)。
+ *
+ * 核心思想(替代绝对时长 cap,避免误杀合法长任务):
+ * - AI 正常工作时必然持续输出事件,两次相邻 AI 事件间隔很短;
+ * - 若相邻间隔超过 idleThresholdMs,判定该段为"挂起"(睡眠/进程残留/卡死);
+ * - activeMs = turn 跨度(末个 AI 事件 − 首个 AI 事件) − idleMs。
+ *
+ * 阈值标定(历史 143,262 个间隔样本):P99=47.8s、P99.9=3.2min;正常工作(48s 内)
+ * 与挂起(小时级)之间存在数量级断层。推荐 idleThresholdMs = 15min(900_000)。
+ *
+ * 边界:tool_use → tool_result 的工具执行间隔也会被计入;绝大多数 <1min,但单次
+ * 超长工具(如跑测试套件)可能被误标为挂起,第一版可接受。
+ *
+ * transcript 缺失 / Gemini 单 JSON 格式(无逐行 timestamp)/ 无任何带时间戳事件
+ * → 返回 null,调用方应回落到 completed_at_epoch − created_at_epoch 墙钟。
+ */
+export function computePerTurnActivity(
+  transcriptPath: string,
+  idleThresholdMs: number
+): TurnActivity[] | null {
+  if (!transcriptPath || !existsSync(transcriptPath)) return null;
+
+  let content: string;
+  try {
+    content = readFileSync(transcriptPath, 'utf-8').trim();
+  } catch {
+    return null;
+  }
+  if (!content) return null;
+
+  // Gemini 格式无逐行 timestamp → 无法做 liveness 检测,回落
+  if (isGeminiTranscriptFormat(content).isGemini) return null;
+
+  const evts = collectTimedTranscriptEvents(content);
+  if (evts.length === 0) return null;
+
+  // 用 split 切 turn:遇到 split 即收尾当前 turn 并开启下一个。
+  // promptIndex 对齐 prompt_number:首个 split 之前的 AI 事件极少(transcript
+  // 通常以 user 输入开头),若有则落入 promptIndex=0,由调用方按 ≥1 过滤。
+  interface TurnState {
+    /** 进入本 turn 的用户输入(split)时间戳 */
+    promptedAt: number | null;
+    firstAi: number | null;
+    lastAi: number | null;
+    idle: number;
+    count: number;
+  }
+
+  const turns: TurnActivity[] = [];
+  let turnIdx = 0;
+  let cur: TurnState = { promptedAt: null, firstAi: null, lastAi: null, idle: 0, count: 0 };
+
+  const flush = () => {
+    if (cur.firstAi === null) return; // 空 turn(无 AI 事件),不计入
+    const span = (cur.lastAi ?? cur.firstAi) - cur.firstAi;
+    turns.push({
+      promptIndex: turnIdx,
+      promptedAt: cur.promptedAt,
+      startedAt: cur.firstAi,
+      endedAt: cur.lastAi ?? cur.firstAi,
+      activeMs: Math.max(0, span - cur.idle),
+      idleMs: cur.idle,
+      eventCount: cur.count,
+    });
+  };
+
+  for (const { ts, kind } of evts) {
+    if (kind === 'split') {
+      flush();
+      turnIdx++;
+      // 该 split 是即将开始的 turn 的用户输入时间戳,用于与 prompt.created_at 配对
+      cur = { promptedAt: ts, firstAi: null, lastAi: null, idle: 0, count: 0 };
+    } else {
+      // ai
+      if (cur.lastAi !== null) {
+        const gap = ts - cur.lastAi;
+        if (gap > idleThresholdMs) cur.idle += gap;
+      } else {
+        cur.firstAi = ts;
+      }
+      cur.lastAi = ts;
+      cur.count++;
+    }
+  }
+  flush(); // 末尾 turn(最后一个 prompt 通常无后续 split 收尾)
+  return turns;
+}

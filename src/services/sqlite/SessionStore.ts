@@ -107,6 +107,7 @@ export class SessionStore {
     this.ensureUserLabelColumns();
     this.ensurePromptCompletedAtColumn();
     this.ensureThinkTimeColumn();
+    this.ensureActivityColumns();
     this.ensureWeeklyReportsTable();
     this.ensureDailyReportsTable();
   }
@@ -327,6 +328,35 @@ export class SessionStore {
     }
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(41, new Date().toISOString());
+  }
+
+  /**
+   * v44 — active_ms / idle_ms on user_prompts.
+   *
+   * Liveness-based idle detection(替代绝对时长 cap,避免误杀合法长任务):
+   * - active_ms:真实活跃时长,由 transcript 内相邻 AI 输出事件间隔(liveness)计算,
+   *   剔除会话挂起(睡眠/进程残留/Stop 漏触发)造成的虚假执行时长。
+   * - idle_ms:  挂起时长(相邻 AI 间隔超过阈值 15min 的总和)。
+   * 由 Stop hook 从 transcript 逐行时间戳计算并回填;NULL 表示尚未计算
+   * (transcript 缺失 / Gemini 格式 / 尚未触发 Stop),耗时统计应回落到
+   * completed_at_epoch - created_at_epoch 墙钟。
+   * 阈值标定:.aidocsdir/gap-dist-result.txt(P99=47.8s,P99.9=3.2min,断层后取 15min)。
+   */
+  private ensureActivityColumns(): void {
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(44) as SchemaVersion | undefined;
+    if (applied) return;
+
+    const cols = this.db.query('PRAGMA table_info(user_prompts)').all() as TableColumnInfo[];
+    if (!cols.some(c => c.name === 'active_ms')) {
+      this.db.run('ALTER TABLE user_prompts ADD COLUMN active_ms INTEGER');
+    }
+    if (!cols.some(c => c.name === 'idle_ms')) {
+      this.db.run('ALTER TABLE user_prompts ADD COLUMN idle_ms INTEGER');
+    }
+    // 存量数据保持 NULL,不做墙钟回填 —— 墙钟正是要被替代的不准口径。
+    // 未回填的行由耗时公式 COALESCE 回落到 completed_at_epoch - created_at_epoch。
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(44, new Date().toISOString());
   }
 
   /**
@@ -2219,6 +2249,39 @@ export class SessionStore {
           AND completed_at_epoch IS NULL
       `).run(completedAtEpoch, contentSessionId, promptNumber);
     }
+  }
+
+  /**
+   * 回填 prompt 的活跃/挂起时长(liveness 计算)。
+   * 无条件覆盖:由 Stop hook 从 transcript 逐行时间戳精确计算,是最准口径。
+   * 一个 prompt 可能归属多个 transcript turn(用户在任务中追加输入),调用方
+   * 负责按区间(created_at ≤ turn.promptedAt 的最近 prompt)聚合后传入合计值。
+   */
+  updatePromptActivity(
+    contentSessionId: string,
+    promptNumber: number,
+    activeMs: number,
+    idleMs: number,
+  ): void {
+    this.db.prepare(`
+      UPDATE user_prompts SET active_ms = ?, idle_ms = ?
+      WHERE content_session_id = ? AND prompt_number = ?
+    `).run(activeMs, idleMs, contentSessionId, promptNumber);
+  }
+
+  /**
+   * 取 session 内所有 prompt 的 (prompt_number, created_at_epoch),按提交时间升序。
+   * 用于把 transcript turn 按"区间归属"配对到 prompt:
+   * turn 归属 created_at_epoch ≤ turn.promptedAt 的最近 prompt(一个 prompt 可吸收
+   * 多个 turn —— 用户在任务执行中追加输入,transcript 有但未单独记为 prompt 行)。
+   */
+  getSessionPromptTimeline(contentSessionId: string): Array<{ prompt_number: number; created_at_epoch: number }> {
+    return this.db.prepare(`
+      SELECT prompt_number, created_at_epoch
+      FROM user_prompts
+      WHERE content_session_id = ?
+      ORDER BY created_at_epoch ASC, prompt_number ASC
+    `).all(contentSessionId) as Array<{ prompt_number: number; created_at_epoch: number }>;
   }
 
   /** 获取 session 最后一条 observation 的时间戳,用于 completed_at 截断。 */

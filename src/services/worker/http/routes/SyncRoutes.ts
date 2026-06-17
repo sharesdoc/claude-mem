@@ -271,15 +271,16 @@ export class SyncRoutes extends BaseRouteHandler {
     `);
     const upsertPrompt = db.prepare(`
       INSERT INTO user_prompts
-        (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+        (content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms, active_ms, idle_ms)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     // 完成时间回填:prompt 行首推时多半还在执行中(completed_at_epoch=NULL),
     // 客户端按完成水位重推同一行,这里只补全完成字段(后到的为权威值,与客户
     // 端 updatePromptCompletedAt 语义一致),不重插。
     const backfillPromptCompletion = db.prepare(`
       UPDATE user_prompts
-      SET completed_at_epoch = ?, think_time_ms = ?
+      SET completed_at_epoch = ?, think_time_ms = ?,
+          active_ms = COALESCE(?, active_ms), idle_ms = COALESCE(?, idle_ms)
       WHERE content_session_id = ? AND prompt_number = ?
     `);
 
@@ -383,6 +384,8 @@ export class SyncRoutes extends BaseRouteHandler {
             backfillPromptCompletion.run(
               pr.completed_at_epoch,
               Math.min((pr as any).think_time_ms ?? 0, serverCapMin * 60_000),
+              (pr as any).active_ms ?? null,
+              (pr as any).idle_ms ?? null,
               pr.content_session_id,
               pr.prompt_number,
             );
@@ -399,6 +402,8 @@ export class SyncRoutes extends BaseRouteHandler {
           pr.created_at_epoch,
           (pr.completed_at_epoch ?? null) as number | null,
           thinkTime,
+          (pr as any).active_ms ?? null,
+          (pr as any).idle_ms ?? null,
         );
         recordInbox.run(p.user_label, 'user_prompts', sourceUid, now, pr.id);
         applied.prompts.inserted++;

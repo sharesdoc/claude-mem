@@ -356,6 +356,40 @@ export class SessionRoutes extends BaseRouteHandler {
       }
     }
 
+    // ── 活跃/挂起时长回填(liveness 检测,替代墙钟) ───────────────────
+    // transcript 的 turn 数可能多于 DB prompt(用户在任务中追加输入,未单独记为
+    // prompt 行)。按"区间归属"聚合:turn 归属 created_at ≤ turn.promptedAt 的最近
+    // prompt,把该 prompt 名下所有 turn 的 active/idle 合计后回填。
+    // DB prompt.created_at 比 transcript 的 turn.promptedAt 晚约 1-2s(UserPromptSubmit
+    // hook 写库的固有延迟),严格 ≤ 会把 turn 漏配到前一条 prompt。带 5s 容差对齐,
+    // 远小于相邻轮次间隔(实测最短 ~2min),不会跨轮误归属。
+    const ACTIVITY_ALIGN_TOLERANCE_MS = 5_000;
+    const turnActivities = Array.isArray(req.body.turn_activities) ? req.body.turn_activities : null;
+    if (turnActivities && turnActivities.length > 0) {
+      const timeline = store.getSessionPromptTimeline(contentSessionId);
+      if (timeline.length > 0) {
+        const agg = new Map<number, { active: number; idle: number }>();
+        for (const t of turnActivities) {
+          const promptedAt = typeof t.promptedAt === 'number' ? t.promptedAt : null;
+          if (promptedAt == null) continue;
+          // 区间归属:timeline 升序,取最后一个 created_at ≤ promptedAt+容差 的 prompt
+          let ownerPrompt: number | null = null;
+          for (const p of timeline) {
+            if (p.created_at_epoch <= promptedAt + ACTIVITY_ALIGN_TOLERANCE_MS) ownerPrompt = p.prompt_number;
+            else break;
+          }
+          if (ownerPrompt == null) continue;
+          const cur = agg.get(ownerPrompt) ?? { active: 0, idle: 0 };
+          cur.active += Math.max(0, Math.floor(Number(t.activeMs) || 0));
+          cur.idle += Math.max(0, Math.floor(Number(t.idleMs) || 0));
+          agg.set(ownerPrompt, cur);
+        }
+        for (const [pn, v] of agg) {
+          store.updatePromptActivity(contentSessionId, pn, v.active, v.idle);
+        }
+      }
+    }
+
     const cleanedLastAssistantMessage = last_assistant_message
       ? stripMemoryTagsFromPrompt(String(last_assistant_message))
       : last_assistant_message;

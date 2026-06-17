@@ -102,6 +102,10 @@ export interface PromptRow {
   created_at_epoch: number;
   completed_at_epoch: number | null;
   think_time_ms: number;
+  /** 真实活跃时长(liveness 计算),NULL=尚未回填 */
+  active_ms: number | null;
+  /** 挂起时长(liveness 计算),NULL=尚未回填 */
+  idle_ms: number | null;
 }
 
 export interface CollectResult {
@@ -152,7 +156,7 @@ export function collectIncremental(
   `).all(watermark.summaries, limit);
 
   const prompts = db.query<PromptRow, [number, number]>(`
-    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms
+    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms, active_ms, idle_ms
     FROM user_prompts
     WHERE id > ?
     ORDER BY id ASC
@@ -230,7 +234,7 @@ function collectPromptCompletionBackfills(
   freshPrompts: PromptRow[],
 ): { backfills: PromptRow[]; nextCompletions: number } {
   let backfills = db.query<PromptRow, [number, number, number]>(`
-    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms
+    SELECT id, content_session_id, prompt_number, prompt_text, created_at, created_at_epoch, completed_at_epoch, think_time_ms, active_ms, idle_ms
     FROM user_prompts
     WHERE id <= ? AND completed_at_epoch IS NOT NULL AND completed_at_epoch > ?
     ORDER BY completed_at_epoch ASC, id ASC

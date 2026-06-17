@@ -880,11 +880,11 @@ export class DataRoutes extends BaseRouteHandler {
 
     // ── per-user task time (AI processing + human think time) ───────────
     // Table-scoped (since): feeds the User Summary table (Today/Week/Month).
-    // Uses Stop hook timestamp (authoritative) with SDK result as fallback.
-    // Includes think_time_ms (gap between prev completion and this prompt).
+    // 优先 active_ms(Stop hook liveness 算出的真实活跃时长,已剔除挂起),
+    // 回落到墙钟差(completed_at_epoch - created_at_epoch);再叠加 think_time_ms(上一条完成与本条之间的思考间隔)。
     const userProcessingTimeRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
-             SUM((up.completed_at_epoch - up.created_at_epoch + COALESCE(up.think_time_ms, 0))) AS total_ms,
+             SUM((COALESCE(up.active_ms, up.completed_at_epoch - up.created_at_epoch) + COALESCE(up.think_time_ms, 0))) AS total_ms,
              COUNT(*) AS prompt_count
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
@@ -903,7 +903,7 @@ export class DataRoutes extends BaseRouteHandler {
     const dailyTimeByUser = db.prepare(`
       SELECT CAST((up.created_at_epoch + ?) / ${bucketDivisor} AS INTEGER) AS day_bucket,
              COALESCE(NULLIF(s.user_label, ''), 'unknown') AS user_label,
-             SUM((up.completed_at_epoch - up.created_at_epoch + COALESCE(up.think_time_ms, 0))) AS total_ms
+             SUM((COALESCE(up.active_ms, up.completed_at_epoch - up.created_at_epoch) + COALESCE(up.think_time_ms, 0))) AS total_ms
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
       WHERE up.completed_at_epoch IS NOT NULL
@@ -992,10 +992,10 @@ export class DataRoutes extends BaseRouteHandler {
       projectEditor[r.project] = r.user_label;
     }
 
-    // ── per-project processing time (exact, from SDK result message) ──
+    // ── per-project processing time (active_ms 优先,回落墙钟差) ──
     const projectTimeRows = db.prepare(`
       SELECT COALESCE(NULLIF(s.project, ''), 'unknown') AS project,
-             SUM((up.completed_at_epoch - up.created_at_epoch + COALESCE(up.think_time_ms, 0))) AS total_ms,
+             SUM((COALESCE(up.active_ms, up.completed_at_epoch - up.created_at_epoch) + COALESCE(up.think_time_ms, 0))) AS total_ms,
              COUNT(*) AS prompt_count
       FROM user_prompts up
       JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
@@ -1129,7 +1129,7 @@ export class DataRoutes extends BaseRouteHandler {
         // ── Per-user processing time (exact, from SDK result message) ──
         const timeRows = db.prepare(`
           SELECT ${RESOLVE_USER} AS user_label,
-                 COALESCE(SUM((up.completed_at_epoch - up.created_at_epoch + COALESCE(up.think_time_ms, 0))), 0) AS total_ms
+                 COALESCE(SUM((COALESCE(up.active_ms, up.completed_at_epoch - up.created_at_epoch) + COALESCE(up.think_time_ms, 0))), 0) AS total_ms
           FROM user_prompts up
           JOIN sdk_sessions s ON s.content_session_id = up.content_session_id
           WHERE up.completed_at_epoch IS NOT NULL
