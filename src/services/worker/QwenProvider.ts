@@ -59,7 +59,7 @@ function parseQwenError(body: string): string {
 }
 
 /** 将 DashScope fetch 失败归类为 ClassifiedProviderError */
-function classifyQwenError(input: {
+export function classifyQwenError(input: {
   status?: number;
   bodyText?: string;
   cause: unknown;

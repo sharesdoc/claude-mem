@@ -72,7 +72,7 @@ import { ClaudeProvider, classifyClaudeError } from './worker/ClaudeProvider.js'
 import type { WorkerRef } from './worker/agents/types.js';
 import { GeminiProvider, classifyGeminiError, isGeminiSelected, isGeminiAvailable } from './worker/GeminiProvider.js';
 import { OpenRouterProvider, classifyOpenRouterError, isOpenRouterSelected, isOpenRouterAvailable } from './worker/OpenRouterProvider.js';
-import { QwenProvider, isQwenSelected, isQwenAvailable } from './worker/QwenProvider.js';
+import { QwenProvider, classifyQwenError, isQwenSelected, isQwenAvailable } from './worker/QwenProvider.js';
 import { ClassifiedProviderError, isClassified, type ProviderErrorClass } from './worker/provider-errors.js';
 import { PaginationHelper } from './worker/PaginationHelper.js';
 import { SettingsManager } from './worker/SettingsManager.js';
@@ -676,7 +676,7 @@ export class WorkerService implements WorkerRef {
    */
   private reclassifyAtDispatch(
     error: unknown,
-    agent: ClaudeProvider | GeminiProvider | OpenRouterProvider
+    agent: ClaudeProvider | GeminiProvider | OpenRouterProvider | QwenProvider
   ): ClassifiedProviderError | null {
     try {
       if (agent instanceof ClaudeProvider) {
@@ -688,6 +688,9 @@ export class WorkerService implements WorkerRef {
       }
       if (agent instanceof OpenRouterProvider) {
         return classifyOpenRouterError({ cause: error });
+      }
+      if (agent instanceof QwenProvider) {
+        return classifyQwenError({ cause: error });
       }
     } catch {
       // If the classifier itself throws, fall back to unclassified.

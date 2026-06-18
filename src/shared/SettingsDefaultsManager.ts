@@ -116,6 +116,9 @@ export interface SettingsDefaults {
   /** Aliyun DashScope API key for Qwen weekly-report synthesis. The env var
    *  DASHSCOPE_API_KEY (if set) always takes precedence over this file value. */
   DASHSCOPE_API_KEY: string;
+  /** Qwen model id for the observation/summary provider (DashScope). Empty falls
+   *  back to QwenProvider's DEFAULT_MODEL. */
+  CLAUDE_MEM_QWEN_MODEL: string;
 }
 
 export class SettingsDefaultsManager {
@@ -222,6 +225,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_WEEKLY_REPORT_TIME: '13:00',                 // local HH:MM to refresh this week's report
     CLAUDE_MEM_WEEKLY_REPORT_MODEL: 'qwen3-max',           // Qwen model for the AI report synthesis
     DASHSCOPE_API_KEY: '',                                  // Aliyun DashScope key; env DASHSCOPE_API_KEY overrides this. Empty = AI synthesis disabled.
+    CLAUDE_MEM_QWEN_MODEL: '',                              // Qwen provider model id; empty falls back to QwenProvider DEFAULT_MODEL.
   };
 
   static getAllDefaults(): SettingsDefaults {

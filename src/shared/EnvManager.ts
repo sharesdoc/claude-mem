@@ -42,6 +42,7 @@ export interface ClaudeMemEnv {
   ANTHROPIC_AUTH_TOKEN?: string;
   GEMINI_API_KEY?: string;
   OPENROUTER_API_KEY?: string;
+  DASHSCOPE_API_KEY?: string;
 }
 
 function parseEnvFile(content: string): Record<string, string> {
@@ -105,6 +106,7 @@ export function loadClaudeMemEnv(): ClaudeMemEnv {
     if (parsed.ANTHROPIC_AUTH_TOKEN) result.ANTHROPIC_AUTH_TOKEN = parsed.ANTHROPIC_AUTH_TOKEN;
     if (parsed.GEMINI_API_KEY) result.GEMINI_API_KEY = parsed.GEMINI_API_KEY;
     if (parsed.OPENROUTER_API_KEY) result.OPENROUTER_API_KEY = parsed.OPENROUTER_API_KEY;
+    if (parsed.DASHSCOPE_API_KEY) result.DASHSCOPE_API_KEY = parsed.DASHSCOPE_API_KEY;
 
     return result;
   } catch (error: unknown) {
@@ -166,6 +168,13 @@ export function saveClaudeMemEnv(env: ClaudeMemEnv): void {
       updated.OPENROUTER_API_KEY = env.OPENROUTER_API_KEY;
     } else {
       delete updated.OPENROUTER_API_KEY;
+    }
+  }
+  if (env.DASHSCOPE_API_KEY !== undefined) {
+    if (env.DASHSCOPE_API_KEY) {
+      updated.DASHSCOPE_API_KEY = env.DASHSCOPE_API_KEY;
+    } else {
+      delete updated.DASHSCOPE_API_KEY;
     }
   }
 
