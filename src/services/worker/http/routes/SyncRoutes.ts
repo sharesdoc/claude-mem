@@ -374,6 +374,11 @@ export class SyncRoutes extends BaseRouteHandler {
       if (serverCapMin !== clientCapMin) {
         logger.info('SYNC', `Think-time cap corrected: client=${clientCapMin}m → server=${serverCapMin}m`);
       }
+      // cap=0 表示禁用上限(与 SessionRoutes 计算侧 `if (capMinutes > 0)` 语义一致),
+      // 此时透传客户端已算好的 think_time;仅当 cap>0 才夹到天花板。不可无条件
+      // Math.min(x, serverCapMin*60_000) —— cap=0 时会把所有思考时间误夹为 0。
+      const capThinkTime = (ms: number): number =>
+        serverCapMin > 0 ? Math.min(ms, serverCapMin * 60_000) : ms;
 
       for (const pr of p.prompts) {
         const sourceUid = `${pr.content_session_id}:${pr.prompt_number}`;
@@ -383,7 +388,7 @@ export class SyncRoutes extends BaseRouteHandler {
           if (pr.completed_at_epoch != null) {
             backfillPromptCompletion.run(
               pr.completed_at_epoch,
-              Math.min((pr as any).think_time_ms ?? 0, serverCapMin * 60_000),
+              capThinkTime((pr as any).think_time_ms ?? 0),
               (pr as any).active_ms ?? null,
               (pr as any).idle_ms ?? null,
               pr.content_session_id,
@@ -393,7 +398,7 @@ export class SyncRoutes extends BaseRouteHandler {
           applied.prompts.skipped++;
           continue;
         }
-        const thinkTime: number = Math.min((pr as any).think_time_ms ?? 0, serverCapMin * 60_000);
+        const thinkTime: number = capThinkTime((pr as any).think_time_ms ?? 0);
         upsertPrompt.run(
           pr.content_session_id,
           pr.prompt_number,
