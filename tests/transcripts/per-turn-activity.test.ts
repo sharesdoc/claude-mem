@@ -142,3 +142,119 @@ describe('computePerTurnActivity — 侧链过滤', () => {
     expect(turns[0].endedAt).toBe(ms(30)); // 侧链 20 未污染 lastAi
   });
 });
+
+// ── AskUserQuestion 等待时间扣除 ────────────────────────────────────
+
+/** 构造 assistant 行,content 为 tool_use(name=AskUserQuestion) */
+function assistantAskQuestion(sec: number, toolUseId: string): string {
+  return JSON.stringify({
+    type: 'assistant',
+    timestamp: iso(sec),
+    message: {
+      content: [{ type: 'tool_use', name: 'AskUserQuestion', id: toolUseId, input: {} }],
+    },
+  });
+}
+
+/** 构造 user 行,content 为 tool_result 匹配指定 tool_use_id */
+function userAskAnswer(sec: number, toolUseId: string): string {
+  return JSON.stringify({
+    type: 'user',
+    timestamp: iso(sec),
+    message: {
+      content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'answer' }],
+    },
+  });
+}
+
+describe('computePerTurnActivity — AskUserQuestion 等待扣除', () => {
+  it('短等待(<15min)被强制纳入 idle,从 active 扣除', () => {
+    // ai@10 → Ask@20 → answer@290(4.5min 等待,<15min 阈值)
+    // 标准 liveness: gap=270s < 900s → 不计 idle → active=280s
+    // AskUserQuestion 扣除: duration=270s ≤ 900s → extraIdle=270s → active=280-270=10s
+    write([
+      userText(0, 'q'),
+      assistant(10),
+      assistantAskQuestion(20, 'call_1'),
+      userAskAnswer(290, 'call_1'),
+    ]);
+    const turns = computePerTurnActivity(transcriptPath, IDLE_THRESHOLD_MS)!;
+    expect(turns).toHaveLength(1);
+    // 3 个 AI 事件: assistant@10, AskUserQuestion@20, answer@290
+    expect(turns[0].askQuestionWaitMs).toBe(270_000);
+    expect(turns[0].activeMs).toBe(10_000); // 仅 10s(10→20)为真活跃
+    expect(turns[0].idleMs).toBe(270_000);  // AskUserQuestion 等待已注入
+  });
+
+  it('长等待(>15min)不重复计入,标准 liveness 已捕获', () => {
+    // ai@10 → Ask@20 → answer@2000(33min 等待,>15min 阈值)
+    // 标准 liveness: gap=1980s > 900s → idle=1980s
+    // AskUserQuestion: duration=1980s > 900s → 不补 extraIdle → 不重复
+    write([
+      userText(0, 'q'),
+      assistant(10),
+      assistantAskQuestion(20, 'call_1'),
+      userAskAnswer(2000, 'call_1'),
+    ]);
+    const turns = computePerTurnActivity(transcriptPath, IDLE_THRESHOLD_MS)!;
+    expect(turns).toHaveLength(1);
+    expect(turns[0].askQuestionWaitMs).toBe(1_980_000); // 追踪但不重复加
+    expect(turns[0].idleMs).toBe(1_980_000);           // 标准 liveness 已计入
+    expect(turns[0].activeMs).toBe(10_000);             // 仅 10s 真活跃
+  });
+
+  it('同一 turn 内多次 AskUserQuestion 等待分别扣除', () => {
+    // ai@10 → Ask1@20 → answer1@200(3min) → Ask2@210 → answer2@400(~3min)
+    write([
+      userText(0, 'q'),
+      assistant(10),
+      assistantAskQuestion(20, 'call_1'),
+      userAskAnswer(200, 'call_1'),
+      assistantAskQuestion(210, 'call_2'),
+      userAskAnswer(400, 'call_2'),
+    ]);
+    const turns = computePerTurnActivity(transcriptPath, IDLE_THRESHOLD_MS)!;
+    expect(turns).toHaveLength(1);
+    // askQuestionWaitMs = (200-20) + (400-210) = 180+190 = 370s
+    expect(turns[0].askQuestionWaitMs).toBe(370_000);
+    // extraIdle 只补 ≤15min 的部分: 180s + 190s = 370s
+    expect(turns[0].idleMs).toBe(370_000);
+    // 真活跃: (10→20=10s) + (200→210=10s) = 20s
+    // span = 400-10=390s, active = 390-370=20s
+    expect(turns[0].activeMs).toBe(20_000);
+  });
+
+  it('无匹配 tool_result 的 AskUserQuestion 不计 gap', () => {
+    // AskUserQuestion 发出但用户从未回答(如 session 中断)
+    write([
+      userText(0, 'q'),
+      assistant(10),
+      assistantAskQuestion(20, 'call_unanswered'),
+    ]);
+    const turns = computePerTurnActivity(transcriptPath, IDLE_THRESHOLD_MS)!;
+    expect(turns).toHaveLength(1);
+    expect(turns[0].askQuestionWaitMs).toBe(0);
+    expect(turns[0].idleMs).toBe(0);
+  });
+
+  it('跨 turn 的 AskUserQuestion 按 askedAt 归属对应 turn', () => {
+    // turn1: q1 → assistant → Ask@50 → answer@890(14min,<15min)
+    // turn2: q2(回答后才发起的第二个 prompt)
+    write([
+      userText(0, 'q1'),
+      assistant(10),
+      assistantAskQuestion(50, 'call_1'),
+      userAskAnswer(890, 'call_1'),
+      userText(900, 'q2'),
+      assistant(910),
+    ]);
+    const turns = computePerTurnActivity(transcriptPath, IDLE_THRESHOLD_MS)!;
+    // turn1: AI 范围 10→890,含 Ask@50→answer@890=840s<900s → 补 idle
+    // turn2: AI 范围 910→910(单事件)
+    expect(turns.map(t => t.promptIndex)).toEqual([1, 2]);
+    expect(turns[0].askQuestionWaitMs).toBe(840_000);
+    expect(turns[0].idleMs).toBe(840_000);
+    expect(turns[0].activeMs).toBe(40_000);  // 10→50 = 40s 真活跃
+    expect(turns[1].askQuestionWaitMs).toBe(0); // turn2 无 Ask
+  });
+});

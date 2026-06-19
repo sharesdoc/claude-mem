@@ -245,8 +245,10 @@ export interface TurnActivity {
   endedAt: number;
   /** 真实活跃时长(ms) = turn 跨度 − idleMs */
   activeMs: number;
-  /** 挂起时长(ms):turn 内相邻 AI 事件间隔超过阈值的总和 */
+  /** 挂起时长(ms):turn 内相邻 AI 事件间隔超过阈值的总和(含 AskUserQuestion 等待) */
   idleMs: number;
+  /** AskUserQuestion 等待时长(ms):用户被弹窗问住后离开的时间,已计入 idleMs */
+  askQuestionWaitMs: number;
   /** turn 内 AI 事件数 */
   eventCount: number;
 }
@@ -258,6 +260,103 @@ interface TimedTranscriptEvent {
 
 /** 未来时间戳容差:过滤时钟偏差/损坏行(与 extractLastAssistantEntryFromJsonl 同源) */
 const TRANSCRIPT_FUTURE_SKEW_MS = 60_000;
+
+// ── AskUserQuestion gap detection ──────────────────────────────────────
+
+interface AskQuestionGap {
+  /** AskUserQuestion tool_use 发出的时间戳 epoch ms */
+  askedAt: number;
+  /** 用户回答 tool_result 的时间戳 epoch ms */
+  answeredAt: number;
+  /** tool_use_id,用于去重配对 */
+  toolUseId: string;
+}
+
+/**
+ * 扫描 JSONL transcript,提取所有 AskUserQuestion → 用户回答的等待间隙。
+ *
+ * AskUserQuestion 是 Claude Code 的"弹窗提问"机制:AI 暂停等待用户点选,
+ * 这段时间不应计入活跃时长。本函数找出每对 tool_use→tool_result,
+ * 返回其起止时间戳,供 computePerTurnActivity 强制纳入 idleMs。
+ *
+ * 配对策略:
+ * - 扫描 assistant 行中的 tool_use(name=AskUserQuestion),记录其 id + timestamp
+ * - 扫描 user 行中的 tool_result,匹配已记录的 tool_use_id
+ * - 仅取主链(非 sidechain)事件
+ * - 若同一 tool_use_id 出现多次(异常),取第一次配对
+ */
+function extractAskUserQuestionGaps(content: string): AskQuestionGap[] {
+  const lines = content.split('\n');
+  const nowEpoch = Date.now();
+
+  // 待匹配的 AskUserQuestion: tool_use_id → askedAt
+  const pending = new Map<string, number>();
+  const gaps: AskQuestionGap[] = [];
+
+  for (const rawLine of lines) {
+    if (!rawLine) continue;
+    let line: any;
+    try {
+      line = JSON.parse(rawLine);
+    } catch {
+      continue;
+    }
+    if (line.isSidechain) continue;
+
+    const rawTs = line.timestamp;
+    if (!rawTs || typeof rawTs !== 'string') continue;
+    const ts = Date.parse(rawTs);
+    if (!Number.isFinite(ts) || ts <= 0) continue;
+    if (ts > nowEpoch + TRANSCRIPT_FUTURE_SKEW_MS) continue;
+
+    // assistant 行 → 找 AskUserQuestion tool_use
+    if (line.type === 'assistant' || line.role === 'assistant') {
+      const content = line.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (
+          block &&
+          typeof block === 'object' &&
+          block.type === 'tool_use' &&
+          block.name === 'AskUserQuestion' &&
+          typeof block.id === 'string'
+        ) {
+          // 只记录首次出现(同一 tool_use_id 可能因 hook 重复)
+          if (!pending.has(block.id)) {
+            pending.set(block.id, ts);
+          }
+        }
+      }
+      continue;
+    }
+
+    // user 行 → 找 tool_result 匹配已记录的 AskUserQuestion
+    if (line.type === 'user' || line.role === 'user') {
+      const content = line.message?.content;
+      if (!Array.isArray(content)) continue;
+      for (const block of content) {
+        if (
+          block &&
+          typeof block === 'object' &&
+          block.type === 'tool_result' &&
+          typeof block.tool_use_id === 'string'
+        ) {
+          const askedAt = pending.get(block.tool_use_id);
+          if (askedAt !== undefined) {
+            gaps.push({
+              askedAt,
+              answeredAt: ts,
+              toolUseId: block.tool_use_id,
+            });
+            pending.delete(block.tool_use_id);
+          }
+        }
+      }
+    }
+  }
+
+  return gaps;
+}
 
 /**
  * 判定一行 transcript 属于"AI 活动"还是"用户分隔点"。
@@ -389,6 +488,7 @@ export function computePerTurnActivity(
       endedAt: lastAi,
       activeMs,
       idleMs: cur.idle,
+      askQuestionWaitMs: 0,
       eventCount: cur.count,
     });
   };
@@ -412,5 +512,40 @@ export function computePerTurnActivity(
     }
   }
   flush(); // 末尾 turn(最后一个 prompt 通常无后续 split 收尾)
+
+  // ── AskUserQuestion 等待时间扣除 ─────────────────────────────────
+  // 标准 liveness 检测用 idleThresholdMs(默认为 15min)判定挂起间隙,但用户
+  // 被 AskUserQuestion 弹窗问住后离开的等待时间(可能 <15min)也应记为 non-active。
+  // 这里扫描 transcript 中的 AskUserQuestion → tool_result 配对,把未被标准检测
+  // 覆盖的短等待间隙强制注入对应 turn 的 idleMs,进而通过 activeMs = span − idleMs
+  // 自动从展示统计中扣除,无需修改 DataRoutes 展示层。
+  const askGaps = extractAskUserQuestionGaps(content);
+  if (askGaps.length > 0) {
+    for (const turn of turns) {
+      let askWait = 0;
+      let extraIdle = 0;
+      for (const gap of askGaps) {
+        // gap 必须完全包含在当前 turn 的 AI 事件窗口内
+        // (AskUserQuestion 阻塞所有后续 AI 输出,正常场景下 askedAt/answeredAt
+        //  必在同一 turn 内;此处做防御性检查防止跨 turn 边界归属)
+        if (gap.askedAt < turn.startedAt || gap.answeredAt > turn.endedAt) continue;
+        const duration = gap.answeredAt - gap.askedAt;
+        if (duration <= 0) continue;
+        askWait += duration;
+        // 仅补充标准 liveness 未覆盖的"短间隙"(≤idleThresholdMs)。
+        // 超阈值间隙已被主循环的 idle 累加逻辑捕获,不重复计入。
+        if (duration <= idleThresholdMs) {
+          extraIdle += duration;
+        }
+      }
+      if (askWait > 0) {
+        turn.askQuestionWaitMs = askWait;
+        turn.idleMs += extraIdle;
+        const span = turn.endedAt - turn.startedAt;
+        turn.activeMs = Math.max(0, span - turn.idleMs);
+      }
+    }
+  }
+
   return turns;
 }
