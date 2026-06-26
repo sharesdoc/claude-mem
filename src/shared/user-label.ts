@@ -9,6 +9,24 @@ import { logger } from '../utils/logger.js';
 const SAFE_CHARS = /^[A-Za-z0-9._ -]+$/;
 
 /**
+ * Canonical, case-insensitive form of a user label.
+ *
+ * Labels are stored and compared as their UPPERCASE form everywhere — DB
+ * columns, sync payloads, ApiKeyAuth bindings, UI display. This collapses
+ * `chenzhu` / `ChenZhu` / `CHENZHU` to a single identity so the same human
+ * doesn't appear as multiple rows in /api/users, StatsPage, UserSelector,
+ * or trigger spurious "user_label mismatch" rejections in ApiKeyAuth.
+ *
+ * Empty/whitespace input falls back to 'UNKNOWN' so downstream code never
+ * has to handle the empty case.
+ */
+export function normalizeUserLabel(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return 'UNKNOWN';
+  return trimmed.toUpperCase();
+}
+
+/**
  * Resolved user label for this worker process. Cached for the life of the
  * process so we never re-evaluate (and never accidentally change identity
  * mid-session if settings.json is hand-edited while running).
@@ -35,12 +53,12 @@ export function resolveUserLabel(settingsPath?: string): string {
 
   const explicit = readSettingsValue(path, 'CLAUDE_MEM_USER_LABEL');
   if (explicit && explicit.trim().length > 0) {
-    cached = sanitize(explicit.trim());
+    cached = normalizeUserLabel(sanitize(explicit.trim()));
     return cached;
   }
 
   const fromOs = getOsUserName();
-  const fallback = sanitize(fromOs ?? 'unknown');
+  const fallback = normalizeUserLabel(sanitize(fromOs ?? 'unknown'));
 
   // Best-effort: persist so subsequent boots have a stable label even if
   // the OS user changes (e.g. user runs the worker under a service account

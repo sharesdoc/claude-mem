@@ -2,6 +2,7 @@ import { createHash } from 'crypto';
 import type { Request } from 'express';
 import type { Database } from 'bun:sqlite';
 import { logger } from '../../../utils/logger.js';
+import { normalizeUserLabel } from '../../../shared/user-label.js';
 import type { SyncAuthStrategy } from './types.js';
 
 interface ApiKeyRow {
@@ -79,11 +80,14 @@ export class ApiKeyAuth implements SyncAuthStrategy {
       : null;
 
     // Enforce user_label binding when the key has one.
+    // Comparison is case-insensitive (canonical UPPERCASE form — see
+    // normalizeUserLabel). A key bound to `CHENZHU` accepts `chenzhu` in
+    // the request body because they identify the same human.
     if (row.bound_user_label) {
       if (!bodyLabel) {
         return 'request body must include user_label';
       }
-      if (row.bound_user_label !== bodyLabel) {
+      if (normalizeUserLabel(row.bound_user_label) !== normalizeUserLabel(bodyLabel)) {
         logger.warn('SYNC_AUTH', 'ApiKeyAuth: user_label mismatch', {
           keyId: row.id,
           bound: row.bound_user_label,

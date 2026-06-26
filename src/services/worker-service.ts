@@ -1280,7 +1280,7 @@ function runServerSyncAuditCli(args: string[]): never {
     const params: (string | number)[] = [];
 
     if (options.user) {
-      conditions.push('user_label = ?');
+      conditions.push('user_label = ? COLLATE NOCASE');
       params.push(options.user);
     }
     if (options.since) {

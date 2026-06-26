@@ -111,6 +111,7 @@ export class SessionStore {
     this.ensureActivityUpdatedEpochColumn();
     this.ensureWeeklyReportsTable();
     this.ensureDailyReportsTable();
+    this.normalizeUserLabelForm();
   }
 
   /**
@@ -445,6 +446,98 @@ export class SessionStore {
     this.db.run('CREATE INDEX IF NOT EXISTS idx_daily_reports_user_date_desc ON daily_reports(user_label, report_date DESC)');
 
     this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(43, new Date().toISOString());
+  }
+
+  /**
+   * v46 — collapse user_label case variants to a single UPPERCASE identity.
+   *
+   * Background: prior to v46, user_label was stored as-typed (e.g. `chenzhu`,
+   * `ChenZhu`, `CHENZHU` could coexist). This broke /api/users aggregation,
+   * StatsPage legend, UserSelector, and ApiKeyAuth's case-sensitive binding
+   * comparison. v46 makes UPPERCASE the canonical form everywhere and
+   * merges historical variants into one identity.
+   *
+   * Order matters: sync_inbox has UNIQUE(user_label, source_table, source_uid),
+   * so we must collapse its duplicate rows FIRST (keeping the earliest by
+   * rowid), then uppercase the remaining label columns. If we uppercase
+   * first, two rows `(chenzhu, t, u)` and `(ChenZhu, t, u)` would both
+   * become `(CHENZHU, t, u)` and the second UPDATE would trip the UNIQUE
+   * constraint.
+   *
+   * Idempotent: if every row already matches UPPER(user_label), every
+   * UPDATE reports 0 changes and the migration is a no-op. The schema
+   * marker is set unconditionally so subsequent boots skip the work.
+   */
+  private normalizeUserLabelForm(): void {
+    // NOTE: v44 and v45 are already taken by ensureActivityColumns and
+    // ensureActivityUpdatedEpochColumn. This migration owns v46.
+    const applied = this.db.prepare('SELECT version FROM schema_versions WHERE version = ?').get(46) as SchemaVersion | undefined;
+    if (applied) return;
+
+    // ── 1. Dedupe tables that have a UNIQUE constraint involving user_label.
+    //    For each (UPPER(user_label), <unique-suffix>) group, keep only the
+    //    earliest row (MIN(rowid)) and delete the rest. This MUST happen
+    //    before the UPPER() UPDATE below — otherwise two rows like
+    //    (chenzhu, t, u) and (ChenZhu, t, u) would both become
+    //    (CHENZHU, t, u) and the second UPDATE would trip the UNIQUE index.
+    const uniqueTables: Array<{ table: string; suffixCols: string[] }> = [
+      { table: 'sync_inbox',      suffixCols: ['source_table', 'source_uid'] },
+      { table: 'weekly_reports',  suffixCols: ['week_start'] },
+      { table: 'daily_reports',   suffixCols: ['report_date'] },
+    ];
+    for (const t of uniqueTables) {
+      const hasTable = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(t.table) as TableNameRow | undefined;
+      if (!hasTable) continue;
+      // PRAGMA doesn't accept parameter bindings — table names are from a
+      // hard-coded allowlist above, not user input, so direct interpolation
+      // is safe here.
+      const cols = this.db.query(`PRAGMA table_info(${t.table})`).all() as TableColumnInfo[];
+      if (!cols.some(c => c.name === 'user_label')) continue;
+      // Only run if every suffix column exists (defensive against partial schemas).
+      if (!t.suffixCols.every(sc => cols.some(c => c.name === sc))) continue;
+
+      const dedup = this.db.prepare(`
+        DELETE FROM ${t.table}
+        WHERE rowid NOT IN (
+          SELECT MIN(rowid) FROM ${t.table}
+          GROUP BY UPPER(user_label), ${t.suffixCols.join(', ')}
+        )
+      `).run();
+      if (dedup.changes > 0) {
+        logger.debug('DB', `v46: deduped ${dedup.changes} ${t.table} rows by (UPPER(user_label), ${t.suffixCols.join(', ')})`);
+      }
+    }
+
+    // ── 2. Uppercase every label column in place. Each UPDATE only touches
+    //    rows whose label is not already uppercase, so the migration is
+    //    idempotent.
+    const labelUpdates: Array<{ table: string; column: string; nullable: boolean }> = [
+      { table: 'sdk_sessions',      column: 'user_label',        nullable: true  },
+      { table: 'observations',      column: 'user_label',        nullable: false },
+      { table: 'session_summaries', column: 'user_label',        nullable: false },
+      { table: 'daily_reports',     column: 'user_label',        nullable: false },
+      { table: 'weekly_reports',    column: 'user_label',        nullable: false },
+      { table: 'sync_inbox',        column: 'user_label',        nullable: false },
+    ];
+    const hasApiKeys = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='api_keys'").get() as TableNameRow | undefined;
+    if (hasApiKeys) labelUpdates.push({ table: 'api_keys', column: 'bound_user_label', nullable: true });
+
+    for (const u of labelUpdates) {
+      const hasTable = this.db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = ?").get(u.table) as TableNameRow | undefined;
+      if (!hasTable) continue;
+      const cols = this.db.query(`PRAGMA table_info(${u.table})`).all() as TableColumnInfo[];
+      if (!cols.some(c => c.name === u.column)) continue;
+
+      const notNullPred = u.nullable ? `${u.column} IS NOT NULL` : `${u.column} != ''`;
+      const result = this.db.prepare(
+        `UPDATE ${u.table} SET ${u.column} = UPPER(${u.column}) WHERE ${notNullPred} AND ${u.column} != UPPER(${u.column})`
+      ).run();
+      if (result.changes > 0) {
+        logger.debug('DB', `v46: uppercased ${result.changes} ${u.table}.${u.column} rows`);
+      }
+    }
+
+    this.db.prepare('INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)').run(46, new Date().toISOString());
   }
 
   /**

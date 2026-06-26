@@ -107,7 +107,8 @@ describe('POST /api/sync/ingest', () => {
       expect(json.next_watermark.sessions).toBe(1);
 
       const row = db.prepare("SELECT user_label FROM sdk_sessions WHERE content_session_id = 'c1'").get() as { user_label: string };
-      expect(row.user_label).toBe('alice');
+      // X-007: sync ingest canonicalizes user_label to UPPERCASE.
+      expect(row.user_label).toBe('ALICE');
     } finally {
       await close();
     }

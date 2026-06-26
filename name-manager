@@ -162,8 +162,12 @@ if [[ "$mode" == "rename" ]]; then
     exit 1
   fi
 
+  # Canonical form is UPPERCASE (see src/shared/user-label.ts normalizeUserLabel).
+  # We coerce both sides to UPPER so the script agrees with worker writes
+  # and the v44 migration regardless of what the operator typed.
   OLD_LOWER="$(echo "$oldname" | tr '[:upper:]' '[:lower:]')"
   NEW_LOWER="$(echo "$newname" | tr '[:upper:]' '[:lower:]')"
+  newname="$(echo "$newname" | tr '[:lower:]' '[:upper:]')"
   OLD_SQL="$(sql_escape "$oldname")"
   NEW_SQL="$(sql_escape "$newname")"
 
@@ -172,8 +176,8 @@ if [[ "$mode" == "rename" ]]; then
   fi
 
   echo ""
-  echo "  Old label : ${YELLOW}${oldname}${RESET}"
-  echo "  New label : ${GREEN}${newname}${RESET}"
+  echo "  Old label : ${YELLOW}${oldname}${RESET} (matched case-insensitively)"
+  echo "  New label : ${GREEN}${newname}${RESET} (canonical UPPERCASE form)"
   echo ""
 
   # ── 1. Update settings.json ─────────────────────────────────────────

@@ -106,9 +106,12 @@ export function PromptCard({ prompt, onDeleted }: PromptCardProps) {
            ) : (ptDisplay === 'cancelled') ? (
             <span className="meta-processing-time meta-cancelled"> · {t('prompt.cancelled')}</span>
           ) : null}
-          {(prompt.user_label || prompt.user_name) && (
-            <span className="meta-user-label" title={t('card.userLabelTip')}>  {prompt.user_label || prompt.user_name}</span>
-          )}
+          {(() => {
+            const label = prompt.user_label || prompt.user_name;
+            return label ? (
+              <span className="meta-user-label" title={t('card.userLabelTip')}>  {label.toUpperCase()}</span>
+            ) : null;
+          })()}
         </span>
         {copied && (
           <span className="prompt-meta-copied" role="status" aria-live="polite">

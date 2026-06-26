@@ -112,7 +112,7 @@ export class PaginationHelper {
     }
     if (userLabel) {
       // T-20: filter by sync identity. JOIN already in place via s.* alias.
-      conditions.push('s.user_label = ?');
+      conditions.push('s.user_label = ? COLLATE NOCASE');
       params.push(userLabel);
     }
     if (conditions.length > 0) {
@@ -190,7 +190,7 @@ export class PaginationHelper {
       params.push(dateEndEpoch);
     }
     if (userLabel) {
-      conditions.push('s.user_label = ?');
+      conditions.push('s.user_label = ? COLLATE NOCASE');
       params.push(userLabel);
     }
 
@@ -268,7 +268,7 @@ export class PaginationHelper {
       params.push(dateEndEpoch);
     }
     if (userLabel) {
-      conditions.push('s.user_label = ?');
+      conditions.push('s.user_label = ? COLLATE NOCASE');
       params.push(userLabel);
     }
     conditions.push(`

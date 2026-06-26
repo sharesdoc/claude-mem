@@ -1,4 +1,40 @@
 
+### X-007 user_label 大小写不敏感、UI 统一大写展示、冲突合并去重
+
+- 编号：X-007
+- 任务类型：需求（小需求）
+- 严重程度：P2
+- 状态：已完成-待验证
+- 来源：用户需求（2026-06-27）
+- 所属计划项：无（独立 fix）
+- 任务描述：`user_label` 当前在 DB 中以任意大小写形式存储（如 `chenzhu` / `ChenZhu` / `CHENZHU` 同时存在），导致同一人在 `/api/users` 聚合、StatsPage 图例、UserSelector 下拉中出现多条目；`name-manager -r chenzhu ChenZhu` 在目标已存在时静默合并且不归一字面；ApiKeyAuth 比对大小写敏感（`ChenZhu` 与 `chenzhu` 互拒）；UI 卡片显示原始大小写不统一。期望：(1) 大小写不敏感（视为同一身份）；(2) UI 统一展示大写；(3) 冲突时数据合并到同一身份且去重。
+- 涉及文件与行号：
+  - 写入入口：`src/shared/user-label.ts`（新增 `normalizeUserLabel`，`resolveUserLabel` 归一）、`src/services/sqlite/sessions/create.ts:71,82,92`、`src/services/sqlite/SessionStore.ts:524,2188,2199`、`src/services/sqlite/transactions.ts:37,88`、`src/services/worker/http/routes/SyncRoutes.ts`（新增 `normalizePayloadLabels`）
+  - 查询/比对：`src/services/worker/PaginationHelper.ts:115,193,271`、`src/services/worker-service.ts:1283`、`src/services/worker/http/routes/DataRoutes.ts:600,652`（补 `COLLATE NOCASE`）、`src/services/sync/auth/ApiKeyAuth.ts:86`（双侧归一比对）、`src/server/auth/api-key-service.ts:56`（写 bound_user_label 归一）
+  - 数据迁移：`src/services/sqlite/SessionStore.ts` 新增 `normalizeUserLabelForm`（v46，先 dedupe 含 UNIQUE 约束的表再 UPPER 化全部 label 列）
+  - UI 显示/过滤：`src/ui/viewer/App.tsx:76-93,115-118`、`src/ui/viewer/components/PromptCard.tsx:109-115`、`SummaryCard.tsx:66`、`ObservationCard.tsx:124`、`StatsPage.tsx:200,1107`
+  - 工具：`name-manager`（rename 输出强制 UPPERCASE）
+- 关联需求：N/A
+- 根因分析（需求类）/ 现状依据：当前 `user_label` 列无 UNIQUE 约束也无 COLLATE NOCASE 默认排序规则，多处写入路径透传任意大小写字面；查询侧 `DataRoutes.ts` 部分位置已用 `COLLATE NOCASE`，但 `PaginationHelper`/`worker-service`/`DataRoutes.handleGetProjectStats`/`ApiKeyAuth` 未对齐；UI 仅 `ProjectSidebar.tsx:297-303` 显式 `toUpperCase()`。统一规范形式定为「大写」是最简方案——UI 零改动展示一致，sync_inbox UNIQUE 约束在归一后天然满足。
+- 实现/解决方案：
+  (1) `src/shared/user-label.ts` 新增并导出 `normalizeUserLabel(s)` = trim + toUpperCase，`resolveUserLabel()` 返回值与 fallback 都过 normalize。
+  (2) sync 入口 `SyncRoutes.ts.normalizePayloadLabels`：对 `payload.user_label`/sessions/observations/summaries/prompts 的 `user_label` 字段在 UPSERT 前归一（prompts 当前 schema 无此字段，做防御处理）。
+  (3) 新增 v46 迁移（`SessionStore.normalizeUserLabelForm`）：先按 `(UPPER(user_label), <unique 后缀>)` dedupe `sync_inbox`/`weekly_reports`/`daily_reports`（保留最小 rowid，避免 UNIQUE 冲突），再对 7 张表的 label 列 UPDATE 为 UPPER，幂等。版本号选 v46 是因为 v44/v45 已被 `ensureActivityColumns` / `ensureActivityUpdatedEpochColumn` 占用（rev 审查 B1 指出的冲突）。
+  (4) `api-key-service.ts:56` 写入前 normalize；`ApiKeyAuth.ts:86` 比对改为 `normalizeUserLabel(bound) !== normalizeUserLabel(body)`。
+  (5) `DataRoutes.handleGetProjectStats` 的两处 `s.user_label = ?` 补 `COLLATE NOCASE`（rev 审查 I2）。
+  (6) UI：`App.tsx` SSE 聚合 / 客户端过滤全部 `.toUpperCase()`；`PromptCard`/`SummaryCard`/`ObservationCard`/`StatsPage` 显示走 `.toUpperCase()`。
+  (7) `name-manager` rename 输出统一大写并加注释说明规范化策略。
+- 验收/测试方法：
+  (1) 单测 `tests/shared/user-label.test.ts`：`normalizeUserLabel` 大小写归一 + 边界（6 用例）。
+  (2) 单测 `tests/sqlite/user-label-normalization.test.ts`：v46 dedupe + UPPER + 幂等 + 标记版本号（3 用例）。
+  (3) `tests/sync-auth.test.ts` 追加：ApiKeyAuth 接受 `chenzhu`/`CHENZHU` 大小写变体；拒绝 `ChenZhu2`（真正不同）。
+  (4) `tests/admin-role.test.ts`、`tests/sync-routes.test.ts`：更新期望为 UPPERCASE 形式。
+  (5) `npm run typecheck` 通过；`npm run build` 通过；全量 `bun test` 与基线 diff 无新增失败。
+- git commit ID：（待回填）
+- 验证方法与结果：`npm run typecheck` 通过；`npm run build` 通过；新增 11 个测试全通过；全量 `bun test` 1997 → 2001 用例，与基线 diff 显示 **0 个新增失败**（基线已有 102 fail 与本次改动无关）。rev 审查发现的 🔴B1（v44 版本号冲突，已改 v46）/ 🟡I1（normalizePayloadLabels 漏 prompts，已补）/ 🟡I2（DataRoutes 两处漏 NOCASE，已补）三处全部修复并复测通过。
+- 关闭时间：（待回填）
+- 涉及文档刷新：无 A-F/G/H 体系，免 ree 刷新。
+
 ### X-005 server 模式本地回环访问需手动登录，缺本地自动登录能力与开关
 
 - 编号：X-005

@@ -13,6 +13,7 @@ import type { SSEBroadcaster } from '../../SSEBroadcaster.js';
 import { shouldEmitProjectRow } from '../../../../shared/should-track-project.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
+import { normalizeUserLabel } from '../../../../shared/user-label.js';
 
 /**
  * T-09 — POST /api/sync/ingest (server-only).
@@ -192,7 +193,7 @@ export class SyncRoutes extends BaseRouteHandler {
       return;
     }
 
-    const { applied, nextWatermark, inserted } = this.applyBatch(payload);
+    const { applied, nextWatermark, inserted } = this.applyBatch(this.normalizePayloadLabels(payload));
     res.json({
       applied,
       next_watermark: nextWatermark,
@@ -200,6 +201,34 @@ export class SyncRoutes extends BaseRouteHandler {
 
     this.broadcastBatchEvents(payload, inserted);
   });
+
+  /**
+   * Normalize every user_label in a sync payload to its canonical UPPERCASE
+   * form so a client pushing `chenzhu` and another pushing `ChenZhu` land on
+   * the same identity. Operates in-place AND returns the payload for
+   * ergonomic chaining at the call site.
+   */
+  private normalizePayloadLabels<T extends SyncIngestPayload>(payload: T): T {
+    if (payload.user_label) {
+      payload.user_label = normalizeUserLabel(payload.user_label);
+    }
+    for (const s of payload.sessions ?? []) {
+      if (s.user_label) s.user_label = normalizeUserLabel(s.user_label);
+    }
+    for (const o of payload.observations ?? []) {
+      if (o.user_label) o.user_label = normalizeUserLabel(o.user_label);
+    }
+    for (const s of payload.summaries ?? []) {
+      if (s.user_label) s.user_label = normalizeUserLabel(s.user_label);
+    }
+    // prompts' schema currently omits user_label, but recordInbox uses
+    // payload.user_label directly — already normalized above. Defense-in-depth:
+    // if prompts grow a user_label field later, normalize it too.
+    for (const pr of (payload.prompts ?? []) as Array<{ user_label?: string | null }>) {
+      if (pr.user_label) pr.user_label = normalizeUserLabel(pr.user_label);
+    }
+    return payload;
+  }
 
   /**
    * Apply the whole batch inside one transaction so partial failures

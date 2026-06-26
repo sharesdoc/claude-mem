@@ -197,7 +197,7 @@ function LineChart({ title, series, svgW, svgH, svgPadding, plotW, plotH, lineCh
               <label key={s.user_label} className="stats-user-legend-item">
                 <input type="checkbox" className="stats-legend-checkbox" checked={!hiddenUsers.has(s.user_label)}
                   onChange={() => onToggleUser(s.user_label)} />
-                <span style={{ color: s.color, fontWeight: 500 }}>{s.user_label}</span>
+                <span style={{ color: s.color, fontWeight: 500 }}>{s.user_label.toUpperCase()}</span>
               </label>
             ))}
           </div>
@@ -1104,7 +1104,7 @@ export function StatsPage({ currentFilter, userLabelFilter }: StatsPageProps) {
                   <tbody>
                     {userSummary.map(row => (
                       <tr key={row.user_label}>
-                        <td>{row.user_label}</td>
+                        <td>{row.user_label.toUpperCase()}</td>
                         <td className="stats-num-col">{row.projectCount}</td>
                         <td className="stats-num-col">{formatNumber(row.prompts)}</td>
                         <td className="stats-num-col">{formatNumber(Math.round(row.prompts / Math.max(bizDays, 1)))}</td>

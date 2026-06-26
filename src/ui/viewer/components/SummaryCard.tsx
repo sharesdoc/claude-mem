@@ -63,7 +63,7 @@ export function SummaryCard({ summary }: SummaryCardProps) {
         </time>
         {summary.user_label ? (
           <>
-            <span className="meta-user-label" title={t('card.userLabelTip')}>  {summary.user_label}</span>
+            <span className="meta-user-label" title={t('card.userLabelTip')}>  {summary.user_label.toUpperCase()}</span>
             {summary.user_name && summary.user_name !== summary.user_label && (
               <span className="meta-user" title={t('card.userNameTip')}>  {summary.user_name}</span>
             )}

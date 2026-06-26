@@ -3,6 +3,7 @@
 import { createHash, randomBytes } from 'crypto';
 import { Database } from 'bun:sqlite';
 import { AuthRepository, ensureServerStorageSchema } from '../../storage/sqlite/index.js';
+import { normalizeUserLabel } from '../../shared/user-label.js';
 import type { ApiKey } from '../../core/schemas/auth.js';
 
 export interface CreatedServerApiKey {
@@ -52,10 +53,13 @@ export function createServerApiKey(db: Database, input: CreateServerApiKeyInput)
   });
 
   // T-29: bind the key to a sync user_label when specified.
+  // Canonicalize to UPPERCASE so ApiKeyAuth's case-insensitive comparison
+  // and DB-stored form agree.
   if (input.boundUserLabel) {
+    const normalized = normalizeUserLabel(input.boundUserLabel);
     db.prepare('UPDATE api_keys SET bound_user_label = ? WHERE id = ?')
-      .run(input.boundUserLabel, record.id);
-    (record as Record<string, unknown>).boundUserLabel = input.boundUserLabel;
+      .run(normalized, record.id);
+    (record as Record<string, unknown>).boundUserLabel = normalized;
   }
 
   repo.createAuditLog({

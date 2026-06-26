@@ -165,4 +165,37 @@ describe('ApiKeyAuth', () => {
     const reason = await auth.authenticate(req);
     expect(reason).toContain('different user_label');
   });
+
+  it('X-007: accepts case variants of bound_user_label (chenzhu == CHENZHU)', async () => {
+    const { createHash } = await import('crypto');
+    const rawKey = 'cmem_case1234567890abcdef1234567890ab';
+    const hash = createHash('sha256').update(rawKey).digest('hex');
+    // Key bound to UPPERCASE form (the canonical form persisted post-v44).
+    db.prepare(`
+      INSERT INTO api_keys (id, name, key_hash, status, bound_user_label, created_at_epoch, updated_at_epoch)
+      VALUES ('k4', 'case-insensitive', ?, 'active', 'CHENZHU', 1, 1)
+    `).run(hash);
+
+    const auth = new ApiKeyAuth(() => db);
+    // Client pushes lowercase — same human, must pass.
+    const req = mockReq({ user_label: 'chenzhu' }, { authorization: `Bearer ${rawKey}` });
+    const reason = await auth.authenticate(req);
+    expect(reason).toBeNull();
+    expect(req.syncContext?.authenticatedUserLabel).toBe('chenzhu');
+  });
+
+  it('X-007: rejects labels that differ by more than case', async () => {
+    const { createHash } = await import('crypto');
+    const rawKey = 'cmem_diff1234567890abcdef1234567890ab';
+    const hash = createHash('sha256').update(rawKey).digest('hex');
+    db.prepare(`
+      INSERT INTO api_keys (id, name, key_hash, status, bound_user_label, created_at_epoch, updated_at_epoch)
+      VALUES ('k5', 'strict', ?, 'active', 'CHENZHU', 1, 1)
+    `).run(hash);
+
+    const auth = new ApiKeyAuth(() => db);
+    const req = mockReq({ user_label: 'ChenZhu2' }, { authorization: `Bearer ${rawKey}` });
+    const reason = await auth.authenticate(req);
+    expect(reason).toContain('different user_label');
+  });
 });

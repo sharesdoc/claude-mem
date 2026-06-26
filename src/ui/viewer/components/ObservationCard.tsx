@@ -121,7 +121,7 @@ export function ObservationCard({ observation }: ObservationCardProps) {
           #{observation.id} • {date}
           {observation.user_label ? (
             <>
-              <span className="meta-user-label" title={t('card.userLabelTip')}>  {observation.user_label}</span>
+              <span className="meta-user-label" title={t('card.userLabelTip')}>  {observation.user_label.toUpperCase()}</span>
               {observation.user_name && observation.user_name !== observation.user_label && (
                 <span className="meta-user" title={t('card.userNameTip')}>  {observation.user_name}</span>
               )}

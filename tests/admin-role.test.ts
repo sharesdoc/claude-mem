@@ -61,7 +61,8 @@ describe('GET /api/admin/role', () => {
       expect(r.status).toBe(200);
       const body = await r.json();
       expect(body.role).toBe('client');
-      expect(body.userLabel).toBe('johnson');
+      // X-007: user_label is canonicalized to UPPERCASE everywhere.
+      expect(body.userLabel).toBe('JOHNSON');
     } finally {
       await close();
     }
@@ -75,7 +76,8 @@ describe('GET /api/admin/role', () => {
     try {
       const body = await fetch(`${url}/api/admin/role`).then(r => r.json());
       expect(body.role).toBe('server');
-      expect(body.userLabel).toBe('boss');
+      // X-007: canonical UPPERCASE form.
+      expect(body.userLabel).toBe('BOSS');
     } finally {
       await close();
     }

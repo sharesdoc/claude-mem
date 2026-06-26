@@ -597,7 +597,7 @@ export class DataRoutes extends BaseRouteHandler {
       dateParams.push(dateEnd);
     }
     if (userLabel !== undefined) {
-      dateConds.push('s.user_label = ?');
+      dateConds.push('s.user_label = ? COLLATE NOCASE');
       dateParams.push(userLabel);
     }
     const userJoin = userLabel !== undefined ? ' JOIN sdk_sessions s ON s.memory_session_id = o.memory_session_id' : '';
@@ -649,7 +649,7 @@ export class DataRoutes extends BaseRouteHandler {
       promptParams.push(dateEnd);
     }
     if (userLabel !== undefined) {
-      promptConds.push('s.user_label = ?');
+      promptConds.push('s.user_label = ? COLLATE NOCASE');
       promptParams.push(userLabel);
     }
     const dateWherePromptsExtra = promptConds.length ? ' AND ' + promptConds.join(' AND ') : '';

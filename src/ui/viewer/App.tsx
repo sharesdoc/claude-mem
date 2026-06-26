@@ -75,17 +75,22 @@ export function App() {
   // Server mode supplements with the /api/users endpoint.
   const pickerUsers = useMemo(() => {
     // Collect unique user_labels from observations / summaries / prompts
-    // and the server user list.
-    const seen = new Set(serverUsers.users.map(u => u.user_label));
-    for (const o of observations) { if (o.user_label) seen.add(o.user_label); }
-    for (const s of summaries) { if (s.user_label) seen.add(s.user_label); }
-    for (const p of prompts) { if (p.user_label) seen.add(p.user_label); }
-    // Also include the operator's own label
-    if (role.userLabel) seen.add(role.userLabel);
+    // and the server user list. Normalize to UPPERCASE so case variants of
+    // the same identity collapse into a single picker entry.
+    const seen = new Set<string>();
+    const add = (raw?: string | null) => {
+      if (raw && raw.trim()) seen.add(raw.trim().toUpperCase());
+    };
+    for (const u of serverUsers.users) add(u.user_label);
+    for (const o of observations) add(o.user_label);
+    for (const s of summaries) add(s.user_label);
+    for (const p of prompts) add(p.user_label);
+    add(role.userLabel);
+    const serverByUpper = new Map(serverUsers.users.map(u => [u.user_label.toUpperCase(), u]));
     return Array.from(seen).sort().map(label => ({
       user_label: label,
-      sessions: serverUsers.users.find(u => u.user_label === label)?.sessions ?? 0,
-      last_active: serverUsers.users.find(u => u.user_label === label)?.last_active ?? null,
+      sessions: serverByUpper.get(label)?.sessions ?? 0,
+      last_active: serverByUpper.get(label)?.last_active ?? null,
     }));
   }, [serverUsers.users, observations, summaries, prompts, role.userLabel]);
   const { status: syncStatus, ready: syncStatusReady } = useSyncStatus();
@@ -112,7 +117,10 @@ export function App() {
       // T-22: paginated API data is already server-filtered and does not
       // carry user_label in the response. Only filter SSE data which
       // broadcasts globally and explicitly includes user_label.
-      if (userLabelFilter && item.user_label != null && item.user_label !== userLabelFilter) return false;
+      // Compare case-insensitively so a SSE delta carrying `ChenZhu` still
+      // matches a filter set as `CHENZHU`.
+      if (userLabelFilter && item.user_label != null
+          && item.user_label.toUpperCase() !== userLabelFilter.toUpperCase()) return false;
       return true;
     },
     [currentFilter, dayBounds, userLabelFilter]
