@@ -91,7 +91,7 @@
 - 编号：X-003
 - 标题：viewer 首屏全失败后永久"暂无内容"，无自动恢复
 - 严重程度：P2
-- 状态：已修复-待验证
+- 状态：已验证-关闭
 - 来源：rev（第三轮代码审查报告 R-001）
 - 问题描述：X-002 修复后，`isLoading` 不再永久卡死，但**首屏三个 endpoint 全部失败**（worker 重启未就绪的典型场景）时，失败不 append 数据 → `items.length===0` 命中 `Feed.tsx:78` 的空状态分支显示"暂无内容"；sentinel 渲染要求 `items.length>0`（`Feed.tsx:89`）故 observer 永不挂载；首屏加载由 `App.tsx:235` 的 `useEffect` 触发、不依赖 observer → worker 就绪后没有任何自动或手动重试路径，页面永久停在"暂无内容"，需用户手动切 filter / 改日期 / 刷新才能恢复。卡死症状从"永久 spinner"变形为"永久空状态"。
 - 影响范围：所有 viewer 用户在 worker 重启后首屏全失败的场景。数据不丢失，但体验上等同于"无数据"，误导性强。
@@ -125,6 +125,8 @@
   - `npm run typecheck:viewer` → 仅 1 个 TS7006 `App.tsx setters[i](prev=>)`；经 `git stash` 回 X-002 baseline 对比，baseline 在 `App.tsx:223` 报同一错误，确认为 X-002 引入的预先存在错误（即 X-004 / rev R-002），**与本修复无关**；X-003 自身代码零新增类型错误
   - 手动复现步骤见"测试方法"（需真实 worker 重启场景，留待用户实测）
 - 验证结果：通过（X-003 范围内）。typecheck 除 baseline X-004 外无新增错误；代码逻辑逐边界审查通过（全失败→自动重试 3 次→兜底；重试中出数据→停止；手动重试→重置计数；部分成功→不介入）
+- 关闭时间：2026-06-27 13:19
+- 提交：1b1f3c5d
 
 ## X-004 handleLoadMore setters/results/dataTypes 三数组类型不安全（TS7006）
 
