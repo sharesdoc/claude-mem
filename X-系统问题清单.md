@@ -48,4 +48,40 @@
   - `bunx tsc --noEmit` → 仅 4 个 QwenProvider 既有错误（零重叠本修复涉及的 payload/sync-state/SyncAgent）
 - 验证结果：通过。3 条同毫秒并列回填 + batchSize=2 场景，多轮全推 `[1,2,3]`，不再漏推 id=3；复合水位 `(epoch, id)` 正确推进至 `(5000, 3)`
 - 关闭时间：2026-06-18 06:35
-- 提交：&lt;TBD&gt;
+- 提交：67bc639a
+
+## X-002 viewer 重启后首次加载卡死在 "Loading more..." spinner
+
+- 编号：X-002
+- 标题：viewer 重启后首次加载卡死在 "Loading more..." spinner
+- 严重程度：P2
+- 状态：已修复-待验证
+- 来源：fix
+- 问题描述：系统重启后打开 viewer 页面，worker 进程未完全就绪时，viewer 首次分页 API 调用（`/api/observations`、`/api/summaries`、`/api/prompts`）因连接拒绝/超时失败，导致 `isLoading` 状态被设为 `true` 后永不重置为 `false`。页面永久显示 "Loading more..." spinner 动画，且 IntersectionObserver sentinel div 因 `isLoading` 条件不满足而永不渲染，阻塞后续自动重试。刷新页面后 worker 已就绪则正常。
+- 影响范围：所有 viewer 用户在 worker 重启（含系统重启）后的首次访问体验。数据不丢失，刷新即可恢复。
+- 涉及文件与行号：
+  - `src/ui/viewer/hooks/usePagination.ts:84-107`（loadMore 中 fetch 失败无异常处理，isLoading 泄露）
+  - `src/ui/viewer/App.tsx:206-226`（handleLoadMore 中 Promise.all catch 只 log 不恢复状态，且一损俱损）
+  - `src/ui/viewer/components/Feed.tsx:37-38,89`（observer 和 sentinel 均受 isLoading 阻塞）
+- 关联需求：N/A
+- 根因分析（5-Why）：
+  - 现象：系统重启后 viewer 卡在 "Loading more..."
+  - Why-1：isLoading 被设为 true 后再也没有变回 false → `usePagination.ts:62-63` 设 true，但无错误路径设回 false
+  - Why-2：API 调用抛异常后，状态恢复代码（`isLoading=false`）从未执行 → `usePagination.ts:84-107` fetch/response.json 在 try-catch 外
+  - Why-3：handleLoadMore 的 catch 块只 log 错误，不恢复 pagination 状态 → `App.tsx:223-224`
+  - Why-4：Promise.all 导致任意一个 endpoint 失败时三个 endpoint 结果全丢弃 → `App.tsx:208-212`
+  - 根因：`loadMore` 缺少错误路径的状态恢复逻辑——isLoading 只设 true 不设 false；同时 `Promise.all` 使三个独立数据源的错误相互污染
+- 解决方案：
+  1. `usePaginationFor.loadMore`：将 fetch→状态恢复→返回数据的代码路径包裹在 try-catch 中，catch 块中重置 `isLoading=false` 后重新抛出错误
+  2. `handleLoadMore`：`Promise.all` 改为 `Promise.allSettled`，每个 endpoint 独立处理成功/失败，一个失败不影响其他两个的数据追加
+- 测试方法：
+  - (1) 步骤：停止 worker 服务 → 打开 viewer → 观察 spinner 行为 → 启动 worker → 滚动触发 IntersectionObserver
+  - (2) 预期：worker 不可用时 spinner 短暂出现后消失（而非永久卡住）；worker 就绪后滚动页面可自动加载数据
+  - (3) 边界：三个 endpoint 全部失败 → 三个 isLoading 全部复位、spinner 消失；单个 endpoint 失败 → 其他两个正常加载、失败的有错误日志但不阻塞 UI；连续多次失败 → 每次都能重试而非死锁
+- 实际修改：
+  - `src/ui/viewer/hooks/usePagination.ts:84-117`：添加 try-catch，错误时重置 `isLoading=false`
+  - `src/ui/viewer/App.tsx:206-229`：`Promise.all` → `Promise.allSettled`，独立处理三个 endpoint
+- 验证方法：构建通过（`npm run build-and-sync` 全部 target 编译成功）；代码逻辑审查逐边界验证通过（8 个场景全覆盖）
+- 验证结果：构建产物一致，边界分析全部通过
+- 关闭时间：TBD
+- 提交：TBD

@@ -81,30 +81,40 @@ function usePaginationFor<TItem extends DataItem>(
       params.append('userLabel', userLabel);
     }
 
-    const response = await authFetch(`${endpoint}?${params}`);
+    try {
+      const response = await authFetch(`${endpoint}?${params}`);
 
-    if (!response.ok) {
-      throw new Error(`Failed to load ${dataType}: ${response.statusText}`);
+      if (!response.ok) {
+        throw new Error(`Failed to load ${dataType}: ${response.statusText}`);
+      }
+
+      const data = await response.json() as { items: TItem[], hasMore: boolean };
+
+      const nextState = {
+        ...stateRef.current,
+        isLoading: false,
+        hasMore: data.hasMore
+      };
+      stateRef.current = nextState;
+
+      setState(prev => ({
+        ...prev,
+        isLoading: false,
+        hasMore: data.hasMore
+      }));
+
+      offsetRef.current += UI.PAGINATION_PAGE_SIZE;
+
+      return data.items;
+    } catch (error) {
+      // Reset isLoading on error so the pagination guard allows future retries.
+      // Without this, a transient failure (e.g. worker not ready after restart)
+      // leaves isLoading permanently true, the Feed spinner spins forever, and
+      // the IntersectionObserver sentinel never re-renders to trigger a retry.
+      stateRef.current = { ...stateRef.current, isLoading: false };
+      setState(prev => ({ ...prev, isLoading: false }));
+      throw error;
     }
-
-    const data = await response.json() as { items: TItem[], hasMore: boolean };
-
-    const nextState = {
-      ...stateRef.current,
-      isLoading: false,
-      hasMore: data.hasMore
-    };
-    stateRef.current = nextState;
-
-    setState(prev => ({
-      ...prev,
-      isLoading: false,
-      hasMore: data.hasMore
-    }));
-
-    offsetRef.current += UI.PAGINATION_PAGE_SIZE;
-
-    return data.items;
   }, [currentFilter, dateBounds?.start, dateBounds?.end, userLabel, endpoint, dataType]);
 
   return {

@@ -204,24 +204,27 @@ export function App() {
   }, []);
 
   const handleLoadMore = useCallback(async () => {
-    try {
-      const [newObservations, newSummaries, newPrompts] = await Promise.all([
-        pagination.observations.loadMore(),
-        pagination.summaries.loadMore(),
-        pagination.prompts.loadMore()
-      ]);
+    const results = await Promise.allSettled([
+      pagination.observations.loadMore(),
+      pagination.summaries.loadMore(),
+      pagination.prompts.loadMore()
+    ]);
 
-      if (newObservations.length > 0) {
-        setPaginatedObservations(prev => [...prev, ...newObservations]);
+    // Each data type is independent — one failing should not discard the
+    // results of the other two.  usePaginationFor already resets isLoading
+    // on error so the guard allows future retries for the failed endpoint.
+    const dataTypes = ['observations', 'summaries', 'prompts'] as const;
+    const setters = [setPaginatedObservations, setPaginatedSummaries, setPaginatedPrompts] as const;
+
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === 'fulfilled') {
+        if (result.value.length > 0) {
+          setters[i](prev => [...prev, ...result.value]);
+        }
+      } else {
+        console.error(`Failed to load ${dataTypes[i]}:`, result.reason);
       }
-      if (newSummaries.length > 0) {
-        setPaginatedSummaries(prev => [...prev, ...newSummaries]);
-      }
-      if (newPrompts.length > 0) {
-        setPaginatedPrompts(prev => [...prev, ...newPrompts]);
-      }
-    } catch (error) {
-      console.error('Failed to load more data:', error);
     }
   }, [pagination.observations, pagination.summaries, pagination.prompts]);
 
