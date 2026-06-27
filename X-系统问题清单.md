@@ -55,7 +55,7 @@
 - 编号：X-002
 - 标题：viewer 重启后首次加载卡死在 "Loading more..." spinner
 - 严重程度：P2
-- 状态：已修复-待验证
+- 状态：已验证-关闭
 - 来源：fix
 - 问题描述：系统重启后打开 viewer 页面，worker 进程未完全就绪时，viewer 首次分页 API 调用（`/api/observations`、`/api/summaries`、`/api/prompts`）因连接拒绝/超时失败，导致 `isLoading` 状态被设为 `true` 后永不重置为 `false`。页面永久显示 "Loading more..." spinner 动画，且 IntersectionObserver sentinel div 因 `isLoading` 条件不满足而永不渲染，阻塞后续自动重试。刷新页面后 worker 已就绪则正常。
 - 影响范围：所有 viewer 用户在 worker 重启（含系统重启）后的首次访问体验。数据不丢失，刷新即可恢复。
@@ -83,5 +83,5 @@
   - `src/ui/viewer/App.tsx:206-229`：`Promise.all` → `Promise.allSettled`，独立处理三个 endpoint
 - 验证方法：构建通过（`npm run build-and-sync` 全部 target 编译成功）；代码逻辑审查逐边界验证通过（8 个场景全覆盖）
 - 验证结果：构建产物一致，边界分析全部通过
-- 关闭时间：TBD
-- 提交：TBD
+- 关闭时间：2026-06-27 11:28
+- 提交：654a87d4
