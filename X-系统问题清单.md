@@ -133,7 +133,7 @@
 - 编号：X-004
 - 标题：handleLoadMore setters/results/dataTypes 三数组类型不安全（TS7006）
 - 严重程度：P3
-- 状态：已修复-待验证
+- 状态：已验证-关闭
 - 来源：rev（R-002）；X-003 验证时 typecheck 暴露
 - 问题描述：`App.tsx` handleLoadMore 用 `dataTypes`/`setters`/`results` 三个并行数组靠相同下标隐式对应。`setters` 为 `as const` tuple，`setters[i]`（i: number）退化为三个 `Dispatch<SetStateAction<T[]>>` 的 union，调用 `setters[i](prev => ...)` 时 TS 无法从 union 反推 `prev` 类型 → `prev` 隐式 any → `typecheck:viewer` 报 TS7006。X-002（654a87d4）引入此代码但验证仅跑 build、未跑 `typecheck:viewer`，故潜伏至今。
 - 影响范围：`typecheck:viewer` 不干净（1 个错误）；运行时正确（顺序对人），但演化时新增 endpoint 漏改数组会越界且无编译期保护。
@@ -151,3 +151,5 @@
 - 测试方法：`npm run typecheck:viewer` → 0 错误（修复后；修复前 baseline 报 1 个 TS7006）
 - 验证方法：`npm run typecheck:viewer`
 - 验证结果：通过。`npm run typecheck:viewer` → EXIT=0，**0 错误**（修复前 baseline 报 1 个 TS7006 `App.tsx setters[i](prev=>)`，已消除）
+- 关闭时间：2026-06-27 13:30
+- 提交：80f17a8c
