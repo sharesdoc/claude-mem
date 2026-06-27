@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Header } from './components/Header';
 import { Feed } from './components/Feed';
 import { ContextSettingsModal } from './components/ContextSettingsModal';
@@ -33,6 +33,14 @@ function readInitialViewMode(): ViewMode {
   }
   return 'prompts';
 }
+
+/**
+ * X-003 — first-load auto-retry backoff schedule (ms). When the worker is not
+ * yet ready after a restart, the initial page fetch fails for all three
+ * endpoints; these delays drive automatic retries before falling back to a
+ * manual "Retry" button rendered by the Feed.
+ */
+const FIRST_LOAD_RETRY_DELAYS = [1000, 3000, 8000];
 
 export function App() {
   const [currentFilter, setCurrentFilter] = useState('');
@@ -109,6 +117,14 @@ export function App() {
   }, [dateFilter]);
 
   const pagination = usePagination(currentFilter, dayBounds, userLabelFilter);
+
+  // X-003 — first-load auto-retry state. `firstLoadRetrying` is aggregated
+  // into the Feed's isLoading so the spinner stays up between retries and
+  // never flickers off in the gap before the next attempt begins. The refs
+  // track retry count and whether any data has ever loaded successfully.
+  const [firstLoadRetrying, setFirstLoadRetrying] = useState(false);
+  const firstLoadRetryCountRef = useRef(0);
+  const everLoadedRef = useRef(false);
 
   const matchesSelection = useCallback(
     (item: { project: string; created_at_epoch: number; user_label?: string | null }) => {
@@ -232,9 +248,56 @@ export function App() {
     setPaginatedObservations([]);
     setPaginatedSummaries([]);
     setPaginatedPrompts([]);
+    // Reset first-load retry state so a fresh selection starts the retry
+    // cycle from scratch (X-003).
+    firstLoadRetryCountRef.current = 0;
+    everLoadedRef.current = false;
+    setFirstLoadRetrying(false);
     handleLoadMore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentFilter, dayBounds?.start, dayBounds?.end, userLabelFilter]);
+
+  // X-003 — manual retry entry point for the Feed's "Failed to load data"
+  // fallback button. Resets the auto-retry counter so pressing it re-runs the
+  // full 1s/3s/8s backoff; the auto-retry effect below then takes over again.
+  const handleRetry = useCallback(() => {
+    firstLoadRetryCountRef.current = 0;
+    handleLoadMore();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // X-003 — auto-retry the first load when every endpoint failed and no data
+  // has appeared yet. Stops the moment any data lands (so a partially-loaded
+  // view is never pushed to the next page) and gives up after the last delay,
+  // leaving the Feed to surface the manual retry button via the aggregated error.
+  useEffect(() => {
+    const allEmpty = allObservations.length === 0 && allSummaries.length === 0 && allPrompts.length === 0;
+    const hasError = Boolean(pagination.observations.error || pagination.summaries.error || pagination.prompts.error);
+    const anyLoading = pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading;
+
+    if (!allEmpty) {
+      everLoadedRef.current = true;
+      setFirstLoadRetrying(false);
+      return;
+    }
+
+    if (hasError && !everLoadedRef.current && !anyLoading && firstLoadRetryCountRef.current < FIRST_LOAD_RETRY_DELAYS.length) {
+      const delay = FIRST_LOAD_RETRY_DELAYS[firstLoadRetryCountRef.current];
+      firstLoadRetryCountRef.current += 1;
+      setFirstLoadRetrying(true);
+      const timer = setTimeout(() => handleLoadMore(), delay);
+      return () => clearTimeout(timer);
+    }
+
+    if (firstLoadRetryCountRef.current >= FIRST_LOAD_RETRY_DELAYS.length) {
+      setFirstLoadRetrying(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    allObservations.length, allSummaries.length, allPrompts.length,
+    pagination.observations.error, pagination.summaries.error, pagination.prompts.error,
+    pagination.observations.isLoading, pagination.summaries.isLoading, pagination.prompts.isLoading,
+  ]);
 
   /**
    * Sidebar's project-delete flow: drop matching rows from BOTH the SSE-
@@ -343,8 +406,10 @@ export function App() {
               prompts={allPrompts}
               onLoadMore={handleLoadMore}
               onPromptDeleted={handlePromptDeleted}
-              isLoading={pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
+              isLoading={firstLoadRetrying || pagination.observations.isLoading || pagination.summaries.isLoading || pagination.prompts.isLoading}
               hasMore={pagination.observations.hasMore || pagination.summaries.hasMore || pagination.prompts.hasMore}
+              error={pagination.observations.error || pagination.summaries.error || pagination.prompts.error}
+              onRetry={handleRetry}
             />
           )}
         </div>

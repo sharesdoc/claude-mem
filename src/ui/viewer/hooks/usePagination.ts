@@ -7,6 +7,9 @@ import { authFetch } from '../utils/api';
 interface PaginationState {
   isLoading: boolean;
   hasMore: boolean;
+  /** Last load error, null when idle/success. Exposed so the UI can render a
+   * retry affordance instead of a misleading empty state when a fetch fails. */
+  error: Error | null;
 }
 
 type DataType = 'observations' | 'summaries' | 'prompts';
@@ -35,7 +38,8 @@ function usePaginationFor<TItem extends DataItem>(
 ) {
   const [state, setState] = useState<PaginationState>({
     isLoading: false,
-    hasMore: true
+    hasMore: true,
+    error: null
   });
 
   const offsetRef = useRef(0);
@@ -50,7 +54,7 @@ function usePaginationFor<TItem extends DataItem>(
       offsetRef.current = 0;
       lastSelectionRef.current = key;
 
-      const newState = { isLoading: false, hasMore: true };
+      const newState = { isLoading: false, hasMore: true, error: null };
       setState(newState);
       stateRef.current = newState;
     }
@@ -93,14 +97,16 @@ function usePaginationFor<TItem extends DataItem>(
       const nextState = {
         ...stateRef.current,
         isLoading: false,
-        hasMore: data.hasMore
+        hasMore: data.hasMore,
+        error: null
       };
       stateRef.current = nextState;
 
       setState(prev => ({
         ...prev,
         isLoading: false,
-        hasMore: data.hasMore
+        hasMore: data.hasMore,
+        error: null
       }));
 
       offsetRef.current += UI.PAGINATION_PAGE_SIZE;
@@ -111,8 +117,14 @@ function usePaginationFor<TItem extends DataItem>(
       // Without this, a transient failure (e.g. worker not ready after restart)
       // leaves isLoading permanently true, the Feed spinner spins forever, and
       // the IntersectionObserver sentinel never re-renders to trigger a retry.
-      stateRef.current = { ...stateRef.current, isLoading: false };
-      setState(prev => ({ ...prev, isLoading: false }));
+      // Reset isLoading on error so the pagination guard allows future retries.
+      // Without this, a transient failure (e.g. worker not ready after restart)
+      // leaves isLoading permanently true, the Feed spinner spins forever, and
+      // the IntersectionObserver sentinel never re-renders to trigger a retry.
+      // Surface the error too, so the UI can show a retry affordance instead
+      // of a misleading empty state when first-load fails with no data yet.
+      stateRef.current = { ...stateRef.current, isLoading: false, error: error as Error };
+      setState(prev => ({ ...prev, isLoading: false, error: error as Error }));
       throw error;
     }
   }, [currentFilter, dateBounds?.start, dateBounds?.end, userLabel, endpoint, dataType]);

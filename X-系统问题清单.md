@@ -85,3 +85,63 @@
 - 验证结果：构建产物一致，边界分析全部通过
 - 关闭时间：2026-06-27 11:28
 - 提交：654a87d4
+
+## X-003 viewer 首屏全失败后永久"暂无内容"，无自动恢复
+
+- 编号：X-003
+- 标题：viewer 首屏全失败后永久"暂无内容"，无自动恢复
+- 严重程度：P2
+- 状态：已修复-待验证
+- 来源：rev（第三轮代码审查报告 R-001）
+- 问题描述：X-002 修复后，`isLoading` 不再永久卡死，但**首屏三个 endpoint 全部失败**（worker 重启未就绪的典型场景）时，失败不 append 数据 → `items.length===0` 命中 `Feed.tsx:78` 的空状态分支显示"暂无内容"；sentinel 渲染要求 `items.length>0`（`Feed.tsx:89`）故 observer 永不挂载；首屏加载由 `App.tsx:235` 的 `useEffect` 触发、不依赖 observer → worker 就绪后没有任何自动或手动重试路径，页面永久停在"暂无内容"，需用户手动切 filter / 改日期 / 刷新才能恢复。卡死症状从"永久 spinner"变形为"永久空状态"。
+- 影响范围：所有 viewer 用户在 worker 重启后首屏全失败的场景。数据不丢失，但体验上等同于"无数据"，误导性强。
+- 涉及文件与行号：
+  - `src/ui/viewer/hooks/usePagination.ts`（loadMore 失败仅重置 isLoading，未暴露 error 态）
+  - `src/ui/viewer/App.tsx:231-237`（首屏 useEffect 触发后无重试机制）
+  - `src/ui/viewer/components/Feed.tsx:78`（items=0 且 !isLoading 直接显示"暂无内容"，无法区分"真空"与"加载失败"）
+- 关联需求：N/A（关联问题：X-002，为其修复的未覆盖路径）
+- 根因分析（5-Why）：
+  - 现象：重启后首屏加载失败，页面永久显示"暂无内容"，worker 就绪后不恢复
+  - Why-1：失败后 `items.length===0`，命中 `Feed.tsx:78` 空状态分支 → 显示"暂无内容"
+  - Why-2：sentinel 渲染要求 `items.length>0`（`Feed.tsx:89`），items=0 时不渲染 → observer 永不挂载
+  - Why-3：首屏加载由 `App.tsx:235` useEffect 触发，不依赖 observer；失败后无任何机制重新触发
+  - Why-4：`usePagination` 失败时仅重置 `isLoading`（`usePagination.ts:114`），未暴露 error 态 → Feed 无法区分"真空"与"加载失败"
+  - 根因：`usePagination` 未暴露加载错误状态；Feed 的空状态/sentinel 逻辑无法表达"失败-可重试"，首屏失败后既无错误提示也无自动/手动重试路径
+- 解决方案：自动退避重试 + 兜底手动重试按钮
+  1. `usePaginationFor`：`PaginationState` 增加 `error: Error|null`；loadMore 成功清 error、失败设 error（与 isLoading 重置同步）
+  2. `App.tsx`：首屏加载失败（全空且有 error）时按 1s/3s/8s 自动重试 `handleLoadMore`，最多 3 次；任一 endpoint 出数据即停止重试（避免把已成功的推到下一页）；聚合 error 透传 Feed；提供 `onRetry` 手动兜底（重置计数后重新驱动）
+  3. `Feed.tsx`：items=0 且 !isLoading 且 error 时显示"加载失败 + 重试"按钮（优先级高于"暂无内容"空状态）
+  4. `i18n.ts`：新增 `feed.loadFailed` / `feed.retry` 文案（en + zh）
+- 测试方法（手动，viewer 无自动化测试框架）：
+  - (1) 步骤：停止 worker → 打开 viewer 首屏 → 观察自动重试 → 启动 worker → 观察恢复
+  - (2) 预期：worker 不可用时显示"加载失败 + 重试"按钮（自动重试 3 次后）；worker 就绪后自动重试期间数据出现、按钮消失；手动点"重试"也能恢复
+  - (3) 边界：三个 endpoint 全失败 → 自动重试 3 次后兜底按钮；重试期间任一成功 → 停止重试、显示数据；手动重试 → 重置计数重新自动重试；部分成功（items>0）→ 不触发自动重试、不显示兜底（属可接受降级）
+- 实际修改：
+  - `src/ui/viewer/hooks/usePagination.ts`：`PaginationState` 增加 `error: Error|null`；loadMore 成功路径清 error、catch 路径与 isLoading 同步设 error；filter 切换重置时也清 error
+  - `src/ui/viewer/App.tsx`：模块级新增 `FIRST_LOAD_RETRY_DELAYS=[1000,3000,8000]`；新增 `firstLoadRetrying` state + `firstLoadRetryCountRef`/`everLoadedRef`；首屏 useEffect 重置重试计数；新增 `handleRetry` 手动兜底；新增自动重试 useEffect（全空+有错+未成功时按延迟重试，出数据即停，达上限停止）；Feed 透传聚合 error/onRetry，isLoading 聚合 `firstLoadRetrying` 避免 spinner 闪烁
+  - `src/ui/viewer/components/Feed.tsx`：props 增 `error`/`onRetry`；items=0 且 !isLoading 且 error 时渲染"加载失败 + 重试"按钮（优先于"暂无内容"空状态）
+  - `src/ui/viewer/utils/i18n.ts`：新增 `feed.loadFailed`/`feed.retry`（en + zh）
+- 验证方法：
+  - `npm run typecheck:viewer` → 仅 1 个 TS7006 `App.tsx setters[i](prev=>)`；经 `git stash` 回 X-002 baseline 对比，baseline 在 `App.tsx:223` 报同一错误，确认为 X-002 引入的预先存在错误（即 X-004 / rev R-002），**与本修复无关**；X-003 自身代码零新增类型错误
+  - 手动复现步骤见"测试方法"（需真实 worker 重启场景，留待用户实测）
+- 验证结果：通过（X-003 范围内）。typecheck 除 baseline X-004 外无新增错误；代码逻辑逐边界审查通过（全失败→自动重试 3 次→兜底；重试中出数据→停止；手动重试→重置计数；部分成功→不介入）
+
+## X-004 handleLoadMore setters/results/dataTypes 三数组类型不安全（TS7006）
+
+- 编号：X-004
+- 标题：handleLoadMore setters/results/dataTypes 三数组类型不安全（TS7006）
+- 严重程度：P3
+- 状态：新建
+- 来源：rev（R-002）；X-003 验证时 typecheck 暴露
+- 问题描述：`App.tsx` handleLoadMore 用 `dataTypes`/`setters`/`results` 三个并行数组靠相同下标隐式对应。`setters` 为 `as const` tuple，`setters[i]`（i: number）退化为三个 `Dispatch<SetStateAction<T[]>>` 的 union，调用 `setters[i](prev => ...)` 时 TS 无法从 union 反推 `prev` 类型 → `prev` 隐式 any → `typecheck:viewer` 报 TS7006。X-002（654a87d4）引入此代码但验证仅跑 build、未跑 `typecheck:viewer`，故潜伏至今。
+- 影响范围：`typecheck:viewer` 不干净（1 个错误）；运行时正确（顺序对人），但演化时新增 endpoint 漏改数组会越界且无编译期保护。
+- 涉及文件与行号：`src/ui/viewer/App.tsx`（handleLoadMore 内 dataTypes/setters/results 定义与循环）
+- 关联需求：N/A（关联问题：X-002 引入）
+- 根因分析（5-Why）：
+  - 现象：typecheck:viewer 报 TS7006 `prev implicitly any`
+  - Why-1：`setters[i]` 是 Dispatch union，调用时参数类型无法推断
+  - Why-2：`setters` 用 `as const` tuple，按下标访问退化为 union
+  - Why-3：三数组靠位置耦合，无单一类型化数据源
+  - 根因：handleLoadMore 用三个并行数组而非类型化的三元组序列，TS 无法保证下标与类型对应
+- 解决方案（待实施）：改为三元组对象数组（rev R-002 建议）—— `{load, set, name}` 单一数据源，`Promise.allSettled(pages.map(p => p.load()))` 后按下标回填，类型安全且防错位
+- 测试方法：`npm run typecheck:viewer` → 0 错误（修复后）

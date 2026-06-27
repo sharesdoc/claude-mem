@@ -67,6 +67,8 @@ export const translations: Record<Locale, Dict> = {
     'feed.empty': 'No items to display',
     'feed.loading': 'Loading more...',
     'feed.noMore': 'No more items to load',
+    'feed.loadFailed': 'Failed to load data',
+    'feed.retry': 'Retry',
 
     'header.stats': 'Analytics',
     'header.statsTitle': 'View statistical analytics',
@@ -296,6 +298,8 @@ export const translations: Record<Locale, Dict> = {
     'feed.empty': '暂无内容',
     'feed.loading': '正在加载更多……',
     'feed.noMore': '没有更多内容',
+    'feed.loadFailed': '数据加载失败',
+    'feed.retry': '重试',
 
     'header.stats': '统计分析',
     'header.statsTitle': '查看统计分析',

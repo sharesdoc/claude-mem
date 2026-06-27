@@ -7,6 +7,18 @@ import { ScrollToTop } from './ScrollToTop';
 import { UI } from '../constants/ui';
 import { useLocale } from '../hooks/useLocale';
 
+/** Styles for the first-load-failed retry button (X-003). Uses the viewer's
+ * CSS variables with hardcoded fallbacks for theme-agnostic rendering. */
+const retryButtonStyle: React.CSSProperties = {
+  padding: '6px 16px',
+  background: 'var(--bg-accent, #21262d)',
+  color: 'var(--fg, #c9d1d9)',
+  border: '1px solid var(--border, #30363d)',
+  borderRadius: '6px',
+  cursor: 'pointer',
+  fontSize: '14px'
+};
+
 interface FeedProps {
   observations: Observation[];
   summaries: Summary[];
@@ -15,9 +27,13 @@ interface FeedProps {
   onPromptDeleted?: (id: number) => void;
   isLoading: boolean;
   hasMore: boolean;
+  /** Last load error; when set with no items, shows a retry affordance (X-003). */
+  error?: Error | null;
+  /** Manual retry callback; paired with `error` for the fallback button. */
+  onRetry?: () => void;
 }
 
-export function Feed({ observations, summaries, prompts, onLoadMore, onPromptDeleted, isLoading, hasMore }: FeedProps) {
+export function Feed({ observations, summaries, prompts, onLoadMore, onPromptDeleted, isLoading, hasMore, error, onRetry }: FeedProps) {
   const { t } = useLocale();
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const feedRef = useRef<HTMLDivElement>(null);
@@ -75,7 +91,15 @@ export function Feed({ observations, summaries, prompts, onLoadMore, onPromptDel
             return <PromptCard key={key} prompt={item} onDeleted={onPromptDeleted}  />;
           }
         })}
-        {items.length === 0 && !isLoading && (
+        {items.length === 0 && !isLoading && error && onRetry && (
+          <div style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
+            <div style={{ marginBottom: '12px' }}>{t('feed.loadFailed')}</div>
+            <button type="button" onClick={onRetry} style={retryButtonStyle}>
+              {t('feed.retry')}
+            </button>
+          </div>
+        )}
+        {items.length === 0 && !isLoading && !error && (
           <div style={{ textAlign: 'center', padding: '40px', color: '#8b949e' }}>
             {t('feed.empty')}
           </div>
