@@ -220,27 +220,40 @@ export function App() {
   }, []);
 
   const handleLoadMore = useCallback(async () => {
-    const results = await Promise.allSettled([
+    // Each data type is independent — one failing should not discard the
+    // results of the other two.  usePaginationFor already resets isLoading
+    // on error so the guard allows future retries for the failed endpoint.
+    // Destructuring the allSettled tuple (rather than indexing parallel
+    // dataTypes/setters arrays) gives each branch a precise type so the
+    // setter and its values stay type-checked in lock-step (X-004).
+    const [obsResult, sumResult, promptResult] = await Promise.allSettled([
       pagination.observations.loadMore(),
       pagination.summaries.loadMore(),
       pagination.prompts.loadMore()
     ]);
 
-    // Each data type is independent — one failing should not discard the
-    // results of the other two.  usePaginationFor already resets isLoading
-    // on error so the guard allows future retries for the failed endpoint.
-    const dataTypes = ['observations', 'summaries', 'prompts'] as const;
-    const setters = [setPaginatedObservations, setPaginatedSummaries, setPaginatedPrompts] as const;
-
-    for (let i = 0; i < results.length; i++) {
-      const result = results[i];
-      if (result.status === 'fulfilled') {
-        if (result.value.length > 0) {
-          setters[i](prev => [...prev, ...result.value]);
-        }
-      } else {
-        console.error(`Failed to load ${dataTypes[i]}:`, result.reason);
+    if (obsResult.status === 'fulfilled') {
+      if (obsResult.value.length > 0) {
+        setPaginatedObservations(prev => [...prev, ...obsResult.value]);
       }
+    } else {
+      console.error('Failed to load observations:', obsResult.reason);
+    }
+
+    if (sumResult.status === 'fulfilled') {
+      if (sumResult.value.length > 0) {
+        setPaginatedSummaries(prev => [...prev, ...sumResult.value]);
+      }
+    } else {
+      console.error('Failed to load summaries:', sumResult.reason);
+    }
+
+    if (promptResult.status === 'fulfilled') {
+      if (promptResult.value.length > 0) {
+        setPaginatedPrompts(prev => [...prev, ...promptResult.value]);
+      }
+    } else {
+      console.error('Failed to load prompts:', promptResult.reason);
     }
   }, [pagination.observations, pagination.summaries, pagination.prompts]);
 

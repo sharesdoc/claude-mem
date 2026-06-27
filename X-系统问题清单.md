@@ -133,7 +133,7 @@
 - 编号：X-004
 - 标题：handleLoadMore setters/results/dataTypes 三数组类型不安全（TS7006）
 - 严重程度：P3
-- 状态：新建
+- 状态：已修复-待验证
 - 来源：rev（R-002）；X-003 验证时 typecheck 暴露
 - 问题描述：`App.tsx` handleLoadMore 用 `dataTypes`/`setters`/`results` 三个并行数组靠相同下标隐式对应。`setters` 为 `as const` tuple，`setters[i]`（i: number）退化为三个 `Dispatch<SetStateAction<T[]>>` 的 union，调用 `setters[i](prev => ...)` 时 TS 无法从 union 反推 `prev` 类型 → `prev` 隐式 any → `typecheck:viewer` 报 TS7006。X-002（654a87d4）引入此代码但验证仅跑 build、未跑 `typecheck:viewer`，故潜伏至今。
 - 影响范围：`typecheck:viewer` 不干净（1 个错误）；运行时正确（顺序对人），但演化时新增 endpoint 漏改数组会越界且无编译期保护。
@@ -145,5 +145,9 @@
   - Why-2：`setters` 用 `as const` tuple，按下标访问退化为 union
   - Why-3：三数组靠位置耦合，无单一类型化数据源
   - 根因：handleLoadMore 用三个并行数组而非类型化的三元组序列，TS 无法保证下标与类型对应
-- 解决方案（待实施）：改为三元组对象数组（rev R-002 建议）—— `{load, set, name}` 单一数据源，`Promise.allSettled(pages.map(p => p.load()))` 后按下标回填，类型安全且防错位
-- 测试方法：`npm run typecheck:viewer` → 0 错误（修复后）
+- 解决方案（实施）：原 rev R-002 建议的"三元组对象数组 + 下标回填"经分析**仍无法消除 TS7006**——`pages[i]` 对 `as const` tuple 的下标访问同样退化为 union，`set`/`value` 类型无法对齐。实际改用 `Promise.allSettled` 对数组字面量的 **tuple 返回类型 + 解构**：`const [obsR, sumR, promptR] = await Promise.allSettled([...])`，每个 result 获得 `PromiseSettledResult<具体类型>`，三个具名 if-else 块分别处理，setter 与 value 在编译期类型对齐，彻底消除 `prev` implicit any。
+- 实际修改：
+  - `src/ui/viewer/App.tsx` handleLoadMore：移除 `dataTypes`/`setters` 双数组 + for 循环下标访问，改 allSettled 解构 + 三个具名 fulfilled/rejected 分支；行为完全等价（fulfilled+length>0→append，rejected→console.error）
+- 测试方法：`npm run typecheck:viewer` → 0 错误（修复后；修复前 baseline 报 1 个 TS7006）
+- 验证方法：`npm run typecheck:viewer`
+- 验证结果：通过。`npm run typecheck:viewer` → EXIT=0，**0 错误**（修复前 baseline 报 1 个 TS7006 `App.tsx setters[i](prev=>)`，已消除）
