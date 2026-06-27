@@ -5,7 +5,7 @@ set -euo pipefail
 #
 # Usage:
 #   ./name-manager -l                    List all names
-#   ./name-manager -r oldname newname    Rename user (settings + database)
+#   ./name-manager -r oldname newname    Rename label in DB (+ settings.json if local match)
 #   ./name-manager -d username           Delete all records for a user
 #   ./name-manager -h                    Show help
 
@@ -28,8 +28,10 @@ Usage:
 
 Options:
   -l, --list       List all user names in the database with record counts.
-  -r, --rename     Rename a user label in settings.json AND the SQLite database.
-                   ALL historical data moves to the new label.
+  -r, --rename     Migrate ALL historical data in the SQLite database from
+                   <oldname> to <newname>. settings.json is rewritten ONLY when
+                   the local label already equals <oldname>, so renaming another
+                   user's data never clobbers your own identity.
                    Auto-stops/restarts the worker to avoid gaps.
   -d, --delete     Permanently delete all records belonging to a user.
                    Includes sessions, observations, prompts, summaries, and
@@ -194,9 +196,13 @@ if [[ "$mode" == "rename" ]]; then
     } catch(e) { console.log(''); }
   " 2>/dev/null || echo "")
 
-  if [[ "$(echo "$current" | tr '[:upper:]' '[:lower:]')" == "$NEW_LOWER" ]]; then
+  current_lower="$(echo "$current" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$current_lower" == "$NEW_LOWER" ]]; then
     ok "Settings already set to '$newname' (case-insensitive)"
-  else
+  elif [[ -n "$current" && "$current_lower" == "$OLD_LOWER" ]]; then
+    # Only touch settings.json when THIS machine's identity IS the user being
+    # renamed — otherwise migrating another user's historical data would clobber
+    # an unrelated local label.
     node -e "
       const fs = require('fs');
       const file = process.argv[1];
@@ -206,7 +212,9 @@ if [[ "$mode" == "rename" ]]; then
       raw.CLAUDE_MEM_USER_LABEL = label;
       fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n');
     " "$SETTINGS_FILE" "$newname"
-    ok "Settings updated: CLAUDE_MEM_USER_LABEL = '$newname'"
+    ok "Settings updated: CLAUDE_MEM_USER_LABEL = '$current' → '$newname'"
+  else
+    info "Local label is '${current:-(empty)}' (not '$oldname') — settings untouched, DB-only migration"
   fi
 
   # ── 2. Update database ──────────────────────────────────────────────
