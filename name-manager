@@ -229,13 +229,13 @@ if [[ "$mode" == "rename" ]]; then
     sqlite3 "$DB_FILE" "UPDATE sdk_sessions SET user_label='${NEW_SQL}' WHERE user_label='${OLD_SQL}' COLLATE NOCASE;"
     ok "Migrated ${before} session(s) from '$oldname' → '$newname'"
 
-    local obs_before=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM observations WHERE user_label='${OLD_SQL}' COLLATE NOCASE;" 2>/dev/null || echo 0)
+    obs_before=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM observations WHERE user_label='${OLD_SQL}' COLLATE NOCASE;" 2>/dev/null || echo 0)
     if [[ "$obs_before" -gt 0 ]]; then
       sqlite3 "$DB_FILE" "UPDATE observations SET user_label='${NEW_SQL}' WHERE user_label='${OLD_SQL}' COLLATE NOCASE;"
       ok "Updated ${obs_before} observation(s) user_label → '$newname'"
     fi
 
-    local sums_before=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM session_summaries WHERE user_label='${OLD_SQL}' COLLATE NOCASE;" 2>/dev/null || echo 0)
+    sums_before=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM session_summaries WHERE user_label='${OLD_SQL}' COLLATE NOCASE;" 2>/dev/null || echo 0)
     if [[ "$sums_before" -gt 0 ]]; then
       sqlite3 "$DB_FILE" "UPDATE session_summaries SET user_label='${NEW_SQL}' WHERE user_label='${OLD_SQL}' COLLATE NOCASE;"
       ok "Updated ${sums_before} session_summaries user_label → '$newname'"
