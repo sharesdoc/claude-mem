@@ -4,7 +4,7 @@
 - 编号：X-008
 - 任务类型：缺陷
 - 严重程度：P1
-- 状态：已完成-待验证
+- 状态：已验证-关闭
 - 来源：rev（review-report-20260716173652.md · R-001/R-005）
 - 所属计划项：无（独立 fix）
 - 任务描述：rev 审查 X-007 前置改名（`DASHSCOPE_API_KEY`→`CLAUDE_MEM_REPORT_QWEN_API_KEY`）发现两类问题。① **R-001 破坏性变更**：`SettingsDefaultsManager.loadFromFile` 合并磁盘 settings.json 时只遍历 `DEFAULTS` 已知键（`SettingsDefaultsManager.ts:302-307`），改名后旧键 `DASHSCOPE_API_KEY` 不在集合中 → 存量用户 `~/.claude-mem/settings.json` 的旧字段被静默忽略；同理 `EnvManager.loadClaudeMemEnv` 白名单（`EnvManager.ts:103-110`）不再读旧键 → `~/.claude-mem/.env` 的旧字段也丢；代码不再读 `process.env.DASHSCOPE_API_KEY` → 系统 env 变量也断。三路全断，已配置周报 AI 的存量用户升级后 Qwen 静默失效。② **R-005 预存 bug**：`isQwenAvailable()`（`QwenProvider.ts:384-394`）只查 env+settings，缺第三级 `getCredential()`；而 `getQwenConfig()`（`:351-354`）是 env→settings→getCredential 三级回退。key 仅存 `.env` 时 `isQwenAvailable()` 返回 false，Qwen 不自动选中；若用户显式 `CLAUDE_MEM_PROVIDER=qwen` 还会误报缺 key。
@@ -24,6 +24,9 @@
   (5) `npm run typecheck` 通过；全量 `bun test` 无新增失败。
 - 涉及文档刷新：无 A-F/G/H 体系，免 ree 刷新。
 - 注：codebase-memory-mcp 本会话不可用，证据采集降级为 grep/Read（已在 rev 阶段精确到 file:line）。
+- git commit ID：f434f7b1
+- 验证方法与结果：新增 7 测试（settings 迁移 4 + qwen-key-compat 3）RED→GREEN 全过；`npm run typecheck` 通过；全量 `bun test` 2005 用例 1885 pass / 101 fail，**0 新增失败**（101 fail 均为预存基线，含 settings 测试里 1 个 `CLAUDE_MEM_MODEL` 默认值断言 `claude-sonnet-4-6` vs `claude-haiku-4-5-20251001`，与本次无关）；env-isolation 3/3 过证明 legacy 兼容未破坏 OAuth 凭据隔离。
+- 关闭时间：2026-07-16 18:05
 
 ### X-007 user_label 大小写不敏感、UI 统一大写展示、冲突合并去重
 
