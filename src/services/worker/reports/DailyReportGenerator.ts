@@ -9,7 +9,7 @@ import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
  * 与周报(ReportGenerator)同源、但**刻意做简**:只取某一天 user×project 的
  * 工时与工作内容,用 Qwen(阿里云 DashScope,OpenAI 兼容接口)提炼出一份
  * **简短**的中文日报(今日工作概述 → 今日重点工作),要点罗列、说明从简。
- * Qwen 凭证读 env DASHSCOPE_API_KEY,settings.json 兜底;未配置或失败则退回
+ * Qwen 凭证读 env CLAUDE_MEM_REPORT_QWEN_API_KEY,settings.json 兜底;未配置或失败则退回
  * 确定性简版(只汇总、不臆造)。只读源表,不改采集链路。
  */
 
@@ -263,14 +263,14 @@ export class DailyReportGenerator {
   }
 
   /**
-   * DashScope Key 解析:env `DASHSCOPE_API_KEY` 优先;缺失则回退 settings.json。
+   * DashScope Key 解析:env `CLAUDE_MEM_REPORT_QWEN_API_KEY` 优先;缺失则回退 settings.json。
    * 两者皆空 → 返回 ''(AI 段禁用)。
    */
   private resolveApiKey(): string {
-    const envKey = (process.env.DASHSCOPE_API_KEY ?? '').trim();
+    const envKey = (process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim();
     if (envKey) return envKey;
     try {
-      return (SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).DASHSCOPE_API_KEY ?? '').trim();
+      return (SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim();
     } catch { return ''; }
   }
 

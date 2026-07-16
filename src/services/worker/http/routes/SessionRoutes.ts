@@ -47,7 +47,7 @@ export class SessionRoutes extends BaseRouteHandler {
         logger.debug('SESSION', 'Using Qwen agent');
         return this.qwenAgent;
       } else {
-        throw new Error('Qwen provider selected but no DASHSCOPE_API_KEY configured.');
+        throw new Error('Qwen provider selected but no CLAUDE_MEM_REPORT_QWEN_API_KEY configured.');
       }
     }
     if (isOpenRouterSelected()) {
@@ -68,7 +68,7 @@ export class SessionRoutes extends BaseRouteHandler {
     }
     // Qwen 有 key 就自动选,无需显式配置 CLAUDE_MEM_PROVIDER
     if (isQwenAvailable()) {
-      logger.debug('SESSION', 'Auto-selecting Qwen agent (DASHSCOPE_API_KEY available)');
+      logger.debug('SESSION', 'Auto-selecting Qwen agent (CLAUDE_MEM_REPORT_QWEN_API_KEY available)');
       return this.qwenAgent;
     }
     return this.sdkAgent;

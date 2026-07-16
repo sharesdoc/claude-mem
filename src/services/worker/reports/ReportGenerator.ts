@@ -9,7 +9,7 @@ import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
  * 混合生成:先用数据库数据聚合出本周 user×project 的工时与工作内容,再用
  * Qwen(阿里云 DashScope,OpenAI 兼容接口)把原始数据**提炼**成一份有重点、
  * 限篇幅的中文周报正文(总体概述 → 按工时罗列任务 → 项目详述 → 下周建议 →
- * 经验教训)。Qwen 凭证直接读环境变量 DASHSCOPE_API_KEY;未配置或调用失败则
+ * 经验教训)。Qwen 凭证直接读环境变量 CLAUDE_MEM_REPORT_QWEN_API_KEY;未配置或调用失败则
  * 退回确定性简版(只汇总,不臆造)。本生成器只读源表,不改采集链路。
  */
 
@@ -285,15 +285,15 @@ export class ReportGenerator {
   }
 
   /**
-   * DashScope Key 解析:env `DASHSCOPE_API_KEY` 优先;缺失(或为空)则回退读
-   * settings.json 的 `DASHSCOPE_API_KEY`。两者皆空 → 返回 ''(AI 段禁用)。
+   * DashScope Key 解析:env `CLAUDE_MEM_REPORT_QWEN_API_KEY` 优先;缺失(或为空)则回退读
+   * settings.json 的 `CLAUDE_MEM_REPORT_QWEN_API_KEY`。两者皆空 → 返回 ''(AI 段禁用)。
    * worker 多由 GUI 启动、不 source shell rc,故 settings.json 兜底很关键。
    */
   private resolveApiKey(): string {
-    const envKey = (process.env.DASHSCOPE_API_KEY ?? '').trim();
+    const envKey = (process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim();
     if (envKey) return envKey;
     try {
-      return (SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).DASHSCOPE_API_KEY ?? '').trim();
+      return (SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim();
     } catch { return ''; }
   }
 
