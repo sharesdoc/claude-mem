@@ -223,6 +223,52 @@ describe('SettingsDefaultsManager', () => {
       });
     });
 
+    // X-008: DASHSCOPE_API_KEY → CLAUDE_MEM_REPORT_QWEN_API_KEY 一次性迁移。
+    // 存量用户的 settings.json 仍写旧键，loadFromFile 必须把它搬到新键并落盘，
+    // 否则改名对已部署配置是静默破坏（周报 AI 失效）。
+    describe('DASHSCOPE_API_KEY legacy migration', () => {
+      it('should migrate legacy DASHSCOPE_API_KEY to CLAUDE_MEM_REPORT_QWEN_API_KEY when only legacy key exists', () => {
+        const legacy = { DASHSCOPE_API_KEY: 'sk-legacy-123' };
+        writeFileSync(settingsPath, JSON.stringify(legacy));
+
+        const result = SettingsDefaultsManager.loadFromFile(settingsPath);
+
+        expect(result.CLAUDE_MEM_REPORT_QWEN_API_KEY).toBe('sk-legacy-123');
+      });
+
+      it('should persist the migration to disk (old key removed, new key written)', () => {
+        const legacy = { DASHSCOPE_API_KEY: 'sk-legacy-456' };
+        writeFileSync(settingsPath, JSON.stringify(legacy));
+
+        SettingsDefaultsManager.loadFromFile(settingsPath);
+
+        const parsed = JSON.parse(readFileSync(settingsPath, 'utf-8'));
+        expect(parsed.DASHSCOPE_API_KEY).toBeUndefined();
+        expect(parsed.CLAUDE_MEM_REPORT_QWEN_API_KEY).toBe('sk-legacy-456');
+      });
+
+      it('should not overwrite CLAUDE_MEM_REPORT_QWEN_API_KEY when both keys exist (new key wins)', () => {
+        const both = {
+          DASHSCOPE_API_KEY: 'sk-legacy',
+          CLAUDE_MEM_REPORT_QWEN_API_KEY: 'sk-new',
+        };
+        writeFileSync(settingsPath, JSON.stringify(both));
+
+        const result = SettingsDefaultsManager.loadFromFile(settingsPath);
+
+        expect(result.CLAUDE_MEM_REPORT_QWEN_API_KEY).toBe('sk-new');
+      });
+
+      it('should be idempotent (second load does not re-trigger / lose the key)', () => {
+        writeFileSync(settingsPath, JSON.stringify({ DASHSCOPE_API_KEY: 'sk-legacy-789' }));
+
+        SettingsDefaultsManager.loadFromFile(settingsPath);
+        const result = SettingsDefaultsManager.loadFromFile(settingsPath);
+
+        expect(result.CLAUDE_MEM_REPORT_QWEN_API_KEY).toBe('sk-legacy-789');
+      });
+    });
+
     describe('edge cases', () => {
       it('should handle empty object in file', () => {
         writeFileSync(settingsPath, '{}');

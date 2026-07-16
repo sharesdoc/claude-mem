@@ -23,7 +23,7 @@ const AI_TIMEOUT_MS = 90000;
 // ---------------------------------------------------------------------------
 // QwenProvider — 用 DashScope (Qwen) 驱动 observation / summary 生成。
 // 遵循与 GeminiProvider 相同的 REST 模式,复用已有的 prompt 构建、XML 解析、
-// 结果存储管线。凭证: env DASHSCOPE_API_KEY 优先, settings.json 兜底。
+// 结果存储管线。凭证: env CLAUDE_MEM_REPORT_QWEN_API_KEY 优先, settings.json 兜底。
 // ---------------------------------------------------------------------------
 
 /** DashScope chat/completions 请求体 */
@@ -118,7 +118,7 @@ export class QwenProvider {
     const { apiKey, model } = this.getQwenConfig();
 
     if (!apiKey) {
-      throw new Error('Qwen API key not configured. Set DASHSCOPE_API_KEY in settings or environment.');
+      throw new Error('Qwen API key not configured. Set CLAUDE_MEM_REPORT_QWEN_API_KEY in settings or environment.');
     }
 
     // 合成 memorySessionId (与 Gemini 模式一致)
@@ -348,9 +348,9 @@ export class QwenProvider {
   private getQwenConfig(): { apiKey: string; model: QwenModel } {
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
 
-    const apiKey = (process.env.DASHSCOPE_API_KEY ?? '').trim()
-      || (settings.DASHSCOPE_API_KEY ?? '').trim()
-      || getCredential('DASHSCOPE_API_KEY')
+    const apiKey = (process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim()
+      || (settings.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim()
+      || getCredential('CLAUDE_MEM_REPORT_QWEN_API_KEY')
       || '';
 
     const configuredModel = (settings.CLAUDE_MEM_QWEN_MODEL ?? '').trim() || DEFAULT_MODEL;
@@ -383,14 +383,18 @@ export class QwenProvider {
 /** 检查 Qwen / DashScope 是否可用 (有 key 即可)。 */
 export function isQwenAvailable(): boolean {
   // env 优先
-  if ((process.env.DASHSCOPE_API_KEY ?? '').trim()) return true;
+  if ((process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim()) return true;
 
   try {
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-    return !!(settings.DASHSCOPE_API_KEY ?? '').trim();
+    if ((settings.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim()) return true;
   } catch {
-    return false;
+    // settings 文件不可读时回退到凭据存储，而非直接判不可用
   }
+
+  // X-005/R-005: 与 getQwenConfig() 三级回脱对齐——key 可能只存在 ~/.claude-mem/.env
+  // （经 getCredential 读取），缺失此级会导致仅 .env 配置时 Qwen 不被自动选中。
+  return !!getCredential('CLAUDE_MEM_REPORT_QWEN_API_KEY');
 }
 
 /** 检查 Qwen 是否被选为 Provider。 */

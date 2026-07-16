@@ -1,4 +1,30 @@
 
+### X-008 DASHSCOPE_API_KEY 改名为 CLAUDE_MEM_REPORT_QWEN_API_KEY 后存量配置丢失 + isQwenAvailable 回退层级不一致
+
+- 编号：X-008
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：rev（review-report-20260716173652.md · R-001/R-005）
+- 所属计划项：无（独立 fix）
+- 任务描述：rev 审查 X-007 前置改名（`DASHSCOPE_API_KEY`→`CLAUDE_MEM_REPORT_QWEN_API_KEY`）发现两类问题。① **R-001 破坏性变更**：`SettingsDefaultsManager.loadFromFile` 合并磁盘 settings.json 时只遍历 `DEFAULTS` 已知键（`SettingsDefaultsManager.ts:302-307`），改名后旧键 `DASHSCOPE_API_KEY` 不在集合中 → 存量用户 `~/.claude-mem/settings.json` 的旧字段被静默忽略；同理 `EnvManager.loadClaudeMemEnv` 白名单（`EnvManager.ts:103-110`）不再读旧键 → `~/.claude-mem/.env` 的旧字段也丢；代码不再读 `process.env.DASHSCOPE_API_KEY` → 系统 env 变量也断。三路全断，已配置周报 AI 的存量用户升级后 Qwen 静默失效。② **R-005 预存 bug**：`isQwenAvailable()`（`QwenProvider.ts:384-394`）只查 env+settings，缺第三级 `getCredential()`；而 `getQwenConfig()`（`:351-354`）是 env→settings→getCredential 三级回退。key 仅存 `.env` 时 `isQwenAvailable()` 返回 false，Qwen 不自动选中；若用户显式 `CLAUDE_MEM_PROVIDER=qwen` 还会误报缺 key。
+- 涉及文件与行号：`src/shared/SettingsDefaultsManager.ts:282-307`（loadFromFile 补旧→新迁移）、`src/shared/EnvManager.ts:103-111`（loadClaudeMemEnv 补 legacy 白名单）、`src/services/worker/QwenProvider.ts:384-394`（isQwenAvailable 补 getCredential 回退）
+- 关联需求：N/A
+- 根因分析：R-001——改名只改了读取侧的键名，未处理"存量磁盘/文件配置仍用旧键"的兼容；`loadFromFile` 的合并循环 `for (key of Object.keys(DEFAULTS))` 天然把不在 DEFAULTS 的键过滤掉，是静默丢失的机制根因。R-005——`isQwenAvailable` 与 `getQwenConfig` 由不同函数独立实现 key 解析，未共享同一回退链，演进时只补了 `getQwenConfig` 的第三级，遗漏了 `isQwenAvailable`。
+- 实现/解决方案：
+  (1) **settings.json 迁移（收敛在 loadFromFile 一处）**：在 flatSettings 计算后、合并进 DEFAULTS 前，若 `flatSettings.DASHSCOPE_API_KEY` 存在且 `flatSettings.CLAUDE_MEM_REPORT_QWEN_API_KEY` 为空，则拷贝值到新键、删除旧键，并 `writeFileSync` 全量写回 + console.warn 告知迁移（复用既有 nested→flat 迁移的 writeFileSync 模式，幂等：迁移后旧键已删，二次加载不再触发）。
+  (2) **`.env` 兼容**：`loadClaudeMemEnv` 白名单补——`parsed.DASHSCOPE_API_KEY` 存在且新键空时映射到 `result.CLAUDE_MEM_REPORT_QWEN_API_KEY`（不写回，仅运行时兼容；用户下次 `saveClaudeMemEnv` 自然落盘新键）。
+  (3) **isQwenAvailable 补层级**：settings 判断后追加 `return !!getCredential('CLAUDE_MEM_REPORT_QWEN_API_KEY')`（getCredential 已 import 于 `QwenProvider.ts:6`），与 getQwenConfig 三级对齐。
+  (4) **不顺手改**：R-002（重建产物）/R-003（rdm 文档）/R-004（函数名）非本条目范围。
+- 验收/测试方法：
+  (1) RED→GREEN 单测：磁盘 settings.json 仅含旧键 `DASHSCOPE_API_KEY` → 读取后 `get('CLAUDE_MEM_REPORT_QWEN_API_KEY')` 得到旧值，旧键被迁移移除。
+  (2) 新旧键并存 → 新键优先，旧值不覆盖。
+  (3) `.env` 仅含旧键 → `getCredential('CLAUDE_MEM_REPORT_QWEN_API_KEY')` 返回旧值。
+  (4) `isQwenAvailable()` 在 env+settings 均空、`.env` 含 key 时返回 true。
+  (5) `npm run typecheck` 通过；全量 `bun test` 无新增失败。
+- 涉及文档刷新：无 A-F/G/H 体系，免 ree 刷新。
+- 注：codebase-memory-mcp 本会话不可用，证据采集降级为 grep/Read（已在 rev 阶段精确到 file:line）。
+
 ### X-007 user_label 大小写不敏感、UI 统一大写展示、冲突合并去重
 
 - 编号：X-007

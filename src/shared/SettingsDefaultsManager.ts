@@ -114,8 +114,8 @@ export interface SettingsDefaults {
   CLAUDE_MEM_WEEKLY_REPORT_TIME: string;        // local 'HH:MM' to refresh this week's report (default 13:00)
   CLAUDE_MEM_WEEKLY_REPORT_MODEL: string;       // Qwen model for the AI "highlights" section
   /** Aliyun DashScope API key for Qwen weekly-report synthesis. The env var
-   *  DASHSCOPE_API_KEY (if set) always takes precedence over this file value. */
-  DASHSCOPE_API_KEY: string;
+   *  CLAUDE_MEM_REPORT_QWEN_API_KEY (if set) always takes precedence over this file value. */
+  CLAUDE_MEM_REPORT_QWEN_API_KEY: string;
   /** Qwen model id for the observation/summary provider (DashScope). Empty falls
    *  back to QwenProvider's DEFAULT_MODEL. */
   CLAUDE_MEM_QWEN_MODEL: string;
@@ -224,7 +224,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_WEEKLY_REPORT_ENABLED: 'true',               // daily auto-generation of weekly work reports
     CLAUDE_MEM_WEEKLY_REPORT_TIME: '13:00',                 // local HH:MM to refresh this week's report
     CLAUDE_MEM_WEEKLY_REPORT_MODEL: 'qwen3-max',           // Qwen model for the AI report synthesis
-    DASHSCOPE_API_KEY: '',                                  // Aliyun DashScope key; env DASHSCOPE_API_KEY overrides this. Empty = AI synthesis disabled.
+    CLAUDE_MEM_REPORT_QWEN_API_KEY: '',                     // Aliyun DashScope key; env CLAUDE_MEM_REPORT_QWEN_API_KEY overrides this. Empty = AI synthesis disabled.
     CLAUDE_MEM_QWEN_MODEL: '',                              // Qwen provider model id; empty falls back to QwenProvider DEFAULT_MODEL.
   };
 
@@ -303,6 +303,35 @@ export class SettingsDefaultsManager {
       for (const key of Object.keys(this.DEFAULTS) as Array<keyof SettingsDefaults>) {
         if (flatSettings[key] !== undefined) {
           result[key] = flatSettings[key];
+        }
+      }
+
+      // X-008: DASHSCOPE_API_KEY → CLAUDE_MEM_REPORT_QWEN_API_KEY 一次性迁移。
+      // 改名后旧键不在 DEFAULTS 中，上方合并循环会把它静默丢弃；存量用户的
+      // settings.json 仍写旧键，需在此搬到新键并落盘，避免周报 AI 静默失效。
+      // 新键已有值时不覆盖（新键优先）；幂等——迁移后旧键从磁盘删除，二次加载不触发。
+      const legacyKey = 'DASHSCOPE_API_KEY' as keyof typeof flatSettings;
+      const newKey: keyof SettingsDefaults = 'CLAUDE_MEM_REPORT_QWEN_API_KEY';
+      const legacyValue = flatSettings[legacyKey];
+      const hasLegacy = legacyValue !== undefined && legacyValue !== null && String(legacyValue).trim() !== '';
+      const newWasEmpty = !result[newKey] || String(result[newKey]).trim() === '';
+      if (hasLegacy) {
+        // 内存值：新键为空时用旧键兜底
+        if (newWasEmpty) {
+          result[newKey] = String(legacyValue);
+        }
+        // 持久化迁移：仅当确实用旧键兜底（新键原本为空）时才动磁盘，
+        // 把旧键搬到新键并删除旧键；新键已有值时只清理多余旧键。
+        try {
+          const migrated = { ...flatSettings };
+          delete (migrated as Record<string, unknown>).DASHSCOPE_API_KEY;
+          if (!migrated.CLAUDE_MEM_REPORT_QWEN_API_KEY) {
+            migrated.CLAUDE_MEM_REPORT_QWEN_API_KEY = String(legacyValue);
+          }
+          writeFileSync(settingsPath, JSON.stringify(migrated, null, 2), 'utf-8');
+          console.warn(`[SETTINGS] Migrated legacy DASHSCOPE_API_KEY → CLAUDE_MEM_REPORT_QWEN_API_KEY: ${settingsPath}`);
+        } catch (error: unknown) {
+          console.warn('[SETTINGS] Failed to persist DASHSCOPE_API_KEY migration (in-memory value still applied):', settingsPath, error instanceof Error ? error.message : String(error));
         }
       }
 
