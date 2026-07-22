@@ -4,9 +4,29 @@ import { AdapterRejectedInput } from './adapters/errors.js';
 import { getEventHandler } from './handlers/index.js';
 import { HOOK_EXIT_CODES } from '../shared/hook-constants.js';
 import { logger } from '../utils/logger.js';
+import type { HookResult } from './types.js';
 
 export interface HookCommandOptions {
   skipExit?: boolean;
+}
+
+/**
+ * Build the payload emitted when a hook short-circuits to a no-op (adapter
+ * rejected the input, or the transcript is unavailable). For the SessionStart
+ * `context` event Claude Code requires a well-formed `hookSpecificOutput`
+ * envelope; emitting a bare `{continue,suppressOutput}` object makes the host
+ * treat the line as invalid JSON (upstream #2972). All other events are happy
+ * with the minimal continue/suppress payload.
+ *
+ * @param event Normalized hook event name (e.g. 'context', 'observation').
+ * @returns A HookResult safe to hand to `adapter.formatOutput`.
+ */
+export function buildNoOpResult(event: string): HookResult {
+  const result: HookResult = { continue: true, suppressOutput: true };
+  if (event === 'context') {
+    result.hookSpecificOutput = { hookEventName: 'SessionStart', additionalContext: '' };
+  }
+  return result;
 }
 
 export function isWorkerUnavailableError(error: unknown): boolean {
@@ -83,7 +103,7 @@ export async function hookCommand(platform: string, event: string, options: Hook
   } catch (error) {
     if (error instanceof AdapterRejectedInput) {
       logger.warn('HOOK', `Adapter rejected input (${error.reason}), skipping hook`);
-      console.log(JSON.stringify(adapter.formatOutput({ continue: true, suppressOutput: true })));
+      console.log(JSON.stringify(adapter.formatOutput(buildNoOpResult(event))));
       if (!options.skipExit) {
         process.exit(HOOK_EXIT_CODES.SUCCESS);
       }
@@ -91,7 +111,7 @@ export async function hookCommand(platform: string, event: string, options: Hook
     }
     if (isNonBlockingHookInputError(error)) {
       logger.warn('HOOK', `Hook input unavailable, skipping hook: ${error instanceof Error ? error.message : error}`);
-      console.log(JSON.stringify(adapter.formatOutput({ continue: true, suppressOutput: true })));
+      console.log(JSON.stringify(adapter.formatOutput(buildNoOpResult(event))));
       if (!options.skipExit) {
         process.exit(HOOK_EXIT_CODES.SUCCESS);
       }
