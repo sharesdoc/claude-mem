@@ -221,5 +221,14 @@ child.on('close', (code, signal) => {
   if ((signal || code > 128) && args.includes('start')) {
     process.exit(0);
   }
+  // Exit Code Strategy (see CLAUDE.md): worker/hook errors must exit 0 so
+  // Claude Code never surfaces a spurious non-blocking failure — e.g. a
+  // cold-start race where worker-service.cjs dies with code 1 during module
+  // init before the hook handler's try/catch installs. Only `start` was
+  // honoring this on the close path; normalize non-blocking code 1 for every
+  // subcommand. Blocking code 2 is intentional (fed to Claude) and passes
+  // through untouched; the worker/runner layer surfaces real failures via
+  // runner-errors.log and the logger, not the exit code.
+  if (code === 1) process.exit(0);
   process.exit(code || 0);
 });
