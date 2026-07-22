@@ -4,6 +4,7 @@ import net from 'net';
 import { readFileSync } from 'fs';
 import { logger } from '../../utils/logger.js';
 import { MARKETPLACE_ROOT } from '../../shared/paths.js';
+import { getWorkerHost } from '../../shared/worker-utils.js';
 
 async function httpRequestToWorker(
   port: number,
@@ -37,6 +38,7 @@ export async function isPortInUse(port: number): Promise<boolean> {
 
   return new Promise((resolve) => {
     const server = net.createServer();
+    const workerHost = getWorkerHost();
     server.once('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
         resolve(true);
@@ -47,7 +49,7 @@ export async function isPortInUse(port: number): Promise<boolean> {
     server.once('listening', () => {
       server.close(() => resolve(false));
     });
-    server.listen(port, '127.0.0.1');
+    server.listen(port, workerHost);
   });
 }
 
