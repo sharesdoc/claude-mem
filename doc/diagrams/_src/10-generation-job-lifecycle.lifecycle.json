@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "生成作业生命周期",
+    "subtitle": "Server Beta generation_jobs 五态有限状态机 · SQL+代码双保证",
+    "output": "10-generation-job-lifecycle.html",
+    "quality_profile": "standard"
+  },
+  "lanes": [
+    { "id": "main", "label": "主生命周期" },
+    { "id": "waiting", "label": "中断与重试" },
+    { "id": "terminal", "label": "终态" }
+  ],
+  "states": [
+    { "id": "queued", "type": "start", "label": "queued", "lane": "main", "col": 0, "step": "01", "tag": "待处理" },
+    { "id": "processing", "type": "active", "label": "processing", "lane": "main", "col": 2, "step": "02", "tag": "outbox 锁定" },
+    { "id": "retry", "type": "waiting", "label": "retry (退避)", "lane": "waiting", "col": 2, "tag": "5s→10min", "yOffset": 60 },
+    { "id": "completed", "type": "success", "label": "completed", "lane": "terminal", "col": 2, "tag": "持久化成功" },
+    { "id": "failed", "type": "failure", "label": "failed", "lane": "terminal", "col": 0, "tag": "重试耗尽" },
+    { "id": "cancelled", "type": "failure", "label": "cancelled", "lane": "terminal", "col": 1, "tag": "操作员取消" }
+  ],
+  "transitions": [
+    { "id": "t1", "from": "queued", "to": "processing", "label": "领取锁定", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "id": "t2", "from": "processing", "to": "completed", "label": "成功", "variant": "emphasis", "fromSide": "right", "toSide": "right", "via": [[850, 160], [850, 360]] },
+    { "id": "t3", "from": "processing", "to": "retry", "label": "可重试错误", "variant": "security", "fromSide": "bottom", "toSide": "top", "channelX": 600 },
+    { "id": "t4", "from": "retry", "to": "queued", "label": "退避重发", "variant": "dashed", "fromSide": "top", "toSide": "top", "via": [[500, 380], [94, 380]] },
+    { "id": "t5", "from": "retry", "to": "failed", "label": "耗尽重试", "variant": "security", "fromSide": "bottom", "toSide": "right", "channelX": 500 },
+    { "id": "t6", "from": "queued", "to": "cancelled", "label": "取消", "variant": "security", "fromSide": "bottom", "toSide": "top" },
+    { "id": "t7", "from": "processing", "to": "failed", "label": "不可恢复", "variant": "security", "fromSide": "bottom", "toSide": "right", "channelX": 300 }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "双保证", "items": ["SQL CHECK 约束合法转换", "代码层断言精确错误原因", "终态重载则跳过"] },
+    { "dot": "cyan", "title": "幂等与重试", "items": ["queued/processing 启动重发", "attempts/时间戳/锁定字段自动维护", "generation_key UNIQUE"] }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "claude-mem 关键数据流",
+    "subtitle": "观测写入流 · 上下文读出流 · Server Beta 异步生成流",
+    "output": "04-data-flows.html",
+    "quality_profile": "standard",
+    "viewBox": [1100, 720]
+  },
+  "stages": [
+    { "label": "事件源" },
+    { "label": "处理/摄入" },
+    { "label": "队列/生成" },
+    { "label": "持久化" },
+    { "label": "消费" }
+  ],
+  "nodes": [
+    { "id": "posthook", "type": "frontend", "label": "PostToolUse", "stage": 0, "row": 0, "sublabel": "工具调用事件" },
+    { "id": "starthook", "type": "frontend", "label": "SessionStart", "stage": 0, "row": 2, "sublabel": "会话/读文件" },
+    { "id": "apievent", "type": "frontend", "label": "POST /v1/events", "stage": 0, "row": 4, "sublabel": "Server Beta 客户端" },
+
+    { "id": "obs-handler", "type": "backend", "label": "observation 处理器", "stage": 1, "row": 0, "sublabel": "cli 归一化" },
+    { "id": "ctx-handler", "type": "backend", "label": "context 处理器", "stage": 1, "row": 2, "sublabel": "请求上下文" },
+    { "id": "ingest", "type": "backend", "label": "IngestEventsService", "stage": 1, "row": 4, "sublabel": "Zod+鉴权" },
+
+    { "id": "pms", "type": "messagebus", "label": "PendingMessageStore", "stage": 2, "row": 0, "sublabel": "进程内队列" },
+    { "id": "provider", "type": "backend", "label": "AI Provider", "stage": 2, "row": 1, "tag": "压缩" },
+    { "id": "outbox", "type": "messagebus", "label": "BullMQ + Outbox", "stage": 2, "row": 4, "sublabel": "Redis 四车道" },
+    { "id": "generator", "type": "backend", "label": "Generator", "stage": 2, "row": 3, "sublabel": "异步生成" },
+
+    { "id": "sqlite", "type": "database", "label": "SQLite", "stage": 3, "row": 0, "sublabel": "本地+FTS5" },
+    { "id": "pg", "type": "database", "label": "Postgres", "stage": 3, "row": 4, "sublabel": "多租户+GIN" },
+
+    { "id": "sse", "type": "frontend", "label": "Viewer SSE", "stage": 4, "row": 0, "sublabel": "实时流" },
+    { "id": "inject", "type": "frontend", "label": "CLAUDE.md 注入", "stage": 4, "row": 2, "sublabel": "回馈 AI" },
+    { "id": "vec", "type": "cloud", "label": "ChromaDB", "stage": 4, "row": 1, "sublabel": "向量旁路" }
+  ],
+  "flows": [
+    { "id": "f1", "from": "posthook", "to": "obs-handler", "label": "JSON", "variant": "emphasis" },
+    { "id": "f2", "from": "obs-handler", "to": "pms", "label": "入队" },
+    { "id": "f3", "from": "pms", "to": "provider", "label": "认领" },
+    { "id": "f4", "from": "provider", "to": "sqlite", "label": "观测写入", "classification": "隐私剥离后", "variant": "emphasis" },
+    { "id": "f5", "from": "sqlite", "to": "sse", "label": "广播" },
+    { "id": "f6", "from": "sqlite", "to": "vec", "label": "向量同步", "classification": "旁路", "variant": "dashed" },
+    { "id": "f7", "from": "starthook", "to": "ctx-handler", "label": "请求", "variant": "emphasis" },
+    { "id": "f8", "from": "ctx-handler", "to": "sqlite", "label": "查询", "variant": "dashed", "fromSide": "right", "toSide": "top", "via": [[420, 385], [420, 90], [745, 90]] },
+    { "id": "f9", "from": "sqlite", "to": "inject", "label": "时间线", "classification": "token 预算" },
+    { "id": "f10", "from": "apievent", "to": "ingest", "label": "事件", "variant": "emphasis" },
+    { "id": "f11", "from": "ingest", "to": "outbox", "label": "write-then-publish", "classification": "最终一致" },
+    { "id": "f12", "from": "outbox", "to": "generator", "label": "领取" },
+    { "id": "f13", "from": "generator", "to": "pg", "label": "Observation", "variant": "emphasis" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "写入流（同步）", "items": ["PostToolUse→处理器→入队→Provider→SQLite", "隐私标签在 hook 层剥离", "ChromaDB 向量为旁路同步"] },
+    { "dot": "emerald", "title": "读出流（同步）", "items": ["SessionStart→context→SQLite 查询", "渲染时间线+token 预算", "注入 CLAUDE.md 回馈 AI"] },
+    { "dot": "rose", "title": "Server Beta 流（异步）", "items": ["HTTP 立即返回→BullMQ 后台", "Outbox 保证最终一致", "Generator 异步持久化 Observation"] }
+  ]
+}

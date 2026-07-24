@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "观测捕获时序图",
+    "subtitle": "本地 Worker · PostToolUse 到 SSE 推送",
+    "output": "08-observation-sequence.html",
+    "quality_profile": "standard"
+  },
+  "participants": [
+    { "id": "ai", "type": "frontend", "label": "AI 助手", "sublabel": "工具调用" },
+    { "id": "hk", "type": "backend", "label": "Hook (cli)", "sublabel": "归一化" },
+    { "id": "w", "type": "backend", "label": "Worker API", "sublabel": "/observations" },
+    { "id": "pms", "type": "messagebus", "label": "PendingMsg", "sublabel": "队列" },
+    { "id": "sm", "type": "backend", "label": "SessionMgr", "sublabel": "驱动" },
+    { "id": "p", "type": "external", "label": "AI Provider", "sublabel": "压缩" },
+    { "id": "db", "type": "database", "label": "SQLite", "sublabel": "持久化" }
+  ],
+  "segments": [
+    { "from": 160, "to": 230, "label": "01 / 捕获" },
+    { "from": 230, "to": 410, "label": "02 / 异步生成" },
+    { "from": 410, "to": 560, "label": "03 / 持久化与广播" }
+  ],
+  "messages": [
+    { "id": "m1", "from": "ai", "to": "hk", "y": 185, "label": "PostToolUse JSON" },
+    { "id": "m3", "from": "hk", "to": "w", "y": 220, "label": "POST /observations", "variant": "emphasis" },
+    { "id": "m4", "from": "w", "to": "pms", "y": 260, "label": "INSERT OR IGNORE" },
+    { "id": "m5", "from": "pms", "to": "sm", "y": 295, "label": "原子认领" },
+    { "id": "m6", "from": "sm", "to": "p", "y": 335, "label": "压缩请求" },
+    { "id": "m7", "from": "p", "to": "sm", "y": 375, "label": "压缩结果", "variant": "return" },
+    { "id": "m8", "from": "sm", "to": "db", "y": 420, "label": "存储观测（去重）", "variant": "emphasis" },
+    { "id": "m8b", "from": "sm", "to": "db", "y": 455, "label": "剥离隐私标签" },
+    { "id": "m10", "from": "sm", "to": "pms", "y": 490, "label": "标记完成" },
+    { "id": "m11", "from": "db", "to": "w", "y": 525, "label": "SSE new_observation", "variant": "return" }
+  ],
+  "activations": [
+    { "participant": "sm", "from": 295, "to": 490, "type": "backend" }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "异常处理", "items": ["Worker 不可用静默跳过", "Provider 不可恢复走备用链", "全程非阻断 exit 0"] },
+    { "dot": "cyan", "title": "去重", "items": ["memory_session_id + content_hash", "INSERT OR IGNORE 幂等", "UPDATE...RETURNING 原子认领"] }
+  ]
+}

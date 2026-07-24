@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>claude-mem 架构图索引 · Archify</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #e67346;
+    --accent2: #ffb67a;
+    --cyan: #22d3ee;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, "SF Pro Text", "JetBrains Mono", system-ui, sans-serif;
+    line-height: 1.6;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 48px 24px 80px; }
+  h1 { font-size: 28px; margin: 0 0 8px; }
+  h1 .a { color: var(--accent); }
+  .subtitle { color: var(--muted); margin: 0 0 8px; font-size: 15px; }
+  .source { color: var(--muted); font-size: 13px; margin-bottom: 32px; }
+  .source code { background: #21262d; padding: 2px 6px; border-radius: 4px; color: var(--accent2); font-size: 12px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 16px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+    text-decoration: none;
+    color: var(--text);
+    transition: border-color .15s, transform .15s;
+    display: block;
+  }
+  .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+  .card .num {
+    display: inline-block;
+    font-family: "JetBrains Mono", monospace;
+    font-size: 12px;
+    color: var(--accent2);
+    background: rgba(230,115,70,0.12);
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+  }
+  .card .title { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
+  .card .desc { font-size: 13px; color: var(--muted); margin: 0 0 10px; }
+  .card .type {
+    font-family: "JetBrains Mono", monospace;
+    font-size: 11px;
+    color: var(--cyan);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .section-title {
+    color: var(--muted);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin: 32px 0 12px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  footer { margin-top: 48px; color: var(--muted); font-size: 12px; }
+  a.external { color: var(--accent2); }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1><span class="a">claude-mem</span> 架构图索引</h1>
+  <p class="subtitle">基于 A/B-v2 系统文档的 Archify 交互式图集 · 深浅主题切换 · 语义导航 · 路径探测 · 导出 PNG/SVG</p>
+  <p class="source">事实来源：<code>doc/A-系统需求文档-v2.md</code> · <code>doc/B-系统设计文档-v2.md</code>（提炼自 360 份文件级文档 + 12 份模块汇总）</p>
+
+  <div class="section-title">架构与部署</div>
+  <div class="grid">
+    <a class="card" href="01-system-architecture.html">
+      <div class="num">01</div>
+      <div class="title">系统总架构</div>
+      <div class="desc">双运行时同构：本地 Worker 与 Server Beta 平行解耦，共享 core 领域 Schema。</div>
+      <div class="type">architecture</div>
+    </a>
+    <a class="card" href="02-product-architecture.html">
+      <div class="num">02</div>
+      <div class="title">产品架构</div>
+      <div class="desc">用户视角能力分块：捕获 → 记忆核心 → 注入三链路。</div>
+      <div class="type">architecture</div>
+    </a>
+    <a class="card" href="03-deployment.html">
+      <div class="num">03</div>
+      <div class="title">部署形态</div>
+      <div class="desc">本地单机 · Server Beta daemon · Docker 容器化水平扩展。</div>
+      <div class="type">architecture</div>
+    </a>
+  </div>
+
+  <div class="section-title">数据与流程</div>
+  <div class="grid">
+    <a class="card" href="04-data-flows.html">
+      <div class="num">04</div>
+      <div class="title">关键数据流</div>
+      <div class="desc">观测写入流 · 上下文读出流 · Server Beta 异步生成流三条主干。</div>
+      <div class="type">dataflow</div>
+    </a>
+    <a class="card" href="05-observation-capture.html">
+      <div class="num">05</div>
+      <div class="title">观测捕获与生成</div>
+      <div class="desc">本地 Worker：PostToolUse → AI 压缩 → SQLite 持久化 → SSE 推送。</div>
+      <div class="type">workflow</div>
+    </a>
+    <a class="card" href="06-server-beta-ingest.html">
+      <div class="num">06</div>
+      <div class="title">Server Beta 事件摄入</div>
+      <div class="desc">Postgres 权威源 + BullMQ 传输 + Outbox 最终一致性。</div>
+      <div class="type">workflow</div>
+    </a>
+    <a class="card" href="07-context-injection.html">
+      <div class="num">07</div>
+      <div class="title">上下文注入</div>
+      <div class="desc">SessionStart → 查询 → 渲染时间线 → CLAUDE.md 注入回馈 AI。</div>
+      <div class="type">workflow</div>
+    </a>
+  </div>
+
+  <div class="section-title">时序与状态机</div>
+  <div class="grid">
+    <a class="card" href="08-observation-sequence.html">
+      <div class="num">08</div>
+      <div class="title">观测捕获时序</div>
+      <div class="desc">AI → Hook → Worker → Provider → SQLite → SSE 的完整调用链。</div>
+      <div class="type">sequence</div>
+    </a>
+    <a class="card" href="09-server-beta-sequence.html">
+      <div class="num">09</div>
+      <div class="title">Server Beta 异步生成时序</div>
+      <div class="desc">HTTP 同步链 + BullMQ 异步链，Outbox 保证最终一致。</div>
+      <div class="type">sequence</div>
+    </a>
+    <a class="card" href="10-generation-job-lifecycle.html">
+      <div class="num">10</div>
+      <div class="title">生成作业生命周期</div>
+      <div class="desc">Server Beta generation_jobs 五态有限状态机（SQL+代码双保证）。</div>
+      <div class="type">lifecycle</div>
+    </a>
+  </div>
+
+  <footer>
+    生成方式：code-to-doc 技能 · Archify 引擎（node bin/archify.mjs deliver）<br>
+    每张图自包含 HTML，支持深浅主题、语义导航（Lens/Radar/Finder）、路径探测（Route Probe）、PNG/SVG/WebM 导出。
+  </footer>
+</div>
+</body>
+</html>
