@@ -1505,6 +1505,10 @@ async function main() {
 
       const { hookCommand } = await import('../cli/hook-command.js');
       await hookCommand(platform, event);
+      // hookCommand calls process.exit() internally on success, but as a
+      // safety net in case the exit path is not reached (e.g. Bun runtime
+      // edge case, event-loop stall), exit here explicitly.
+      process.exit(0);
       break;
     }
 

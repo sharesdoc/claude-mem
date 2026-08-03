@@ -101,6 +101,12 @@ if (!bunPath) {
   process.exit(1);
 }
 
+// Collect stdin data with a non-blocking timeout.
+// WARNING: setTimeout-based fallback does NOT reliably fire on Node.js v25
+// when stdin is a half-closed Unix domain socket (the event loop poll phase
+// hangs).  We destroy stdin immediately after the timeout to force the
+// stream closed, which unblocks the event loop and lets the timer fire.
+// See incident: /Users/johnson/doc/claude-mem-incident/incident.log
 function collectStdin() {
   return new Promise((resolve) => {
     if (process.stdin.isTTY) {
@@ -109,18 +115,30 @@ function collectStdin() {
     }
 
     const chunks = [];
-    process.stdin.on('data', (chunk) => chunks.push(chunk));
-    process.stdin.on('end', () => {
-      resolve(chunks.length > 0 ? Buffer.concat(chunks) : null);
-    });
-    process.stdin.on('error', () => {
-      resolve(null);
-    });
+    let resolved = false;
 
-    setTimeout(() => {
+    function resolveWith(value) {
+      if (resolved) return;
+      resolved = true;
       process.stdin.removeAllListeners();
       process.stdin.pause();
-      resolve(chunks.length > 0 ? Buffer.concat(chunks) : null);
+      resolve(value);
+    }
+
+    process.stdin.on('data', (chunk) => chunks.push(chunk));
+    process.stdin.on('end', () => {
+      resolveWith(chunks.length > 0 ? Buffer.concat(chunks) : null);
+    });
+    process.stdin.on('error', () => {
+      resolveWith(null);
+    });
+
+    // Primary timeout
+    setTimeout(() => {
+      resolveWith(chunks.length > 0 ? Buffer.concat(chunks) : null);
+      // Force-close the stream so the event loop unblocks even if the socket
+      // is half-closed (prevents the timer phase from hanging indefinitely).
+      try { process.stdin.destroy(); } catch {}
     }, 5000);
   });
 }
