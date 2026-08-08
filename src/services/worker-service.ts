@@ -1504,11 +1504,11 @@ async function main() {
       }
 
       const { hookCommand } = await import('../cli/hook-command.js');
-      await hookCommand(platform, event);
-      // hookCommand calls process.exit() internally on success, but as a
-      // safety net in case the exit path is not reached (e.g. Bun runtime
-      // edge case, event-loop stall), exit here explicitly.
-      process.exit(0);
+      const exitCode = await hookCommand(platform, event);
+      // hookCommand returns exit code but may not always call process.exit()
+      // depending on skipExit option. Use the return code to exit with proper
+      // semantics: success (0) vs. blocking error (2) vs. other (1).
+      process.exit(exitCode ?? 1);
       break;
     }
 
