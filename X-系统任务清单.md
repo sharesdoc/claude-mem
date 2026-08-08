@@ -1,3 +1,23 @@
+### X-011 X-009/X-010 的代码修复提交与任务清单收尾提交未分列，审计链语义含混
+
+- 编号：X-011
+- 任务类型：其他（文档/流程）
+- 严重程度：P2
+- 状态：已验证-关闭
+- 来源：review-report-20260809003641.md（R-001、R-002）
+- 所属计划项：无（独立 fix）
+- 任务描述：X-009、X-010 的“验证方法与结果”只记录了代码修复提交，未说明任务清单实际由已发布提交 `1dce8cfb` 收尾落库；该提交的信息为 `...`，使审查者难以从日志直接还原两类提交的关系。
+- 涉及文件与行号：`X-系统任务清单.md:1-73`；git commits `0ddd327d`、`cd52163a`、`1dce8cfb`
+- 关联需求：N/A
+- 现状依据：`git show --stat 0ddd327d` 仅包含 `plugin/scripts/bun-runner.js` 与 `tests/bun-runner.test.ts`；`git show --stat cd52163a` 仅包含 `src/services/worker-service.ts`；`git show --stat 1dce8cfb` 首次新增 X-009/X-010 记录，且 `origin/main` 已包含该提交，不能安全改写。
+- 根因分析：原收尾流程把“代码修复提交”和“任务清单关闭记录”拆分提交，但 X 条目只保留前者，未对后者作显式标识；后续同步提交又使用了无意义提交信息，造成审计语义不完整。
+- 实现/解决方案：保留两条真实代码修复提交，新增“代码修复提交”和“任务清单收尾提交”两个明确字段；以本次有说明的补偿提交建立可检索的修复上下文，不改写已发布历史。
+- 验收/测试方法：文档断言验证 X-009/X-010 均包含准确的两类提交字段；`git show --stat` 核对三条提交的文件归属；确认本次补偿提交信息可读。
+- 涉及文档刷新：无 A-F/G/H 体系，免 ree 刷新。
+- 实际修改：`X-系统任务清单.md:1-73`——新增 X-011，并为 X-009/X-010 分列代码修复提交与任务清单收尾提交。
+- 验证方法与结果：文档断言通过；三条提交的文件归属与字段描述一致；`git diff --check` 通过。
+- 关闭时间：2026-08-09 01:12
+
 ### X-010 bun-runner.js 超时处理中 stdin.destroy() 错误被静默吞掉，缺可观测性
 
 - 编号：X-010
@@ -21,7 +41,9 @@
   (4) 单元测试：验证 console.error、标签、错误消息字段均存在；验证 resolved guard flag 保护机制完整。
   (5) 全量测试：bun test 通过，无回归。
 - 涉及文档刷新：无 A-F/G/H 体系，免 ree 刷新。
-- 验证方法与结果：✅ RED→GREEN→全量测试通过 | commit: 0ddd327d
+- 验证方法与结果：✅ RED→GREEN→全量测试通过
+- 代码修复提交：`0ddd327d`（包含 `plugin/scripts/bun-runner.js` 与 `tests/bun-runner.test.ts`）
+- 任务清单收尾提交：`1dce8cfb`（首次将本条关闭记录落库）
 - 关闭时间：2026-08-09 00:30
 
 ### X-009 worker-service.ts 的 hookCommand 后 process.exit(0) 可能掩盖错误路径，exit 码区分度不足
@@ -49,7 +71,9 @@
   (4) 构建成功：npm run build 无错误。
   (5) 现有测试无回归。
 - 涉及文档刷新：无 A-F/G/H 体系，免 ree 刷新。
-- 验证方法与结果：✅ TypeScript 编译通过 | 构建成功 | 现有测试无回归 | commit: cd52163a
+- 验证方法与结果：✅ TypeScript 编译通过 | 构建成功 | 现有测试无回归
+- 代码修复提交：`cd52163a`（包含 `src/services/worker-service.ts`）
+- 任务清单收尾提交：`1dce8cfb`（首次将本条关闭记录落库）
 - 关闭时间：2026-08-09 00:32
 
 ### X-008 DASHSCOPE_API_KEY 改名为 CLAUDE_MEM_REPORT_QWEN_API_KEY 后存量配置丢失 + isQwenAvailable 回退层级不一致
