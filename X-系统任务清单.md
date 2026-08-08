@@ -5,7 +5,7 @@ hook 命令当前同时由 `hookCommand` 和 `main` 负责进程退出，导致�
 - 编号：X-012
 - 任务类型：缺陷
 - 严重程度：P1
-- 状态：已完成-待验证
+- 状态：已验证-关闭
 - 来源：rev（`review-report-20260809012539.md` R-001）
 - 所属计划项：无（独立 fix）
 - 任务描述：`main()` 调用 `hookCommand(platform, event)` 时使用默认 `skipExit=false`，被调用方先执行 `process.exit`，因此 `main` 随后的返回码退出逻辑不可达；动态导入或初始化异常仍可能被顶层 `main().catch` 固定转为退出 0。
@@ -17,8 +17,11 @@ hook 命令当前同时由 `hookCommand` 和 `main` 负责进程退出，导致�
 - 验收/测试方法：(1) RED：现有代码没有可测试的单一退出所有权函数，运行时探针记录两次退出请求；(2) GREEN：成功/阻断/初始化异常分别返回 0/2/1；(3) `main` 对 hook 分支只执行一次退出；(4) 构建产物真实子进程对有效/无效输入分别返回 0/2；(5) TypeScript 检查、相关测试、构建和全量测试无新增回归。
 - 实际修改位置：`src/services/worker-service.ts:1349-1381,1540-1541`、`tests/infrastructure/worker-json-status.test.ts:1-59`、`plugin/scripts/worker-service.cjs`。
 - 阶段验证结果：RED 探针复现 `calls:[0,0]`，且新测试因缺少 `resolveHookExitCode` 导出而失败；GREEN 后探针为 `calls:[0]`，定向测试 242 通过、6 跳过、0 失败，`npm run typecheck` 通过，`npm run build` 通过。全量测试为 3992 通过、37 跳过、124 失败、1 错误；失败分布在未修改的数据库、解析器、路由、进程管理等既有测试，本次定向回归无新增失败。
-- rev 审查结果：TypeScript + 通用质量基线审查通过；OCR 指出 1 条低级可维护性意见（非 `Error` 抛出值会丢失），已修复为记录 `thrownValue`并重新通过构建、类型检查和定向测试；最终结论 `approve`，0 阻断、0 重要、0 待处理项。
+- rev 审查结果：TypeScript + 通用质量基线审查通过；OCR 指出 1 条低级可维护性意见（非 `Error` 抛出值会丢失），已修复为记录 `thrownValue` 并重新通过构建、类型检查和定向测试；最终结论 `approve`，0 阻断、0 重要、0 待处理项。
 - 涉及文档刷新：无 A-F/G/H 体系，免 ree 刷新。
+- 代码修复提交：`3bf31754`（代码、测试、构建产物与待验证记录）
+- 任务清单收尾提交：`chore(X-012): close verified task record`（本条首次进入“已验证-关闭”状态的提交）
+- 关闭时间：2026-08-09 01:50
 
 ### X-011 X-009/X-010 的代码修复提交与任务清单收尾提交未分列，审计链语义含混
 
