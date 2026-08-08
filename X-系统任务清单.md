@@ -1,3 +1,56 @@
+### X-010 bun-runner.js 超时处理中 stdin.destroy() 错误被静默吞掉，缺可观测性
+
+- 编号：X-010
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已验证-关闭
+- 来源：rev（review-report 审查发现的 R-001）
+- 所属计划项：无（独立 fix）
+- 任务描述：当 stdin 为半关闭 Unix domain socket 时，collectStdin() 中 setTimeout 回调会调用 process.stdin.destroy()，但该调用被 try-catch 静默吞掉异常。虽然代码逻辑因为 guard flag (resolved) 不会造成 Promise 重复 resolve，但任何 destroy 失败异常都无记录，导致生产环境故障排查困难。
+- 涉及文件与行号：`plugin/scripts/bun-runner.js:141`
+- 关联需求：N/A
+- 根因分析：异常处理策略过度简化——直接 try-catch 静默而无日志记录。destroy 失败虽然不会立即导致崩溃（Promise 机制保护），但对诊断性（observability）造成损伤。
+- 实现/解决方案：将 line 141 的 `try { process.stdin.destroy(); } catch {}` 改为有日志记录的形式，在 stderr 输出错误信息：`try { process.stdin.destroy(); } catch (err) { console.error('[bun-runner.collectStdin] Failed to destroy stdin in timeout fallback:', err instanceof Error ? err.message : String(err)); }`。这样即使 destroy 失败也能留下可追踪的痕迹。
+- 涉及文件改动：
+  - `plugin/scripts/bun-runner.js:141-142`：添加 catch 分支的错误日志
+  - `tests/bun-runner.test.ts`：新增单元测试验证错误日志的存在与 guard flag 的完整性
+- 验收/测试方法：
+  (1) RED 基线：原代码中 catch block 为空，无任何输出。
+  (2) GREEN：修复后 catch (err) 分支包含 console.error 调用。
+  (3) 正常路径：destroy 成功时无额外输出（catch 不执行）。
+  (4) 单元测试：验证 console.error、标签、错误消息字段均存在；验证 resolved guard flag 保护机制完整。
+  (5) 全量测试：bun test 通过，无回归。
+- 涉及文档刷新：无 A-F/G/H 体系，免 ree 刷新。
+- 验证方法与结果：✅ RED→GREEN→全量测试通过 | commit: 0ddd327d
+- 关闭时间：2026-08-09 00:30
+
+### X-009 worker-service.ts 的 hookCommand 后 process.exit(0) 可能掩盖错误路径，exit 码区分度不足
+
+- 编号：X-009
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已验证-关闭
+- 来源：rev（review-report 审查发现的 R-002）
+- 所属计划项：无（独立 fix）
+- 任务描述：worker-service.ts:1511 在 hookCommand 调用后固定使用 process.exit(0)。虽然当前 hookCommand 确实在所有代码路径都会调用 exit（line 97-123 检查），但这种防御性设计存在语义问题：(1) 隐性耦合——若未来 hookCommand 改为 return 而非 exit，这里的 exit(0) 会掩盖错误；(2) exit 码统一为 0 表示成功——即便 hookCommand 内部触发了错误处理路径（已打 E.error log），外部仍看到成功码，与上游（shell/监控）的通信语义混乱。
+- 涉及文件与行号：`src/services/worker-service.ts:1507-1512`
+- 关联需求：N/A
+- 根因分析：防御性 exit 缺少错误语义。hookCommand 返回值已包含语义信息（SUCCESS≈0，BLOCKING_ERROR≈2），但原代码忽略了这一信息，统一 exit(0)。应该传递 hookCommand 的返回值作为 exit code。
+- 实现/解决方案：改为使用 hookCommand 的返回值作为 exit code。修改逻辑为 `const exitCode = await hookCommand(platform, event); process.exit(exitCode ?? 1);`，确保成功时 exit(0)、失败时 exit(非 0)。
+- 涉及文件改动：
+  - `src/services/worker-service.ts:1507-1512`：
+    - 从 `await hookCommand()` 改为 `const exitCode = await hookCommand()`
+    - 从 `process.exit(0)` 改为 `process.exit(exitCode ?? 1)`
+    - 更新注释反映新的设计意图
+- 验收/测试方法：
+  (1) RED 基线：hookCommand 返回异常码时，原代码仍 exit(0)，错误信号丢失。
+  (2) GREEN：修复后 exit code 正确传递（成功≈0，失败≈2 或其他非 0）。
+  (3) TypeScript 编译：无类型错误（exitCode 类型正确）。
+  (4) 构建成功：npm run build 无错误。
+  (5) 现有测试无回归。
+- 涉及文档刷新：无 A-F/G/H 体系，免 ree 刷新。
+- 验证方法与结果：✅ TypeScript 编译通过 | 构建成功 | 现有测试无回归 | commit: cd52163a
+- 关闭时间：2026-08-09 00:32
 
 ### X-008 DASHSCOPE_API_KEY 改名为 CLAUDE_MEM_REPORT_QWEN_API_KEY 后存量配置丢失 + isQwenAvailable 回退层级不一致
 
