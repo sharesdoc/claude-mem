@@ -23,3 +23,24 @@ describe('bun-runner.js findBun: DEP0190 regression guard (#1503)', () => {
     expect(source).toContain("spawnSync('which', ['bun']");
   });
 });
+
+describe('bun-runner.js collectStdin: X-010 error observability in destroy() fallback', () => {
+  it('logs errors when process.stdin.destroy() fails in timeout fallback', () => {
+    // collectStdin() timeout fallback must have observable error handling
+    // When stdin.destroy() throws, error should be logged, not silently caught
+
+    // GREEN: Code has error logging in catch block
+    // Check for catch (err) and console.error pattern
+    expect(source).toContain('catch (err) {');
+    expect(source).toContain('console.error');
+    expect(source).toContain('[bun-runner.collectStdin]');
+    expect(source).toContain('Failed to destroy stdin in timeout fallback');
+  });
+
+  it('preserves guard flag (resolved) to prevent double-resolution', () => {
+    // Confirm that resolveWith guard is in place (required for safety)
+    expect(source).toContain('let resolved = false');
+    expect(source).toContain('if (resolved) return');
+    expect(source).toContain('resolved = true');
+  });
+});

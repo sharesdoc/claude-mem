@@ -138,7 +138,9 @@ function collectStdin() {
       resolveWith(chunks.length > 0 ? Buffer.concat(chunks) : null);
       // Force-close the stream so the event loop unblocks even if the socket
       // is half-closed (prevents the timer phase from hanging indefinitely).
-      try { process.stdin.destroy(); } catch {}
+      try { process.stdin.destroy(); } catch (err) {
+        console.error('[bun-runner.collectStdin] Failed to destroy stdin in timeout fallback:', err instanceof Error ? err.message : String(err));
+      }
     }, 5000);
   });
 }
