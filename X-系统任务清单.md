@@ -5,7 +5,7 @@ Claude/Codex 的高频 Hook 当前经过 `node bun-runner.js → bun worker-serv
 - 编号：X-013
 - 任务类型：缺陷
 - 严重程度：P0
-- 状态：已完成-待验证
+- 状态：已验证-关闭
 - 来源：用户反馈（2026-08-09）及 `review-report-20260809030915.md`
 - 所属计划项：无（独立 fix）
 - 任务描述：高频 Hook 每次启动完整 Bun CLI，现场峰值达到每分钟 129 个 Hook、单分钟约 202 次 Bun CLI 初始化，并出现 1,571 次重复启动跳过记录；现有 stdin 超时补丁没有消除按事件创建 Bun 进程的结构性风险。
@@ -19,6 +19,9 @@ Claude/Codex 的高频 Hook 当前经过 `node bun-runner.js → bun worker-serv
 - 实际修改位置：`src/cli/hook-service-entry.ts`、`src/shared/worker-utils.ts`、`src/cli/stdin-reader.ts`、`src/build/hook-shell-template.ts`、`scripts/build-hooks.js`、Claude/Codex Hook 清单、生成产物及对应测试。
 - 阶段验证结果：RED 分发测试 4 个失败；GREEN 后 typecheck、构建与 canonical 清单校验通过，定向测试 259 pass/0 fail。全量测试 4002 pass、37 skip、123 fail、1 error，相比既有记录 124 fail 未新增失败。200 个并发业务 Hook 前后 Bun 进程均为 1；新 Hook 149–152 ms，旧链路约 292–311 ms；轻量 bundle 68.33 KB。
 - rev 审查结果：`review-report-20260809034441.md` 结论 `approve`，0 blocking、0 important、0 待处理项；OCR 直接相关的 3 条意见已修复并复测。
+- 实际部署验证：已同步到 marketplace 与 `13.2.0` 安装缓存并确定性重启 worker；`/api/health` 返回 `status=ok`、`initialized=true`、`mcpReady=true`。安装缓存执行 200 个并发 context Hook 全部成功，采样期间 Bun 进程数始终为 1，实际 Hook 清单包含 10 处 `hook-service.mjs` 且不存在 Bun Hook 链路。
+- 代码修复提交：`78581b66`（源码、测试、生成产物、审查报告与待验证记录）
+- 关闭时间：2026-08-09 03:49
 
 ### X-012 hook 退出码由两层共同负责，调用方返回码处理不可达
 
