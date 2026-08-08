@@ -93,6 +93,11 @@ if (args.length === 0) {
 
 args[0] = fixBrokenScriptPath(args[0]);
 
+// Lifecycle commands never consume hook payloads. Detect them before touching
+// stdin so a half-closed host pipe cannot delay daemon start/stop operations.
+const lifecycleCommands = ['start', 'stop', 'restart', 'status'];
+const isLifecycle = lifecycleCommands.some((cmd) => args.includes(cmd));
+
 const bunPath = findBun();
 
 if (!bunPath) {
@@ -145,7 +150,7 @@ function collectStdin() {
   });
 }
 
-const stdinData = await collectStdin();
+const stdinData = isLifecycle ? null : await collectStdin();
 
 const spawnOptions = {
   stdio: ['pipe', 'inherit', 'inherit'],
@@ -174,9 +179,6 @@ if (child.stdin) {
     // they manage the worker daemon, not hook payloads.  Killing the child here
     // prevents the daemon from starting/stopping on platforms where Claude Code
     // doesn't pipe a payload for SessionStart (e.g. Windows CC ≤ 2.1.145).
-    const lifecycleCommands = ['start', 'stop', 'restart', 'status'];
-    const isLifecycle = lifecycleCommands.some(cmd => args.includes(cmd));
-
     if (isLifecycle) {
       // Lifecycle commands don't need stdin — close pipe and let child run.
       try { child.stdin.end(); } catch {}

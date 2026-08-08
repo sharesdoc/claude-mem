@@ -32,6 +32,11 @@ const TRANSCRIPT_WATCHER = {
   source: 'src/services/transcripts/transcript-watcher-entry.ts'
 };
 
+const HOOK_SERVICE = {
+  name: 'hook-service',
+  source: 'src/cli/hook-service-entry.ts'
+};
+
 function stripHardcodedDirname(filePath) {
   let content = fs.readFileSync(filePath, 'utf-8');
   const before = content.length;
@@ -78,6 +83,12 @@ function shellTemplateManifest(buildShellCommand) {
     host: 'codex-cli', requireFile: 'bun-runner.js', requireFileSecondary: 'worker-service.cjs',
     trailingCommand: [...ccTrailing('start'), '>/dev/null'], notFoundMessage: 'claude-mem: plugin scripts not found',
   });
+  const nodeHook = (host, hookPlatform, event) => buildShellCommand({
+    host,
+    requireFile: 'hook-service.mjs',
+    trailingCommand: ['node', '"$_P/scripts/hook-service.mjs"', hookPlatform, event],
+    notFoundMessage: 'claude-mem: hook service not found',
+  });
 
   return {
     'plugin/hooks/hooks.json': {
@@ -89,11 +100,11 @@ function shellTemplateManifest(buildShellCommand) {
           notFoundMessage: 'claude-mem: version-check.js not found',
         }),
         'SessionStart.0.0': claudeHook(['start'], { trailingJson: { continue: true, suppressOutput: true } }),
-        'SessionStart.0.1': claudeHook(['hook', 'claude-code', 'context']),
-        'UserPromptSubmit.0.0': claudeHook(['hook', 'claude-code', 'session-init']),
-        'PostToolUse.0.0': claudeHook(['hook', 'claude-code', 'observation']),
-        'PreToolUse.0.0': claudeHook(['hook', 'claude-code', 'file-context']),
-        'Stop.0.0': claudeHook(['hook', 'claude-code', 'summarize']),
+        'SessionStart.0.1': nodeHook('claude-code', 'claude-code', 'context'),
+        'UserPromptSubmit.0.0': nodeHook('claude-code', 'claude-code', 'session-init'),
+        'PostToolUse.0.0': nodeHook('claude-code', 'claude-code', 'observation'),
+        'PreToolUse.0.0': nodeHook('claude-code', 'claude-code', 'file-context'),
+        'Stop.0.0': nodeHook('claude-code', 'claude-code', 'summarize'),
       },
     },
     'plugin/hooks/codex-hooks.json': {
@@ -105,11 +116,11 @@ function shellTemplateManifest(buildShellCommand) {
           notFoundMessage: 'claude-mem: version-check.js not found',
         }),
         'SessionStart.0.1': codexQuietStartHook(),
-        'SessionStart.0.2': codexHook(['hook', 'codex', 'context']),
-        'UserPromptSubmit.0.0': codexHook(['hook', 'codex', 'session-init']),
-        'PreToolUse.0.0': codexHook(['hook', 'codex', 'file-context']),
-        'PostToolUse.0.0': codexHook(['hook', 'codex', 'observation']),
-        'Stop.0.0': codexHook(['hook', 'codex', 'summarize']),
+        'SessionStart.0.2': nodeHook('codex-cli', 'codex', 'context'),
+        'UserPromptSubmit.0.0': nodeHook('codex-cli', 'codex', 'session-init'),
+        'PreToolUse.0.0': nodeHook('codex-cli', 'codex', 'file-context'),
+        'PostToolUse.0.0': nodeHook('codex-cli', 'codex', 'observation'),
+        'Stop.0.0': nodeHook('codex-cli', 'codex', 'summarize'),
       },
     },
     'plugin/.mcp.json': {
@@ -221,6 +232,8 @@ async function buildHooks() {
     }
     console.log('✓ Output directories ready');
 
+    await verifyShellTemplateCanonical();
+
     console.log('\n📦 Generating plugin package.json...');
     const pluginPackageJson = {
       name: 'claude-mem-plugin',
@@ -325,6 +338,39 @@ async function buildHooks() {
     fs.chmodSync(`${hooksDir}/${WORKER_SERVICE.name}.cjs`, 0o755);
     const workerStats = fs.statSync(`${hooksDir}/${WORKER_SERVICE.name}.cjs`);
     console.log(`✓ worker-service built (${(workerStats.size / 1024).toFixed(2)} KB)`);
+
+    console.log(`\n🔧 Building lightweight hook service...`);
+    await build({
+      entryPoints: [HOOK_SERVICE.source],
+      bundle: true,
+      platform: 'node',
+      target: 'node18',
+      format: 'esm',
+      outfile: `${hooksDir}/${HOOK_SERVICE.name}.mjs`,
+      minify: true,
+      logLevel: 'error',
+      external: ['bun:sqlite'],
+      define: {
+        '__DEFAULT_PACKAGE_VERSION__': `"${version}"`,
+        'process.env.CLAUDE_MEM_HOOK_CLIENT_ONLY': '"1"',
+      },
+      banner: { js: '#!/usr/bin/env node' },
+    });
+
+    fs.chmodSync(`${hooksDir}/${HOOK_SERVICE.name}.mjs`, 0o755);
+    const hookServicePath = `${hooksDir}/${HOOK_SERVICE.name}.mjs`;
+    const hookServiceStats = fs.statSync(hookServicePath);
+    const hookServiceContent = fs.readFileSync(hookServicePath, 'utf-8');
+    if (hookServiceContent.includes('bun:') || hookServiceContent.includes('worker-service.cjs')) {
+      throw new Error('hook-service.mjs contains a Bun-only dependency or worker launcher');
+    }
+    const HOOK_SERVICE_MAX_BYTES = 256 * 1024;
+    if (hookServiceStats.size > HOOK_SERVICE_MAX_BYTES) {
+      throw new Error(
+        `hook-service.mjs is ${(hookServiceStats.size / 1024).toFixed(2)} KB, exceeding the 256 KB budget`
+      );
+    }
+    console.log(`✓ hook-service built (${(hookServiceStats.size / 1024).toFixed(2)} KB)`);
 
     console.log(`\n🔧 Building server beta service...`);
     await build({
@@ -601,6 +647,7 @@ async function buildHooks() {
       'plugin/hooks/hooks.json',
       'plugin/hooks/codex-hooks.json',
       'plugin/scripts/bun-runner.js',
+      'plugin/scripts/hook-service.mjs',
       'plugin/.claude-plugin/plugin.json',
       'plugin/.codex-plugin/plugin.json',
       'plugin/.mcp.json',
@@ -636,6 +683,7 @@ async function buildHooks() {
     console.log('\n✅ All build targets compiled successfully!');
     console.log(`   Output: ${hooksDir}/`);
     console.log(`   - Worker: worker-service.cjs`);
+    console.log(`   - Hook Service: hook-service.mjs`);
     console.log(`   - Server beta: server-beta-service.cjs`);
     console.log(`   - MCP Server: mcp-server.cjs`);
     console.log(`   - Context Generator: context-generator.cjs`);

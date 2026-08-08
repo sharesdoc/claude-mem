@@ -63,6 +63,7 @@ describe('Plugin Distribution - Required Files', () => {
     'plugin/.mcp.json',
     'plugin/skills/mem-search/SKILL.md',
     '.agents/plugins/marketplace.json',
+    'plugin/scripts/hook-service.mjs',
   ];
 
   for (const filePath of requiredFiles) {
@@ -71,6 +72,35 @@ describe('Plugin Distribution - Required Files', () => {
       expect(existsSync(fullPath)).toBe(true);
     });
   }
+});
+
+describe('Plugin Distribution - Lightweight Hook Runtime', () => {
+  for (const manifestPath of ['plugin/hooks/hooks.json', 'plugin/hooks/codex-hooks.json']) {
+    it(`${manifestPath} routes business hooks through Node without starting Bun`, () => {
+      const commands = commandHooksFrom(manifestPath);
+      const businessHooks = commands.filter(command =>
+        /\b(context|session-init|observation|file-context|summarize)\b/.test(command)
+      );
+
+      expect(businessHooks.length).toBeGreaterThan(0);
+      for (const command of businessHooks) {
+        expect(command).toContain('node "$_P/scripts/hook-service.mjs"');
+        expect(command).not.toContain('bun-runner.js');
+        expect(command).not.toContain('worker-service.cjs');
+      }
+    });
+  }
+
+  it('ships a small Node-only hook bundle', () => {
+    const bundlePath = path.join(projectRoot, 'plugin/scripts/hook-service.mjs');
+    expect(existsSync(bundlePath)).toBe(true);
+    if (!existsSync(bundlePath)) return;
+
+    const bundle = readFileSync(bundlePath, 'utf-8');
+    expect(Buffer.byteLength(bundle)).toBeLessThan(256 * 1024);
+    expect(bundle).not.toMatch(/(?:from|require\s*\()\s*["']bun:/);
+    expect(bundle).not.toContain('worker-service.cjs');
+  });
 });
 
 describe('Plugin Distribution - Codex Marketplace', () => {

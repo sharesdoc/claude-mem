@@ -1,3 +1,25 @@
+### X-013 高频 Hook 为每个事件启动 Bun CLI，突发时形成进程风暴
+
+Claude/Codex 的高频 Hook 当前经过 `node bun-runner.js → bun worker-service.cjs hook`，使一次 Hook 对应一个临时 Bun CLI；异步全量 `PostToolUse` 在事件突发或 stdin 退出延迟时会累积大量进程。任务将热路径改为轻量 Node bundle，并把 Bun worker 启动权收敛到 SessionStart/显式生命周期命令。
+
+- 编号：X-013
+- 任务类型：缺陷
+- 严重程度：P0
+- 状态：已完成-待验证
+- 来源：用户反馈（2026-08-09）及 `review-report-20260809030915.md`
+- 所属计划项：无（独立 fix）
+- 任务描述：高频 Hook 每次启动完整 Bun CLI，现场峰值达到每分钟 129 个 Hook、单分钟约 202 次 Bun CLI 初始化，并出现 1,571 次重复启动跳过记录；现有 stdin 超时补丁没有消除按事件创建 Bun 进程的结构性风险。
+- 涉及文件与行号：`plugin/hooks/hooks.json`、`plugin/hooks/codex-hooks.json`、`scripts/build-hooks.js:65-113`、`plugin/scripts/bun-runner.js:104-166`、`src/shared/worker-utils.ts:235-333`、`src/cli/stdin-reader.ts:30-112`
+- 关联需求：`doc/A-系统需求文档.md` SR-CLI-02、SR-SVC-01、SR-INFRA-04；`doc/B-系统设计文档.md` 非阻断优先、优雅降级、单机单用户基线。
+- 根因分析：Why-1——CPU 被大量 Bun 进程占用，因为异步高频 Hook 按事件启动 Bun CLI；Why-2——宿主命令统一经过 `bun-runner.js`，Hook 与生命周期命令未分流；Why-3——`worker-service.cjs` 同时承载 daemon 与 Hook CLI 两种职责；Why-4——handler 的 worker fallback 仍可在每个 Hook 进程内懒启动 daemon；Why-5——既有测试只验证命令可用和退出行为，没有约束“高频 Hook 不得启动 Bun”。
+- 影响评估：P0。突发事件可导致进程数、CPU 和内存快速增长，影响整机交互；worker 离线时并发 Hook 还可能共同参与恢复，进一步放大负载。
+- 实现/解决方案：新增 Node ESM `hook-service.mjs`，复用 adapter/handler 与现有 worker HTTP API；构建期固定 client-only 模式，使热路径只检查现有 daemon 而不启动 Bun；Claude/Codex Hook 配置直接调用该 bundle；`bun-runner.js` 在读取 stdin 前分流生命周期命令；增加 bundle 体积、Bun 依赖、命令链、stdin 上限和真实 Node 子进程回归测试。恢复构建脚本已引用但当前 HEAD 缺失的 `src/build/hook-shell-template.ts` canonical generator，内容以与当前 MCP 清单一致的历史提交 `8151cd5a` 为基线。
+- 验收/测试方法：(1) Claude/Codex 所有业务 Hook 命令不含 bun-runner/worker-service，仅生命周期 start 保留；(2) `hook-service.mjs` 可由 Node 18+ 执行、无 `bun:` 引用且体积小于 256 KB；(3) client-only 路径不调用 worker spawn；(4) 完整 JSON 无需 EOF 即处理，超过 5 MB 输入确定失败；(5) 200 次突发 Hook 不产生临时 Bun CLI；(6) typecheck、构建、定向测试和回归测试通过。
+- 涉及文档刷新：需 ree 刷新 `doc/A-系统需求文档.md`、`doc/B-系统设计文档.md` 的 Hook 启动链路事实；本次按 fix 规则只在 X 标注。
+- 实际修改位置：`src/cli/hook-service-entry.ts`、`src/shared/worker-utils.ts`、`src/cli/stdin-reader.ts`、`src/build/hook-shell-template.ts`、`scripts/build-hooks.js`、Claude/Codex Hook 清单、生成产物及对应测试。
+- 阶段验证结果：RED 分发测试 4 个失败；GREEN 后 typecheck、构建与 canonical 清单校验通过，定向测试 259 pass/0 fail。全量测试 4002 pass、37 skip、123 fail、1 error，相比既有记录 124 fail 未新增失败。200 个并发业务 Hook 前后 Bun 进程均为 1；新 Hook 149–152 ms，旧链路约 292–311 ms；轻量 bundle 68.33 KB。
+- rev 审查结果：`review-report-20260809034441.md` 结论 `approve`，0 blocking、0 important、0 待处理项；OCR 直接相关的 3 条意见已修复并复测。
+
 ### X-012 hook 退出码由两层共同负责，调用方返回码处理不可达
 
 hook 命令当前同时由 `hookCommand` 和 `main` 负责进程退出，导致新增加的调用方返回码处理在默认路径不可达；虽然常见阻断错误仍由被调用方返回 2，但初始化异常可能继续落入顶层退出 0，且 X-009 的关闭缺少真实控制流证据。

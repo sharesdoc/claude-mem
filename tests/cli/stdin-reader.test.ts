@@ -2,7 +2,7 @@
 import { describe, it, expect, afterEach } from 'bun:test';
 import { Readable } from 'stream';
 
-import { readJsonFromStdin } from '../../src/cli/stdin-reader.js';
+import { MAX_HOOK_STDIN_BYTES, readJsonFromStdin } from '../../src/cli/stdin-reader.js';
 
 const realStdin = process.stdin;
 const realStdinDescriptor = Object.getOwnPropertyDescriptor(process, 'stdin');
@@ -47,5 +47,10 @@ describe('readJsonFromStdin — onEnd contract (#2089)', () => {
   it('rejects when stdin closes with junk that is clearly not JSON', async () => {
     installFakeStdin('not json at all');
     await expect(readJsonFromStdin()).rejects.toThrow(/Malformed JSON at stdin EOF/);
+  });
+
+  it('rejects payloads larger than the hook input limit', async () => {
+    installFakeStdin(`{"payload":"${'x'.repeat(MAX_HOOK_STDIN_BYTES)}"}`);
+    await expect(readJsonFromStdin()).rejects.toThrow(/Hook stdin exceeds/);
   });
 });

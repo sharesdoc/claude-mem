@@ -328,9 +328,31 @@ export async function ensureWorkerRunning(): Promise<boolean> {
 
 let aliveCache: boolean | null = null;
 
+/**
+ * Check an already-running worker without recycling or spawning a process.
+ * High-frequency hook clients use this path so event volume can never control
+ * the number of Bun processes. Worker lifecycle remains owned by SessionStart
+ * and explicit start/restart commands.
+ *
+ * @returns True only when the existing daemon is healthy and ready.
+ */
+async function checkExistingWorkerReady(): Promise<boolean> {
+  try {
+    if (!await isWorkerHealthy()) return false;
+    return await waitForWorkerReadiness();
+  } catch (error: unknown) {
+    logger.debug('SYSTEM', 'Existing worker health check failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
 export async function ensureWorkerAliveOnce(): Promise<boolean> {
   if (aliveCache !== null) return aliveCache;
-  aliveCache = await ensureWorkerRunning();
+  aliveCache = process.env.CLAUDE_MEM_HOOK_CLIENT_ONLY === '1'
+    ? await checkExistingWorkerReady()
+    : await ensureWorkerRunning();
   return aliveCache;
 }
 

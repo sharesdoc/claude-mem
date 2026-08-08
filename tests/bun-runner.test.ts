@@ -44,3 +44,14 @@ describe('bun-runner.js collectStdin: X-010 error observability in destroy() fal
     expect(source).toContain('resolved = true');
   });
 });
+
+describe('bun-runner.js lifecycle stdin isolation', () => {
+  it('routes lifecycle commands before collecting hook stdin', () => {
+    const lifecycleDeclaration = source.indexOf("const lifecycleCommands = ['start', 'stop', 'restart', 'status']");
+    const stdinCollection = source.indexOf('const stdinData = isLifecycle ? null : await collectStdin()');
+
+    expect(lifecycleDeclaration).toBeGreaterThan(-1);
+    expect(stdinCollection).toBeGreaterThan(lifecycleDeclaration);
+    expect(source).not.toContain('const stdinData = await collectStdin()');
+  });
+});

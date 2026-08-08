@@ -34,6 +34,7 @@ function tryParseJson(input: string): { success: true; value: unknown } | { succ
 }
 
 const SAFETY_TIMEOUT_MS = 30000;
+export const MAX_HOOK_STDIN_BYTES = 5 * 1024 * 1024;
 
 export async function readJsonFromStdin(): Promise<unknown> {
   if (!isStdinAvailable()) {
@@ -42,6 +43,7 @@ export async function readJsonFromStdin(): Promise<unknown> {
 
   return new Promise((resolve, reject) => {
     let input = '';
+    let inputBytes = 0;
     let resolved = false;
 
     const cleanup = () => {
@@ -49,6 +51,7 @@ export async function readJsonFromStdin(): Promise<unknown> {
         process.stdin.removeAllListeners('data');
         process.stdin.removeAllListeners('end');
         process.stdin.removeAllListeners('error');
+        process.stdin.pause();
       } catch {
         // Ignore cleanup errors
       }
@@ -92,6 +95,11 @@ export async function readJsonFromStdin(): Promise<unknown> {
     }, SAFETY_TIMEOUT_MS);
 
     const onData = (chunk: Buffer | string) => {
+      inputBytes += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.byteLength;
+      if (inputBytes > MAX_HOOK_STDIN_BYTES) {
+        rejectWith(new Error(`Hook stdin exceeds ${MAX_HOOK_STDIN_BYTES} bytes`));
+        return;
+      }
       input += chunk;
 
       if (tryResolveWithJson()) {

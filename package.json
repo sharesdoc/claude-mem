@@ -52,6 +52,7 @@
     "plugin/hooks",
     "plugin/modes",
     "plugin/scripts/*.js",
+    "plugin/scripts/*.mjs",
     "plugin/scripts/*.cjs",
     "plugin/scripts/CLAUDE.md",
     "plugin/skills",
