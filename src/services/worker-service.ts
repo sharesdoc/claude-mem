@@ -7,7 +7,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { getWorkerPort, getWorkerHost } from '../shared/worker-utils.js';
 import { DATA_DIR, DB_PATH, USER_SETTINGS_PATH, ensureDir } from '../shared/paths.js';
-import { HOOK_TIMEOUTS } from '../shared/hook-constants.js';
+import { HOOK_EXIT_CODES, HOOK_TIMEOUTS } from '../shared/hook-constants.js';
 import { SettingsDefaultsManager } from '../shared/SettingsDefaultsManager.js';
 import { getAuthMethodDescription } from '../shared/EnvManager.js';
 import { logger } from '../utils/logger.js';
@@ -1346,6 +1346,40 @@ function runServerSyncAuditCli(args: string[]): never {
   }
 }
 
+type HookCommandModule = Pick<typeof import('../cli/hook-command.js'), 'hookCommand'>;
+type HookCommandLoader = () => Promise<HookCommandModule>;
+
+/**
+ * Resolve the exit code for a hook invocation without allowing the hook
+ * implementation to terminate the process itself. The worker CLI owns the
+ * final process exit so every hook path has one observable exit boundary.
+ *
+ * @param platform Host platform identifier passed to the hook adapter.
+ * @param event Hook event name passed to the event dispatcher.
+ * @param loadHookCommand Injectable module loader used by tests to reproduce
+ * initialization failures without corrupting the production bundle.
+ * @returns The hook result code, or FAILURE when loading/invocation throws
+ * before the hook can produce a code.
+ */
+export async function resolveHookExitCode(
+  platform: string,
+  event: string,
+  loadHookCommand: HookCommandLoader = () => import('../cli/hook-command.js')
+): Promise<number> {
+  try {
+    const { hookCommand } = await loadHookCommand();
+    return await hookCommand(platform, event, { skipExit: true });
+  } catch (error) {
+    logger.error(
+      'SYSTEM',
+      'Hook command failed before producing an exit code',
+      { platform, event },
+      error instanceof Error ? error : { thrownValue: String(error) }
+    );
+    return HOOK_EXIT_CODES.FAILURE;
+  }
+}
+
 async function main() {
   const { command, args: commandArgs } = parseWorkerServiceCommand(process.argv.slice(2));
 
@@ -1503,12 +1537,8 @@ async function main() {
         logger.warn('SYSTEM', 'Worker failed to start before hook, handler will proceed gracefully');
       }
 
-      const { hookCommand } = await import('../cli/hook-command.js');
-      const exitCode = await hookCommand(platform, event);
-      // hookCommand returns exit code but may not always call process.exit()
-      // depending on skipExit option. Use the return code to exit with proper
-      // semantics: success (0) vs. blocking error (2) vs. other (1).
-      process.exit(exitCode ?? 1);
+      const exitCode = await resolveHookExitCode(platform, event);
+      process.exit(exitCode);
       break;
     }
 

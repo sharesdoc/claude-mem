@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'bun:test';
+import { describe, it, expect, mock } from 'bun:test';
 import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
 import path from 'path';
-import { buildStatusOutput, StatusOutput } from '../../src/services/worker-service.js';
+import { buildStatusOutput, resolveHookExitCode, StatusOutput } from '../../src/services/worker-service.js';
 
 const WORKER_SCRIPT = path.join(__dirname, '../../plugin/scripts/worker-service.cjs');
 
@@ -13,6 +13,52 @@ function runWorkerStart(): { stdout: string; exitCode: number } {
   });
   return { stdout: result.stdout?.trim() || '', exitCode: result.status || 0 };
 }
+
+function runWorkerHook(input: string): { stdout: string; exitCode: number | null } {
+  const result = spawnSync('bun', [WORKER_SCRIPT, 'hook', 'raw', 'unknown-event'], {
+    encoding: 'utf-8',
+    input,
+    timeout: 60000
+  });
+  return { stdout: result.stdout?.trim() || '', exitCode: result.status };
+}
+
+describe('hook command exit ownership', () => {
+  it('asks hookCommand to return without exiting and preserves a blocking code', async () => {
+    const hookCommand = mock(async () => 2);
+    const loadHookCommand = mock(async () => ({ hookCommand }));
+
+    const exitCode = await resolveHookExitCode('raw', 'observation', loadHookCommand);
+
+    expect(exitCode).toBe(2);
+    expect(hookCommand).toHaveBeenCalledWith('raw', 'observation', { skipExit: true });
+  });
+
+  it('maps hook command initialization failures to a non-blocking failure code', async () => {
+    const loadHookCommand = mock(async () => {
+      throw new Error('synthetic hook import failure');
+    });
+
+    expect(await resolveHookExitCode('raw', 'observation', loadHookCommand)).toBe(1);
+  });
+
+  it('returns success for a valid built hook invocation', () => {
+    const result = runWorkerHook('{}\n');
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      continue: true,
+      suppressOutput: true,
+      exitCode: 0
+    });
+  });
+
+  it('returns blocking status for invalid JSON through the built hook', () => {
+    const result = runWorkerHook('not-json\n');
+
+    expect(result.exitCode).toBe(2);
+  });
+});
 
 describe('worker-json-status', () => {
   describe('buildStatusOutput', () => {
