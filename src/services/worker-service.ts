@@ -17,6 +17,8 @@ import { configureSupervisorSignalHandlers, getSupervisor, startSupervisor } fro
 import { sanitizeEnv } from '../supervisor/env-sanitizer.js';
 
 import { ensureWorkerStarted as ensureWorkerStartedShared, type WorkerStartResult } from './worker-spawner.js';
+import { acquireSpawnLock, releaseSpawnLock } from '../shared/worker-spawn-gate.js';
+import { getCurrentWorkerPid, verifyRestartedWorker } from './restart-verify.js';
 import { handleGeneratorExit } from './worker/session/GeneratorExitHandler.js';
 
 export { isPluginDisabledInClaudeSettings } from '../shared/plugin-state.js';
@@ -1421,6 +1423,7 @@ async function main() {
 
     case 'restart': {
       logger.info('SYSTEM', 'Restarting worker');
+      const oldPid = await getCurrentWorkerPid(port);
       await httpShutdown(port);
       const restartFreed = await waitForPortFree(port, 5000);
       if (!restartFreed) {
@@ -1428,12 +1431,37 @@ async function main() {
         process.exit(1);
       }
       removePidFile();
-      const restartPid = spawnDaemon(__filename, port);
-      if (restartPid === undefined) {
-        console.error('Failed to spawn worker daemon during restart.');
-        process.exit(1);
+      const ownsSpawn = acquireSpawnLock();
+      try {
+        if (ownsSpawn) {
+          const restartPid = spawnDaemon(__filename, port);
+          if (restartPid === undefined) {
+            console.error('Failed to spawn worker daemon during restart.');
+            releaseSpawnLock();
+            process.exit(1);
+          }
+          logger.info('SYSTEM', 'Worker restart spawned', { pid: restartPid });
+        } else {
+          logger.info('SYSTEM', 'Another launcher owns restart spawn; verifying its worker');
+        }
+        const verification = await verifyRestartedWorker(
+          port,
+          oldPid,
+          packageVersion,
+          getPlatformTimeout(HOOK_TIMEOUTS.POST_SPAWN_WAIT)
+        );
+        if (!verification.ok) {
+          console.error(`Worker restart could not be verified: ${verification.lastObserved}`);
+          if (ownsSpawn) releaseSpawnLock();
+          process.exit(1);
+        }
+        logger.info('SYSTEM', 'Worker restart verified', {
+          pid: verification.pid,
+          version: verification.version,
+        });
+      } finally {
+        if (ownsSpawn) releaseSpawnLock();
       }
-      logger.info('SYSTEM', 'Worker restart spawned', { pid: restartPid });
       process.exit(0);
       break;
     }

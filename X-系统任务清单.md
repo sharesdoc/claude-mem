@@ -306,7 +306,7 @@ X-013 已切断高频 Hook 的 Bun 启动权，但 SessionStart、MCP、transcri
 - 编号：X-014
 - 任务类型：缺陷（生命周期/并发）
 - 严重程度：P0
-- 状态：新建
+- 状态：待验证
 - 来源：`review-report-20260809041304.md`，上游提交 `c0b96288`、`1fe9bea6`、`7d3f1879`、`906ffe37`
 - 所属计划项：无（独立 fix）
 - 任务描述：多个非 Hook 控制面采用“先检查健康、后 spawn”的观察式逻辑，没有跨进程原子锁；版本检查固定读取 marketplace，spawn 路径另行解析；restart 发起后缺少新 PID 与预期版本验收，可能重复启动、版本乒乓或假成功。
@@ -317,3 +317,4 @@ X-013 已切断高频 Hook 的 Bun 启动权，但 SessionStart、MCP、transcri
 - 实现/解决方案：新增 `<DATA_DIR>/spawn.lock` 的 `wx` 原子 gate（90s stale、re-stat 防 TOCTOU、owner-only release），只包实际 spawn 并持有到 ready/warming；新增身份优先、path+version 同源的 worker script resolver，禁止按最高官方 cache 覆盖定制 worker；restart 只有在新 PID 且版本等于构建期预期值后才成功。高频 Node Hook 继续 client-only，绝不移植上游 Hook SIGKILL/respawn。
 - 验收/测试方法：(1) 20 个并发 launcher 最多 spawn 一个 daemon；(2) gate 的竞争、90s stale、owner release、finally 释放通过；(3) custom/upstream cache 并存时不越身份选官方；(4) restart 对旧 PID/错误版本/不可达返回失败，新 PID+正确版本成功；(5) Hook bundle 仍零 Bun/零 spawn；(6) typecheck、构建、生命周期定向测试与实际并发验证通过。
 - 涉及文档刷新：需 ree 刷新 A/B 的 daemon 控制面事实；当前缺完整 A-F 体系，只在 X 标注。
+- 实现记录：新增 owner-checked、90 秒陈旧接管的 `spawn.lock`，接入 `worker-spawner`、非 Hook lazy-spawn 与 CLI restart；worker 路径和版本一次解析，restart 必须验证新 PID 与构建期版本。高频 Hook 仍只检查既有 daemon。

@@ -147,8 +147,8 @@ export interface VersionCheckResult {
   workerVersion: string | null;
 }
 
-export async function checkVersionMatch(port: number): Promise<VersionCheckResult> {
-  const pluginVersion = getInstalledPluginVersion();
+export async function checkVersionMatch(port: number, expectedVersion?: string): Promise<VersionCheckResult> {
+  const pluginVersion = expectedVersion ?? getInstalledPluginVersion();
   const workerVersion = await getRunningWorkerVersion(port);
 
   if (!workerVersion || pluginVersion === 'unknown') {

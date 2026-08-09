@@ -10,6 +10,7 @@ import { MARKETPLACE_ROOT, DATA_DIR } from "./paths.js";
 import { loadFromFileOnce } from "./hook-settings.js";
 import { validateWorkerPidFile } from "../supervisor/index.js";
 import { checkVersionMatch } from "../services/infrastructure/index.js";
+import { acquireSpawnLock, releaseSpawnLock } from './worker-spawn-gate.js';
 
 function readTimeoutEnv(
   envName: string,
@@ -131,13 +132,41 @@ async function isWorkerReady(): Promise<boolean> {
   return response.ok;
 }
 
-function resolveWorkerScriptPath(): string | null {
+export interface WorkerScriptCandidate {
+  scriptPath: string;
+  version: string;
+}
+
+function readVersionForScript(scriptPath: string): string {
+  let directory = path.dirname(scriptPath);
+  for (let depth = 0; depth < 5; depth++) {
+    const packagePath = path.join(directory, 'package.json');
+    if (existsSync(packagePath)) {
+      try {
+        const parsed = JSON.parse(readFileSync(packagePath, 'utf8')) as { version?: unknown };
+        if (typeof parsed.version === 'string') return parsed.version;
+      } catch {
+        // Continue upward; a partial package file must not select another identity.
+      }
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) break;
+    directory = parent;
+  }
+  return 'unknown';
+}
+
+/** Resolves script and version from the same installation identity. */
+export function resolveWorkerScript(): WorkerScriptCandidate | null {
   const candidates = [
+    process.env.CLAUDE_MEM_WORKER_SCRIPT_PATH,
     path.join(MARKETPLACE_ROOT, 'plugin', 'scripts', 'worker-service.cjs'),
     path.join(process.cwd(), 'plugin', 'scripts', 'worker-service.cjs'),
-  ];
+  ].filter((candidate): candidate is string => Boolean(candidate));
   for (const candidate of candidates) {
-    if (existsSync(candidate)) return candidate;
+    if (existsSync(candidate)) {
+      return { scriptPath: candidate, version: readVersionForScript(candidate) };
+    }
   }
   return null;
 }
@@ -221,6 +250,7 @@ async function isWorkerPortAlive(): Promise<boolean> {
     logger.debug('SYSTEM', 'Worker health check threw', {
       error: error instanceof Error ? error.message : String(error),
     });
+    releaseSpawnLock();
     return false;
   }
   if (!healthy) return false;
@@ -232,6 +262,7 @@ async function isWorkerPortAlive(): Promise<boolean> {
 }
 
 export async function ensureWorkerRunning(): Promise<boolean> {
+  const resolvedWorker = resolveWorkerScript();
   if (await isWorkerPortAlive()) {
     // A worker is already alive. If it is a DIFFERENT version than the
     // installed plugin (e.g. the user upgraded but the previous worker is
@@ -243,7 +274,10 @@ export async function ensureWorkerRunning(): Promise<boolean> {
     // it: ask the running worker to restart via its localhost-only admin
     // endpoint, then fall through to the lazy-spawn + readiness path so the
     // current-version worker is (re)started and awaited.
-    const { matches, pluginVersion, workerVersion } = await checkVersionMatch(getWorkerPort());
+    const { matches, pluginVersion, workerVersion } = await checkVersionMatch(
+      getWorkerPort(),
+      resolvedWorker?.version
+    );
     if (matches) {
       const ready = await waitForWorkerReadiness();
       if (!ready) {
@@ -276,7 +310,7 @@ export async function ensureWorkerRunning(): Promise<boolean> {
   }
 
   const runtimePath = resolveBunRuntime();
-  const scriptPath = resolveWorkerScriptPath();
+  const scriptPath = resolvedWorker?.scriptPath ?? null;
 
   if (!runtimePath) {
     logger.warn('SYSTEM', 'Cannot lazy-spawn worker: Bun runtime not found on PATH');
@@ -288,6 +322,12 @@ export async function ensureWorkerRunning(): Promise<boolean> {
   }
 
   logger.info('SYSTEM', 'Worker not running — lazy-spawning', { runtimePath, scriptPath });
+
+  if (!acquireSpawnLock()) {
+    logger.info('SYSTEM', 'Another launcher owns daemon spawn; waiting for its worker');
+    const alive = await waitForWorkerPort({ attempts: 6, backoffMs: 500 });
+    return alive && await waitForWorkerReadiness();
+  }
 
   try {
     const proc = spawnHidden(runtimePath, [scriptPath, '--daemon'], {
@@ -313,17 +353,21 @@ export async function ensureWorkerRunning(): Promise<boolean> {
   // soft-failed to empty — dropping memory injection and the user_prompts row
   // (the upstream trigger for #2794). Wait up to ~15.5s (≈ POST_SPAWN_WAIT) so
   // whichever worker wins the port is seen before we give up.
-  const alive = await waitForWorkerPort({ attempts: 6, backoffMs: 500 });
-  if (!alive) {
-    logger.warn('SYSTEM', 'Worker port did not open after lazy-spawn within the cold-boot wait (~15s)');
-    return false;
+  try {
+    const alive = await waitForWorkerPort({ attempts: 6, backoffMs: 500 });
+    if (!alive) {
+      logger.warn('SYSTEM', 'Worker port did not open after lazy-spawn within the cold-boot wait (~15s)');
+      return false;
+    }
+    const ready = await waitForWorkerReadiness();
+    if (!ready) {
+      logger.warn('SYSTEM', 'Worker lazy-spawned but did not become ready before hook readiness timeout');
+      return false;
+    }
+    return true;
+  } finally {
+    releaseSpawnLock();
   }
-  const ready = await waitForWorkerReadiness();
-  if (!ready) {
-    logger.warn('SYSTEM', 'Worker lazy-spawned but did not become ready before hook readiness timeout');
-    return false;
-  }
-  return true;
 }
 
 let aliveCache: boolean | null = null;

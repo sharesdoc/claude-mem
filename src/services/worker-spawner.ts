@@ -15,6 +15,7 @@ import {
   waitForHealth,
   waitForReadiness,
 } from './infrastructure/HealthMonitor.js';
+import { acquireSpawnLock, releaseSpawnLock } from '../shared/worker-spawn-gate.js';
 
 const WINDOWS_SPAWN_COOLDOWN_MS = 2 * 60 * 1000;
 
@@ -127,27 +128,39 @@ export async function ensureWorkerStarted(
     return 'dead';
   }
 
+  if (!acquireSpawnLock()) {
+    logger.info('SYSTEM', 'Another launcher owns daemon spawn; waiting for its worker');
+    const healthy = await waitForHealth(port, getPlatformTimeout(HOOK_TIMEOUTS.POST_SPAWN_WAIT));
+    if (!healthy) return 'dead';
+    const ready = await waitForReadiness(port, getPlatformTimeout(HOOK_TIMEOUTS.READINESS_WAIT));
+    return ready ? 'ready' : 'warming';
+  }
+
   logger.info('SYSTEM', 'Starting worker daemon', { workerScriptPath });
-  markWorkerSpawnAttempted();
-  const pid = spawnDaemon(workerScriptPath, port);
-  if (pid === undefined) {
-    logger.error('SYSTEM', 'Failed to spawn worker daemon');
-    return 'dead';
-  }
+  try {
+    markWorkerSpawnAttempted();
+    const pid = spawnDaemon(workerScriptPath, port);
+    if (pid === undefined) {
+      logger.error('SYSTEM', 'Failed to spawn worker daemon');
+      return 'dead';
+    }
 
-  const healthy = await waitForHealth(port, getPlatformTimeout(HOOK_TIMEOUTS.POST_SPAWN_WAIT));
-  if (!healthy) {
-    logger.warn('SYSTEM', 'Worker spawned but health endpoint not responding within window — likely still starting in background');
-    return 'warming';
-  }
+    const healthy = await waitForHealth(port, getPlatformTimeout(HOOK_TIMEOUTS.POST_SPAWN_WAIT));
+    if (!healthy) {
+      logger.warn('SYSTEM', 'Worker spawned but health endpoint not responding within window — likely still starting in background');
+      return 'warming';
+    }
 
-  const ready = await waitForReadiness(port, getPlatformTimeout(HOOK_TIMEOUTS.READINESS_WAIT));
-  if (!ready) {
-    logger.warn('SYSTEM', 'Worker is alive but readiness timed out — proceeding anyway');
-  }
+    const ready = await waitForReadiness(port, getPlatformTimeout(HOOK_TIMEOUTS.READINESS_WAIT));
+    if (!ready) {
+      logger.warn('SYSTEM', 'Worker is alive but readiness timed out — proceeding anyway');
+    }
 
-  clearWorkerSpawnAttempted();
-  touchPidFile();
-  logger.info('SYSTEM', 'Worker started successfully');
-  return ready ? 'ready' : 'warming';
+    clearWorkerSpawnAttempted();
+    touchPidFile();
+    logger.info('SYSTEM', 'Worker started successfully');
+    return ready ? 'ready' : 'warming';
+  } finally {
+    releaseSpawnLock();
+  }
 }
