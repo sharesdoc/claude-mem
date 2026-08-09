@@ -250,7 +250,6 @@ async function isWorkerPortAlive(): Promise<boolean> {
     logger.debug('SYSTEM', 'Worker health check threw', {
       error: error instanceof Error ? error.message : String(error),
     });
-    releaseSpawnLock();
     return false;
   }
   if (!healthy) return false;
@@ -264,6 +263,10 @@ async function isWorkerPortAlive(): Promise<boolean> {
 export async function ensureWorkerRunning(): Promise<boolean> {
   const resolvedWorker = resolveWorkerScript();
   if (await isWorkerPortAlive()) {
+    if (!resolvedWorker) {
+      logger.warn('SYSTEM', 'Worker is alive but no same-source worker script/version could be resolved; keeping the existing worker');
+      return await waitForWorkerReadiness();
+    }
     // A worker is already alive. If it is a DIFFERENT version than the
     // installed plugin (e.g. the user upgraded but the previous worker is
     // still squatting the port), recycle it so the current version takes
@@ -276,7 +279,7 @@ export async function ensureWorkerRunning(): Promise<boolean> {
     // current-version worker is (re)started and awaited.
     const { matches, pluginVersion, workerVersion } = await checkVersionMatch(
       getWorkerPort(),
-      resolvedWorker?.version
+      resolvedWorker.version
     );
     if (matches) {
       const ready = await waitForWorkerReadiness();
@@ -329,23 +332,6 @@ export async function ensureWorkerRunning(): Promise<boolean> {
     return alive && await waitForWorkerReadiness();
   }
 
-  try {
-    const proc = spawnHidden(runtimePath, [scriptPath, '--daemon'], {
-      detached: true,
-      stdio: ['ignore', 'ignore', 'ignore'],
-    });
-    proc.unref();
-  } catch (error: unknown) {
-    if (error instanceof Error) {
-      logger.error('SYSTEM', 'Lazy-spawn of worker failed', { runtimePath, scriptPath }, error);
-    } else {
-      logger.error('SYSTEM', 'Lazy-spawn of worker failed (non-Error)', {
-        runtimePath, scriptPath, error: String(error),
-      });
-    }
-    return false;
-  }
-
   // Cold boot (#2795): on the first session after a reboot the SessionStart
   // `start` hook is booting the daemon in parallel, and a cold macOS+Chroma
   // worker needs ~7s to bind. The old 3-attempt/250ms budget (~0.75s) expired
@@ -354,6 +340,23 @@ export async function ensureWorkerRunning(): Promise<boolean> {
   // (the upstream trigger for #2794). Wait up to ~15.5s (≈ POST_SPAWN_WAIT) so
   // whichever worker wins the port is seen before we give up.
   try {
+    try {
+      const proc = spawnHidden(runtimePath, [scriptPath, '--daemon'], {
+        detached: true,
+        stdio: ['ignore', 'ignore', 'ignore'],
+      });
+      proc.unref();
+    } catch (error: unknown) {
+      if (error instanceof Error) {
+        logger.error('SYSTEM', 'Lazy-spawn of worker failed', { runtimePath, scriptPath }, error);
+      } else {
+        logger.error('SYSTEM', 'Lazy-spawn of worker failed (non-Error)', {
+          runtimePath, scriptPath, error: String(error),
+        });
+      }
+      return false;
+    }
+
     const alive = await waitForWorkerPort({ attempts: 6, backoffMs: 500 });
     if (!alive) {
       logger.warn('SYSTEM', 'Worker port did not open after lazy-spawn within the cold-boot wait (~15s)');

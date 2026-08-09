@@ -2,9 +2,11 @@ import { describe, it, expect } from 'bun:test';
 import { readFileSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const projectRoot = path.resolve(__dirname, '../..');
+const require = createRequire(import.meta.url);
 
 function readJson(relativePath: string): any {
   return JSON.parse(readFileSync(path.join(projectRoot, relativePath), 'utf-8'));
@@ -85,6 +87,10 @@ describe('Plugin Distribution - Maintainer Instruction Isolation', () => {
   it('keeps maintainer-local instructions out of clone sync', () => {
     const gitignore = readFileSync(path.join(projectRoot, '.gitignore'), 'utf8');
     expect(gitignore.split(/\r?\n/)).toContain('CLAUDE.local.md');
+    const { getGitignoreExcludes } = require('../../scripts/sync-excludes.cjs');
+    const excludes = getGitignoreExcludes(projectRoot);
+    expect(excludes).toContain('CLAUDE.local.md');
+    expect(excludes.every((pattern: string) => !pattern.startsWith('--exclude='))).toBe(true);
   });
 });
 

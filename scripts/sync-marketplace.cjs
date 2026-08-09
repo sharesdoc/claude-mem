@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-const { execSync } = require('child_process');
+const { execFileSync, execSync } = require('child_process');
 const { existsSync, readFileSync } = require('fs');
 const path = require('path');
 const os = require('os');
+const { getGitignoreExcludes } = require('./sync-excludes.cjs');
 // ── 跨平台目录同步(Windows无rsync时的Node.js实现,solutions.md问题2) ──
 const _isWin = process.platform === 'win32';
 function syncDir(src, dest, excludes) {
@@ -53,7 +54,7 @@ function syncDir(src, dest, excludes) {
 }
 function rsyncExec(src, dest, excludes) {
   if(_isWin){ syncDir(src,dest,excludes); return; }
-  execSync('rsync -av --delete '+excludes.map(e=>'--exclude='+e).join(' ')+' "'+src+'/" "'+dest+'/"',{stdio:'inherit'});
+  execFileSync('rsync', ['-av', '--delete', ...excludes.map(e => '--exclude='+e), src+'/', dest+'/'], {stdio:'inherit'});
 }
 
 
@@ -111,25 +112,6 @@ function getCurrentBranch() {
   } catch {
     return null;
   }
-}
-
-function getGitignoreExcludes(basePath) {
-  const gitignorePath = path.join(basePath, '.gitignore');
-  if (!existsSync(gitignorePath)) return '';
-
-  const syncManagedFiles = new Set();
-
-  const lines = readFileSync(gitignorePath, 'utf-8').split('\n');
-  return lines
-    .map(line => line.trim())
-    .filter(line =>
-      line &&
-      !line.startsWith('#') &&
-      !line.startsWith('!') &&
-      !syncManagedFiles.has(line)
-    )
-    .map(pattern => `--exclude=${JSON.stringify(pattern)}`)
-    .join(' ');
 }
 
 const branch = getCurrentBranch();

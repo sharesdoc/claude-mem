@@ -233,7 +233,7 @@ hook 命令当前同时由 `hookCommand` 和 `main` 负责进程退出，导致�
 - 编号：X-018
 - 任务类型：缺陷（分发安全）
 - 严重程度：P1
-- 状态：待验证
+- 状态：已验证-关闭
 - 来源：`review-report-20260809041304.md`，上游提交 `e29d2213`
 - 所属计划项：无（独立 fix）
 - 任务描述：受版本控制的 `CLAUDE.md` 包含维护者每日自动升级所有依赖、执行 audit fix、build-and-sync 与 git commit 的指令；marketplace clone 不受 npm ignore 保护，用户侧 Agent 可能继承并执行这些维护者动作。
@@ -244,6 +244,8 @@ hook 命令当前同时由 `hookCommand` 和 `main` 负责进程退出，导致�
 - 实现/解决方案：移除 tracked `CLAUDE.md` 中的维护者自动化段，将其保留为本机 ignored 配置的职责；为 clone/tarball 可见内容增加禁止维护者自动提交、全量升级指令的测试。不得依赖 `.npmignore` 作为 marketplace 防线。
 - 验收/测试方法：(1) tracked `CLAUDE.md` 不含每日自动升级/audit fix/build-and-sync/自动 commit 指令；(2) 本机规则文件被 gitignore；(3) 分发测试能够在上述指令重新出现时失败；(4) typecheck 与定向测试通过。
 - 实现记录：维护者 Daily Maintenance 已移至项目级 ignored `CLAUDE.local.md`；tracked `CLAUDE.md` 仅保留公共贡献说明；分发测试锁定危险指令不得重新进入公开根指令。
+- 验证方法与结果：分发复审发现并修复 Windows 排除参数与 Unix 含空格 pattern 问题；改为共享 raw pattern 数组及 `execFileSync` 参数调用。相关分发测试、脚本语法检查、typecheck、build 均通过。
+- 关闭时间：2026-08-09
 
 ### X-017 Context 纯读取路径构造完整 SessionStore，参与建库与迁移锁竞争
 
@@ -252,7 +254,7 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 编号：X-017
 - 任务类型：缺陷（性能/并发）
 - 严重程度：P1
-- 状态：待验证
+- 状态：已验证-关闭
 - 来源：`review-report-20260809041304.md`，上游提交 `1094e067`、`48319a43`
 - 所属计划项：无（独立 fix）
 - 任务描述：`ContextBuilder.initializeDatabase()` 为纯查询创建 `SessionStore`；构造器会创建数据目录/数据库、设置 WAL、初始化 schema 并检查迁移，使 Context Hook 参与写锁竞争，数据库不存在时还会产生新文件。
@@ -263,6 +265,8 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 实现/解决方案：数据库存在时直接打开 `bun:sqlite` 只读连接，设置 5 秒 `busy_timeout`，查询参数收窄为 `{ db: Database }`，所有路径可靠关闭；数据库不存在时返回空结果且不创建文件。保持本地单/多项目查询语义不变。
 - 验收/测试方法：(1) DB 不存在时不创建文件；(2) 已提交记录可读、未提交记录不可见；(3) schema/记录计数不变且 integrity_check=ok；(4) 350ms 独占锁后可等待成功；(5) 构建、定向测试通过并刷新 context bundle。
 - 实现记录：ContextBuilder 在 DB 存在时以 `readonly/create:false` 打开 `bun:sqlite` 并设置 5 秒 busy timeout；ObservationCompiler 只依赖 `{ db: Database }`；所有返回路径关闭只读句柄，DB 不存在时不建文件。
+- 验证方法与结果：4 项只读专项测试通过，覆盖缺库不创建、已提交可见/未提交不可见、schema 与记录计数不变、integrity_check=ok、350ms 独占锁等待；复审通过。
+- 关闭时间：2026-08-09
 
 ### X-016 Chroma 本地并发写无背压，重复批与单水位可能丢失同步
 
@@ -271,7 +275,7 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 编号：X-016
 - 任务类型：缺陷（性能/数据一致性）
 - 严重程度：P0
-- 状态：待验证
+- 状态：已验证-关闭
 - 来源：`review-report-20260809041304.md`，上游提交 `a90066f9`、`26d8cd3d`、`bdc78123`、`964104b6`
 - 所属计划项：无（独立 fix）
 - 任务描述：本地 Chroma mutation 没有串行化/队列上限，collection 创建只靠布尔值；重复冲突执行 delete+add，混合重复/新 ID 批可能整批失败或吞新记录；同步状态只看最大 ID，低位失败在水位前进后无法重试。
@@ -283,6 +287,8 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 验收/测试方法：(1) 并发本地 mutation 同时最多 1 个，远程读写不被错误串行；(2) collection 并发创建只调用一次；(3) 队列溢出/关闭后确定失败并可由 backfill 恢复；(4) 全重复、混合批、重启 gap、已删除 pending 行正确；(5) 不再 delete+add 重复文档；(6) typecheck、构建与 Chroma 定向测试通过。
 - 涉及文档刷新：需 ree 刷新 E/F（ChromaSyncState 持久化状态契约）；当前缺完整 A-F 体系，只在 X 标注。
 - 实现记录：本地 mutation 进入 5000 上限的单航道并在 shutdown generation 变化后取消；collection 创建 single-flight；重复批按现存 ID 拆分 update/add；live 与 backfill 失败均写入持久化 pending，按 SQLite 行完整写入后清 gap 并推进水位。
+- 验证方法与结果：复审补齐连接中 stop 的 generation 取消、先销毁后有界等待、完整 reconcile 排他事务、collection 初始化失败回填和多文档行完整性判断；Chroma 专项测试与 typecheck 通过。
+- 关闭时间：2026-08-09
 
 ### X-015 SDK 并发检查与实际 spawn 之间无预留，配置上限可被并发超发
 
@@ -291,7 +297,7 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 编号：X-015
 - 任务类型：缺陷（性能/并发）
 - 严重程度：P0
-- 状态：待验证
+- 状态：已验证-关闭
 - 来源：`review-report-20260809041304.md`，上游提交 `17dbeea6`、`04734d70`
 - 所属计划项：无（独立 fix）
 - 任务描述：`waitForSlot(): Promise<void>` 在 active count 小于上限时立即放行；调用方之后仍需 OAuth、query 与 spawn，进程稍后才注册。并发调用会在登记前共同越过上限，官方曾复现 max=2 实际启动 9 个 SDK agent。
@@ -302,6 +308,8 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 实现/解决方案：增加计入容量的 `SlotReservation`，立即获准和排队获准时原子预留；reservation `release()` 幂等，abort/OAuth/query/spawn 失败及 finally 全部释放；spawn 登记后释放预留，避免双计数。
 - 验收/测试方法：(1) 5 并发、上限 2、无进程登记时只放行 2；(2) 未 release 时后续等待；(3) release 幂等；(4) reservation→registry record 总占用为 1；(5) abort/OAuth/query/spawn 失败不泄漏；(6) typecheck、构建和 supervisor/ClaudeProvider 定向测试通过。
 - 实现记录：`waitForSlot` 在同步判定内返回计入容量的幂等 reservation；spawn factory 在登记成功/失败时释放，ClaudeProvider 的外层 finally 覆盖 OAuth、query 与 abort 等未 spawn 路径。
+- 验证方法与结果：并发槽位定向测试、typecheck、build 通过；两轮 rev 均未发现 blocking/important。
+- 关闭时间：2026-08-09
 
 ### X-014 daemon 多入口启动缺原子互斥，版本判断与实际脚本来源不统一
 
@@ -310,7 +318,7 @@ X-013 已切断高频 Hook 的 Bun 启动权，但 SessionStart、MCP、transcri
 - 编号：X-014
 - 任务类型：缺陷（生命周期/并发）
 - 严重程度：P0
-- 状态：待验证
+- 状态：已验证-关闭
 - 来源：`review-report-20260809041304.md`，上游提交 `c0b96288`、`1fe9bea6`、`7d3f1879`、`906ffe37`
 - 所属计划项：无（独立 fix）
 - 任务描述：多个非 Hook 控制面采用“先检查健康、后 spawn”的观察式逻辑，没有跨进程原子锁；版本检查固定读取 marketplace，spawn 路径另行解析；restart 发起后缺少新 PID 与预期版本验收，可能重复启动、版本乒乓或假成功。
@@ -322,3 +330,5 @@ X-013 已切断高频 Hook 的 Bun 启动权，但 SessionStart、MCP、transcri
 - 验收/测试方法：(1) 20 个并发 launcher 最多 spawn 一个 daemon；(2) gate 的竞争、90s stale、owner release、finally 释放通过；(3) custom/upstream cache 并存时不越身份选官方；(4) restart 对旧 PID/错误版本/不可达返回失败，新 PID+正确版本成功；(5) Hook bundle 仍零 Bun/零 spawn；(6) typecheck、构建、生命周期定向测试与实际并发验证通过。
 - 涉及文档刷新：需 ree 刷新 A/B 的 daemon 控制面事实；当前缺完整 A-F 体系，只在 X 标注。
 - 实现记录：新增 owner-checked、90 秒陈旧接管的 `spawn.lock`，接入 `worker-spawner`、非 Hook lazy-spawn 与 CLI restart；worker 路径和版本一次解析，restart 必须验证新 PID 与构建期版本。高频 Hook 仍只检查既有 daemon。
+- 验证方法与结果：复审修复健康探测提前释放、非 EEXIST fail-open、spawn 异常锁泄漏和无同源脚本时误重启；生命周期定向测试、typecheck、build 通过，复审结论 pass。
+- 关闭时间：2026-08-09

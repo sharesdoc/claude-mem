@@ -41,8 +41,13 @@ function initializeDatabase(): Database | null {
   try {
     if (!existsSync(DB_PATH)) return null;
     const db = new Database(DB_PATH, { readonly: true, create: false });
-    db.exec('PRAGMA busy_timeout = 5000');
-    return db;
+    try {
+      db.exec('PRAGMA busy_timeout = 5000');
+      return db;
+    } catch (error) {
+      db.close();
+      throw error;
+    }
   } catch (error: unknown) {
     if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ERR_DLOPEN_FAILED') {
       try {

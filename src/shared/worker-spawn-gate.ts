@@ -27,8 +27,8 @@ export function acquireSpawnLock(): boolean {
       const err = error instanceof Error ? error : new Error(String(error));
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'EEXIST') {
-        logger.warn('SYSTEM', 'Spawn lock unavailable; failing open', { lockPath, code }, err);
-        return true;
+        logger.warn('SYSTEM', 'Spawn lock unavailable; refusing an uncoordinated daemon spawn', { lockPath, code }, err);
+        return false;
       }
       if (attempt > 0) return false;
 

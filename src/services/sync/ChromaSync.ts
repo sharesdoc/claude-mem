@@ -347,7 +347,15 @@ export class ChromaSync {
       return 0;
     }
 
-    await this.ensureCollectionExists();
+    try {
+      await this.ensureCollectionExists();
+    } catch (error) {
+      logger.error('CHROMA_SYNC', 'Collection initialization failed — deferring documents to backfill', {
+        collection: this.collectionName,
+        documentCount: documents.length
+      }, error instanceof Error ? error : new Error(String(error)));
+      return 0;
+    }
 
     const chromaMcp = ChromaMcpManager.getInstance();
 
@@ -362,18 +370,19 @@ export class ChromaSync {
       );
 
       try {
-        await chromaMcp.callTool('chroma_add_documents', {
-          collection_name: this.collectionName,
-          ids: batch.map(d => d.id),
-          documents: batch.map(d => d.document),
-          metadatas: cleanMetadatas
-        });
-        written += batch.length;
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        if (errMsg.includes('already exist')) {
+        written += await chromaMcp.runMutationExclusive(async callTool => {
           try {
-            const existing = await chromaMcp.callTool('chroma_get_documents', {
+            await callTool('chroma_add_documents', {
+              collection_name: this.collectionName,
+              ids: batch.map(d => d.id),
+              documents: batch.map(d => d.document),
+              metadatas: cleanMetadatas
+            });
+            return batch.length;
+          } catch (error) {
+            const errMsg = error instanceof Error ? error.message : String(error);
+            if (!errMsg.includes('already exist')) throw error;
+            const existing = await callTool('chroma_get_documents', {
               collection_name: this.collectionName,
               ids: batch.map(d => d.id),
               include: []
@@ -387,22 +396,20 @@ export class ChromaSync {
               ))
             );
             if (toUpdate.length > 0) {
-              await chromaMcp.callTool('chroma_update_documents', {
+              await callTool('chroma_update_documents', {
                 collection_name: this.collectionName,
                 ids: toUpdate.map(document => document.id),
                 documents: toUpdate.map(document => document.document),
                 metadatas: cleanFor(toUpdate)
               });
-              written += toUpdate.length;
             }
             if (toAdd.length > 0) {
-              await chromaMcp.callTool('chroma_add_documents', {
+              await callTool('chroma_add_documents', {
                 collection_name: this.collectionName,
                 ids: toAdd.map(document => document.id),
                 documents: toAdd.map(document => document.document),
                 metadatas: cleanFor(toAdd)
               });
-              written += toAdd.length;
             }
             logger.info('CHROMA_SYNC', 'Batch reconciled via in-place update + add', {
               collection: this.collectionName,
@@ -411,20 +418,15 @@ export class ChromaSync {
               updated: toUpdate.length,
               added: toAdd.length
             });
-          } catch (reconcileError) {
-            logger.error('CHROMA_SYNC', 'Batch reconcile (update+add) failed — watermark will not advance for this batch', {
-              collection: this.collectionName,
-              batchStart: i,
-              batchSize: batch.length
-            }, reconcileError as Error);
+            return toUpdate.length + toAdd.length;
           }
-        } else {
-          logger.error('CHROMA_SYNC', 'Batch add failed — watermark will not advance for this batch, continuing with remaining batches', {
-            collection: this.collectionName,
-            batchStart: i,
-            batchSize: batch.length
-          }, error as Error);
-        }
+        }, `reconcile batch ${i}`);
+      } catch (error) {
+        logger.error('CHROMA_SYNC', 'Batch write/reconcile failed — watermark will not advance for this batch', {
+          collection: this.collectionName,
+          batchStart: i,
+          batchSize: batch.length
+        }, error instanceof Error ? error : new Error(String(error)));
       }
     }
 
@@ -600,6 +602,7 @@ export class ChromaSync {
     observations: Set<number>;
     summaries: Set<number>;
     prompts: Set<number>;
+    documents: Set<string>;
   }> {
     const targetProject = projectOverride ?? this.project;
     await this.ensureCollectionExists();
@@ -609,6 +612,7 @@ export class ChromaSync {
     const observationIds = new Set<number>();
     const summaryIds = new Set<number>();
     const promptIds = new Set<number>();
+    const documentIds = new Set<string>();
 
     let offset = 0;
     const limit = 1000; 
@@ -625,12 +629,15 @@ export class ChromaSync {
       }) as any;
 
       const metadatas = result?.metadatas || [];
+      const ids = result?.ids || [];
 
       if (metadatas.length === 0) {
         break; 
       }
 
-      for (const meta of metadatas) {
+      for (let index = 0; index < metadatas.length; index += 1) {
+        const meta = metadatas[index];
+        if (typeof ids[index] === 'string') documentIds.add(ids[index]);
         if (meta && meta.sqlite_id) {
           const sqliteId = meta.sqlite_id as number;
           if (meta.doc_type === 'observation') {
@@ -660,7 +667,7 @@ export class ChromaSync {
       total: observationIds.size + summaryIds.size + promptIds.size
     });
 
-    return { observations: observationIds, summaries: summaryIds, prompts: promptIds };
+    return { observations: observationIds, summaries: summaryIds, prompts: promptIds, documents: documentIds };
   }
 
   async bootstrapWatermarksFromChroma(project: string, store: SessionStore): Promise<void> {
@@ -670,20 +677,18 @@ export class ChromaSync {
       for (const id of set) if (id > m) m = id;
       return m;
     };
-    const observationIds = store.db.prepare('SELECT id FROM observations WHERE project = ? ORDER BY id').all(project) as Array<{ id: number }>;
-    const summaryIds = store.db.prepare('SELECT id FROM session_summaries WHERE project = ? ORDER BY id').all(project) as Array<{ id: number }>;
-    const promptIds = store.db.prepare(`
-      SELECT up.id FROM user_prompts up
+    const observationRows = store.db.prepare('SELECT * FROM observations WHERE project = ? ORDER BY id').all(project) as StoredObservation[];
+    const summaryRows = store.db.prepare('SELECT * FROM session_summaries WHERE project = ? ORDER BY id').all(project) as StoredSummary[];
+    const promptRows = store.db.prepare(`
+      SELECT up.*, s.project, s.memory_session_id FROM user_prompts up
       JOIN sdk_sessions s ON up.content_session_id = s.content_session_id
       WHERE s.project = ? ORDER BY up.id
-    `).all(project) as Array<{ id: number }>;
-    const summarize = (source: Array<{ id: number }>, chromaIds: Set<number>) => {
-      const watermark = max(chromaIds);
-      return { watermark, pending: source.map(row => row.id).filter(id => id <= watermark && !chromaIds.has(id)) };
-    };
-    const observations = summarize(observationIds, existing.observations);
-    const summaries = summarize(summaryIds, existing.summaries);
-    const prompts = summarize(promptIds, existing.prompts);
+    `).all(project) as StoredUserPrompt[];
+    const summarize = <T extends { id: number }>(source: T[], chromaIds: Set<number>, expectedIds: (row: T) => string[]) =>
+      ChromaSync.summarizeBootstrapRows(source, max(chromaIds), existing.documents, expectedIds);
+    const observations = summarize(observationRows, existing.observations, row => this.formatObservationDocs(row).map(doc => doc.id));
+    const summaries = summarize(summaryRows, existing.summaries, row => this.formatSummaryDocs(row).map(doc => doc.id));
+    const prompts = summarize(promptRows, existing.prompts, row => [this.formatUserPromptDoc(row).id]);
     ChromaSyncState.replace(project, {
       observations: observations.watermark,
       summaries: summaries.watermark,
@@ -698,6 +703,22 @@ export class ChromaSync {
       project,
       watermarks: ChromaSyncState.get(project)
     });
+  }
+
+  private static summarizeBootstrapRows<T extends { id: number }>(
+    source: T[],
+    watermark: number,
+    existingDocumentIds: Set<string>,
+    expectedIds: (row: T) => string[]
+  ): { watermark: number; pending: number[] } {
+    return {
+      watermark,
+      pending: source.filter(row => {
+        if (row.id > watermark) return false;
+        const expected = expectedIds(row);
+        return expected.length === 0 || expected.some(id => !existingDocumentIds.has(id));
+      }).map(row => row.id)
+    };
   }
 
   async ensureBackfilled(projectOverride?: string, storeOverride?: SessionStore): Promise<void> {

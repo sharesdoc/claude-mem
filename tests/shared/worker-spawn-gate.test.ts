@@ -46,4 +46,11 @@ describe('worker spawn gate', () => {
     releaseSpawnLock();
     expect(JSON.parse(readFileSync(lockPath, 'utf8')).pid).toBe(process.pid + 1);
   });
+
+  it('锁路径发生非竞争 I/O 错误时拒绝无协调启动', () => {
+    const invalidDataPath = path.join(dataDir, 'not-a-directory');
+    writeFileSync(invalidDataPath, 'file');
+    process.env.CLAUDE_MEM_DATA_DIR = invalidDataPath;
+    expect(acquireSpawnLock()).toBe(false);
+  });
 });

@@ -22,6 +22,7 @@ const RECONNECT_BACKOFF_MS = 10_000;
 const DEFAULT_CHROMA_DATA_DIR = paths.chroma();
 const CHROMA_SUPERVISOR_ID = 'chroma-mcp';
 const DEFAULT_MAX_PENDING_MUTATIONS = 5_000;
+const SHUTDOWN_CONNECTION_DRAIN_MS = 500;
 const CHROMA_MUTATION_TOOL_PATTERN = /^chroma_(?:add|create|delete|modify|update|upsert)_/;
 
 const CHROMA_MCP_PINNED_VERSION = '0.2.6';
@@ -59,6 +60,7 @@ export class ChromaMcpManager {
   private readonly maxPendingMutationCalls: number;
   private readonly serializeMutations: boolean;
   private acceptingLocalMutations = true;
+  private acceptingConnections = true;
 
   private constructor() {
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
@@ -80,6 +82,9 @@ export class ChromaMcpManager {
   }
 
   private async ensureConnected(): Promise<void> {
+    if (!this.acceptingConnections) {
+      throw new ChromaUnavailableError('chroma-mcp connection is unavailable after shutdown begins');
+    }
     if (this.connected && this.client) {
       return;
     }
@@ -94,7 +99,8 @@ export class ChromaMcpManager {
       return;
     }
 
-    this.connecting = this.connectInternal();
+    const generation = this.connectionGeneration;
+    this.connecting = this.connectInternal(generation);
     try {
       await this.connecting;
     } catch (error) {
@@ -110,7 +116,13 @@ export class ChromaMcpManager {
     }
   }
 
-  private async connectInternal(): Promise<void> {
+  private assertConnectionCurrent(generation: number): void {
+    if (!this.acceptingConnections || generation !== this.connectionGeneration) {
+      throw new ChromaUnavailableError('chroma-mcp connection cancelled during shutdown');
+    }
+  }
+
+  private async connectInternal(generation: number): Promise<void> {
     // Singleton invariant (#2313): kill any pre-existing chroma-mcp subprocess
     // tree before spawning a new one. The MCP SDK's transport.close() only
     // signals the direct child (uvx); on Linux the grandchildren (uv, python,
@@ -119,16 +131,19 @@ export class ChromaMcpManager {
     // tree-kill primitive used by stop() so reconnect can never leave
     // orphans behind.
     await this.disposeCurrentSubprocess();
+    this.assertConnectionCurrent(generation);
 
     // Orphan sweep (X-004): reclaim chroma-mcp trees left behind by dead
     // workers. chroma-mcp does not exit on stdin EOF, so any worker death
     // that skipped tree-kill (crash, SIGKILL, aborted shutdown) re-parents
     // the uvx/python pair to init where it accumulates forever.
     await ChromaMcpManager.sweepOrphanedChroma();
+    this.assertConnectionCurrent(generation);
 
     const commandArgs = this.buildCommandArgs();
     const spawnEnvironment = this.getSpawnEnv();
     getSupervisor().assertCanSpawn('chroma mcp');
+    this.assertConnectionCurrent(generation);
 
     const isWindows = process.platform === 'win32';
     const uvxSpawnCommand = isWindows ? (process.env.ComSpec || 'cmd.exe') : 'uvx';
@@ -163,6 +178,7 @@ export class ChromaMcpManager {
 
     try {
       await Promise.race([mcpConnectionPromise, timeoutPromise]);
+      this.assertConnectionCurrent(generation);
     } catch (connectionError) {
       clearTimeout(timeoutId!);
       logger.warn('CHROMA_MCP', 'Connection failed, killing subprocess tree to prevent zombie', {
@@ -268,6 +284,23 @@ export class ChromaMcpManager {
       return this.enqueueMutation(() => this.callToolUnqueued(toolName, toolArguments), toolName);
     }
     return this.callToolUnqueued(toolName, toolArguments);
+  }
+
+  /**
+   * Serializes a multi-call local mutation as one operation so duplicate-ID
+   * reconciliation cannot interleave with another writer between get/update.
+   * Remote Chroma keeps its native concurrency.
+   */
+  async runMutationExclusive<T>(
+    operation: (callTool: (toolName: string, toolArguments: Record<string, unknown>) => Promise<unknown>) => Promise<T>,
+    label = 'mutation-sequence'
+  ): Promise<T> {
+    const run = () => operation((toolName, toolArguments) => this.callToolUnqueued(toolName, toolArguments));
+    if (!this.serializeMutations) return run();
+    if (!this.acceptingLocalMutations) {
+      throw new ChromaUnavailableError('Local Chroma mutations are unavailable after shutdown begins');
+    }
+    return this.enqueueMutation(run, label);
   }
 
   private async callToolUnqueued(toolName: string, toolArguments: Record<string, unknown>): Promise<unknown> {
@@ -491,18 +524,23 @@ export class ChromaMcpManager {
    */
   async stop(): Promise<void> {
     this.acceptingLocalMutations = false;
+    this.acceptingConnections = false;
     this.connectionGeneration += 1;
-    if (!this.client && !this.transport) {
-      logger.debug('CHROMA_MCP', 'No active MCP connection to stop');
-      this.connecting = null;
-      return;
+    const pendingConnection = this.connecting;
+    // Tear down first so a stuck MCP handshake cannot hold the complete worker
+    // shutdown behind the normal 30-second connection timeout.
+    await this.disposeCurrentSubprocess();
+    if (pendingConnection) {
+      await Promise.race([
+        pendingConnection.catch(() => undefined),
+        new Promise<void>(resolve => setTimeout(resolve, SHUTDOWN_CONNECTION_DRAIN_MS)),
+      ]);
     }
-
-    logger.info('CHROMA_MCP', 'Stopping chroma-mcp MCP connection');
-
+    if (this.client || this.transport) logger.info('CHROMA_MCP', 'Stopping chroma-mcp MCP connection');
+    // A connection may have crossed an await boundary while the first dispose
+    // ran; this second pass closes any handle it installed in that window.
     await this.disposeCurrentSubprocess();
     this.connecting = null;
-
     logger.info('CHROMA_MCP', 'chroma-mcp MCP connection stopped');
   }
 

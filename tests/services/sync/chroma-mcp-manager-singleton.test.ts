@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test';
+import { afterAll, describe, it, expect, beforeEach, mock } from 'bun:test';
 
 // Singleton enforcement regression coverage for issue #2313.
 //
@@ -173,6 +173,31 @@ describe('ChromaMcpManager singleton enforcement (#2313)', () => {
     expect(transportCount).toBe(1);
   });
 
+  it('does not spawn when stop races the initial connection yield', async () => {
+    const mgr = ChromaMcpManager.getInstance();
+    const pendingCall = mgr.callTool('chroma_list_collections', { limit: 1 });
+
+    await mgr.stop();
+
+    await expect(pendingCall).rejects.toThrow('shutdown');
+    expect(transportCount).toBe(0);
+  });
+
+  it('stops promptly and kills the subprocess when MCP connect never resolves', async () => {
+    connectImpl = () => new Promise<void>(() => {});
+    const mgr = ChromaMcpManager.getInstance();
+    const pendingCall = mgr.callTool('chroma_list_collections', { limit: 1 });
+    void pendingCall.catch(() => undefined);
+    while (transportInstances.length === 0) await Bun.sleep(1);
+    const subprocessPid = transportInstances[0]._process.pid;
+    const startedAt = performance.now();
+
+    await mgr.stop();
+
+    expect(performance.now() - startedAt).toBeLessThan(2_000);
+    expect(killTreeCalls).toContain(subprocessPid);
+  });
+
   it('serializes concurrent local mutation calls', async () => {
     const mgr = ChromaMcpManager.getInstance();
     let activeMutations = 0;
@@ -233,15 +258,13 @@ describe('ChromaMcpManager singleton enforcement (#2313)', () => {
     // subprocess tree must have been signaled.
     expect(killTreeCalls).toContain(subprocessPid);
 
-    // A subsequent ensureConnected must spawn a fresh transport (not reuse
-    // a stale one).
-    await mgr.callTool('chroma_list_collections', { limit: 1 });
-    expect(transportInstances.length).toBe(2);
+    await expect(mgr.callTool('chroma_list_collections', { limit: 1 })).rejects.toThrow('shutdown');
+    expect(transportInstances.length).toBe(1);
   });
 });
 
 // Restore the real process.kill once the test module finishes evaluating any
 // late-arriving microtasks.
-process.on('exit', () => {
+afterAll(() => {
   process.kill = realProcessKill;
 });
