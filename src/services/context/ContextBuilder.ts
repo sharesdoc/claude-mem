@@ -1,8 +1,9 @@
 
 import path from 'path';
 import { homedir } from 'os';
-import { unlinkSync } from 'fs';
-import { SessionStore } from '../sqlite/SessionStore.js';
+import { existsSync, unlinkSync } from 'fs';
+import { Database } from 'bun:sqlite';
+import { DB_PATH } from '../../shared/paths.js';
 import { logger } from '../../utils/logger.js';
 import { getProjectContext } from '../../utils/project-name.js';
 
@@ -36,9 +37,12 @@ const VERSION_MARKER_PATH = path.join(
   '.install-version'
 );
 
-function initializeDatabase(): SessionStore | null {
+function initializeDatabase(): Database | null {
   try {
-    return new SessionStore();
+    if (!existsSync(DB_PATH)) return null;
+    const db = new Database(DB_PATH, { readonly: true, create: false });
+    db.exec('PRAGMA busy_timeout = 5000');
+    return db;
   } catch (error: unknown) {
     if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ERR_DLOPEN_FAILED') {
       try {
@@ -114,12 +118,13 @@ export async function generateContext(
     config.sessionCount = 999999;
   }
 
-  const db = initializeDatabase();
-  if (!db) {
+  const rawDb = initializeDatabase();
+  if (!rawDb) {
     return '';
   }
 
   try {
+    const db = { db: rawDb };
     const observations = projects.length > 1
       ? queryObservationsMulti(db, projects, config)
       : queryObservations(db, project, config);
@@ -143,6 +148,6 @@ export async function generateContext(
 
     return output;
   } finally {
-    db.close();
+    rawDb.close();
   }
 }

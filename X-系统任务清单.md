@@ -251,7 +251,7 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 编号：X-017
 - 任务类型：缺陷（性能/并发）
 - 严重程度：P1
-- 状态：新建
+- 状态：待验证
 - 来源：`review-report-20260809041304.md`，上游提交 `1094e067`、`48319a43`
 - 所属计划项：无（独立 fix）
 - 任务描述：`ContextBuilder.initializeDatabase()` 为纯查询创建 `SessionStore`；构造器会创建数据目录/数据库、设置 WAL、初始化 schema 并检查迁移，使 Context Hook 参与写锁竞争，数据库不存在时还会产生新文件。
@@ -261,6 +261,7 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 影响评估：P1。会增加高频/并发 Hook 的 SQLite 锁竞争、启动延迟，并可能在 worker 未初始化时创建不完整数据库。
 - 实现/解决方案：数据库存在时直接打开 `bun:sqlite` 只读连接，设置 5 秒 `busy_timeout`，查询参数收窄为 `{ db: Database }`，所有路径可靠关闭；数据库不存在时返回空结果且不创建文件。保持本地单/多项目查询语义不变。
 - 验收/测试方法：(1) DB 不存在时不创建文件；(2) 已提交记录可读、未提交记录不可见；(3) schema/记录计数不变且 integrity_check=ok；(4) 350ms 独占锁后可等待成功；(5) 构建、定向测试通过并刷新 context bundle。
+- 实现记录：ContextBuilder 在 DB 存在时以 `readonly/create:false` 打开 `bun:sqlite` 并设置 5 秒 busy timeout；ObservationCompiler 只依赖 `{ db: Database }`；所有返回路径关闭只读句柄，DB 不存在时不建文件。
 
 ### X-016 Chroma 本地并发写无背压，重复批与单水位可能丢失同步
 
