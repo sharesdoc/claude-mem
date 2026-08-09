@@ -173,6 +173,25 @@ describe('ChromaMcpManager singleton enforcement (#2313)', () => {
     expect(transportCount).toBe(1);
   });
 
+  it('serializes concurrent local mutation calls', async () => {
+    const mgr = ChromaMcpManager.getInstance();
+    let activeMutations = 0;
+    let maxActiveMutations = 0;
+    callToolImpl = async () => {
+      activeMutations += 1;
+      maxActiveMutations = Math.max(maxActiveMutations, activeMutations);
+      await Bun.sleep(2);
+      activeMutations -= 1;
+      return { content: [{ type: 'text', text: '{}' }] };
+    };
+
+    await Promise.all(Array.from({ length: 20 }, (_, index) =>
+      mgr.callTool('chroma_add_documents', { ids: [`doc-${index}`] })
+    ));
+
+    expect(maxActiveMutations).toBe(1);
+  });
+
   it('kills the prior subprocess tree before a reconnect spawn', async () => {
     const mgr = ChromaMcpManager.getInstance();
 

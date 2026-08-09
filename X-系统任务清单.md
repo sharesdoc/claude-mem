@@ -269,7 +269,7 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 编号：X-016
 - 任务类型：缺陷（性能/数据一致性）
 - 严重程度：P0
-- 状态：新建
+- 状态：待验证
 - 来源：`review-report-20260809041304.md`，上游提交 `a90066f9`、`26d8cd3d`、`bdc78123`、`964104b6`
 - 所属计划项：无（独立 fix）
 - 任务描述：本地 Chroma mutation 没有串行化/队列上限，collection 创建只靠布尔值；重复冲突执行 delete+add，混合重复/新 ID 批可能整批失败或吞新记录；同步状态只看最大 ID，低位失败在水位前进后无法重试。
@@ -280,6 +280,7 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 实现/解决方案：本地模式的 mutation 进入共享串行 tail 并设置 5000 有界积压，读请求与远程模式保持并发；collection 创建使用 single-flight Promise；重复批先 get 后拆为 update/add；同步状态持久化 pending row IDs，只有一行全部文档成功后才清 gap/推进水位。保持现有重连和降级行为。
 - 验收/测试方法：(1) 并发本地 mutation 同时最多 1 个，远程读写不被错误串行；(2) collection 并发创建只调用一次；(3) 队列溢出/关闭后确定失败并可由 backfill 恢复；(4) 全重复、混合批、重启 gap、已删除 pending 行正确；(5) 不再 delete+add 重复文档；(6) typecheck、构建与 Chroma 定向测试通过。
 - 涉及文档刷新：需 ree 刷新 E/F（ChromaSyncState 持久化状态契约）；当前缺完整 A-F 体系，只在 X 标注。
+- 实现记录：本地 mutation 进入 5000 上限的单航道并在 shutdown generation 变化后取消；collection 创建 single-flight；重复批按现存 ID 拆分 update/add；live 与 backfill 失败均写入持久化 pending，按 SQLite 行完整写入后清 gap 并推进水位。
 
 ### X-015 SDK 并发检查与实际 spawn 之间无预留，配置上限可被并发超发
 

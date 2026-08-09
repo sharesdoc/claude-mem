@@ -11,6 +11,7 @@ import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js
 import { USER_SETTINGS_PATH, paths } from '../../shared/paths.js';
 import { sanitizeEnv } from '../../supervisor/env-sanitizer.js';
 import { getSupervisor } from '../../supervisor/index.js';
+import { ChromaUnavailableError } from '../worker/search/errors.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,6 +21,8 @@ const MCP_CONNECTION_TIMEOUT_MS = 30_000;
 const RECONNECT_BACKOFF_MS = 10_000;
 const DEFAULT_CHROMA_DATA_DIR = paths.chroma();
 const CHROMA_SUPERVISOR_ID = 'chroma-mcp';
+const DEFAULT_MAX_PENDING_MUTATIONS = 5_000;
+const CHROMA_MUTATION_TOOL_PATTERN = /^chroma_(?:add|create|delete|modify|update|upsert)_/;
 
 const CHROMA_MCP_PINNED_VERSION = '0.2.6';
 
@@ -50,8 +53,24 @@ export class ChromaMcpManager {
   private connected: boolean = false;
   private lastConnectionFailureTimestamp: number = 0;
   private connecting: Promise<void> | null = null;
+  private connectionGeneration = 0;
+  private mutationTail: Promise<void> = Promise.resolve();
+  private pendingMutationCalls = 0;
+  private readonly maxPendingMutationCalls: number;
+  private readonly serializeMutations: boolean;
+  private acceptingLocalMutations = true;
 
-  private constructor() {}
+  private constructor() {
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const configuredLimit = Number.parseInt(
+      process.env.CLAUDE_MEM_CHROMA_MAX_PENDING_MUTATIONS ?? '',
+      10
+    );
+    this.maxPendingMutationCalls = Number.isInteger(configuredLimit) && configuredLimit > 0
+      ? configuredLimit
+      : DEFAULT_MAX_PENDING_MUTATIONS;
+    this.serializeMutations = (settings.CLAUDE_MEM_CHROMA_MODE || 'local') !== 'remote';
+  }
 
   static getInstance(): ChromaMcpManager {
     if (!ChromaMcpManager.instance) {
@@ -242,6 +261,17 @@ export class ChromaMcpManager {
   }
 
   async callTool(toolName: string, toolArguments: Record<string, unknown>): Promise<unknown> {
+    if (this.serializeMutations && CHROMA_MUTATION_TOOL_PATTERN.test(toolName)) {
+      if (!this.acceptingLocalMutations) {
+        throw new ChromaUnavailableError('Local Chroma mutations are unavailable after shutdown begins');
+      }
+      return this.enqueueMutation(() => this.callToolUnqueued(toolName, toolArguments), toolName);
+    }
+    return this.callToolUnqueued(toolName, toolArguments);
+  }
+
+  private async callToolUnqueued(toolName: string, toolArguments: Record<string, unknown>): Promise<unknown> {
+    const generation = this.connectionGeneration;
     await this.ensureConnected();
 
     logger.debug('CHROMA_MCP', `Calling tool: ${toolName}`, {
@@ -259,12 +289,19 @@ export class ChromaMcpManager {
         error: transportError instanceof Error ? transportError.message : String(transportError)
       });
 
+      if (generation !== this.connectionGeneration) {
+        throw new ChromaUnavailableError('chroma-mcp call cancelled during shutdown');
+      }
+
       // Tree-kill the dying subprocess before reconnect. Previously this path
       // just nulled the handle, which on Linux leaks the uv/python/chroma-mcp
       // descendants every time a transport error happens (#2313).
       await this.disposeCurrentSubprocess();
 
       try {
+        if (generation !== this.connectionGeneration) {
+          throw new ChromaUnavailableError('chroma-mcp call cancelled during shutdown');
+        }
         await this.ensureConnected();
         result = await this.client!.callTool({
           name: toolName,
@@ -302,6 +339,28 @@ export class ChromaMcpManager {
         });
       }
       return null;
+    }
+  }
+
+  private async enqueueMutation<T>(operation: () => Promise<T>, toolName: string): Promise<T> {
+    if (this.pendingMutationCalls >= this.maxPendingMutationCalls) {
+      throw new ChromaUnavailableError(
+        `Chroma mutation queue is full (${this.pendingMutationCalls}/${this.maxPendingMutationCalls}); deferring "${toolName}" to backfill`
+      );
+    }
+    this.pendingMutationCalls += 1;
+    const generation = this.connectionGeneration;
+    const run = this.mutationTail.catch(() => undefined).then(async () => {
+      if (generation !== this.connectionGeneration || !this.acceptingLocalMutations) {
+        throw new ChromaUnavailableError('queued chroma-mcp mutation cancelled during shutdown');
+      }
+      return operation();
+    });
+    this.mutationTail = run.then(() => undefined, () => undefined);
+    try {
+      return await run;
+    } finally {
+      this.pendingMutationCalls -= 1;
     }
   }
 
@@ -431,6 +490,8 @@ export class ChromaMcpManager {
    * pattern from shutdown.ts (Principle 5: OS-supervised teardown).
    */
   async stop(): Promise<void> {
+    this.acceptingLocalMutations = false;
+    this.connectionGeneration += 1;
     if (!this.client && !this.transport) {
       logger.debug('CHROMA_MCP', 'No active MCP connection to stop');
       this.connecting = null;
