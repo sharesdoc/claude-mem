@@ -226,3 +226,94 @@ hook 命令当前同时由 `hookCommand` 和 `main` 负责进程退出，导致�
 - git commit ID：2ae17d44
 - 验证方法与结果：curl 矩阵——LAN 无 token/错 token 访问 /api/observations、/api/sync/status、/stream、/api/sync/ingest 全部 401；共享 token 与 admin 会话 token 均 200；ingest 带 token 返回 400（载荷无效）而非 401 证明鉴权通过；localhost 无凭据 200（X-005 回环放行），开关置 false 即时 401；公开白名单（/、静态资源、/api/health、admin login/session/role）可达且 role 对未认证远端隐藏 userLabel。浏览器实测：LAN 显示登录页（数据请求全部 401 被拒），localhost 直进主界面、SSE Connected、0 控制台错误。
 - 关闭时间：2026-06-12 13:23
+### X-018 维护者自动升级与提交指令随 marketplace clone 分发
+
+根目录 `CLAUDE.md` 同时承担贡献者说明与维护者本机自动化配置，marketplace 以仓库 clone 交付时会把每日全量依赖升级、自动修复、构建同步和提交指令带给最终用户。本任务只隔离维护者专属指令并建立分发守卫，不改变插件功能。
+
+- 编号：X-018
+- 任务类型：缺陷（分发安全）
+- 严重程度：P1
+- 状态：新建
+- 来源：`review-report-20260809041304.md`，上游提交 `e29d2213`
+- 所属计划项：无（独立 fix）
+- 任务描述：受版本控制的 `CLAUDE.md` 包含维护者每日自动升级所有依赖、执行 audit fix、build-and-sync 与 git commit 的指令；marketplace clone 不受 npm ignore 保护，用户侧 Agent 可能继承并执行这些维护者动作。
+- 涉及文件与行号：`CLAUDE.md:114-122`、`.gitignore`、`tests/infrastructure/plugin-distribution.test.ts`
+- 关联需求：`doc/A-系统需求文档.md` SR-INFRA-04；分发安全与最小副作用约束。
+- 根因分析：Why-1——用户安装目录可能出现自动依赖升级/提交指令，因为根 `CLAUDE.md` 会随 clone 分发；Why-2——维护者本机规则与公开贡献规则写在同一文件；Why-3——原防护只关注 npm 包内容，没有覆盖 marketplace clone；Why-4——没有针对维护者指令的分发契约测试；Why-5——项目未区分 tracked 公共指令与 ignored local 指令。
+- 影响评估：P1。是否执行取决于宿主对项目指令的加载，但一旦触发会修改依赖、生成产物和 Git 历史，属于不应下放给终端用户的高副作用行为。
+- 实现/解决方案：移除 tracked `CLAUDE.md` 中的维护者自动化段，将其保留为本机 ignored 配置的职责；为 clone/tarball 可见内容增加禁止维护者自动提交、全量升级指令的测试。不得依赖 `.npmignore` 作为 marketplace 防线。
+- 验收/测试方法：(1) tracked `CLAUDE.md` 不含每日自动升级/audit fix/build-and-sync/自动 commit 指令；(2) 本机规则文件被 gitignore；(3) 分发测试能够在上述指令重新出现时失败；(4) typecheck 与定向测试通过。
+
+### X-017 Context 纯读取路径构造完整 SessionStore，参与建库与迁移锁竞争
+
+Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执行目录创建、数据库初始化、WAL 与迁移检查。并发会话下该读路径会扩大写锁竞争和 Hook 延迟，本任务将其收敛为不会建库、不会迁移的只读连接。
+
+- 编号：X-017
+- 任务类型：缺陷（性能/并发）
+- 严重程度：P1
+- 状态：新建
+- 来源：`review-report-20260809041304.md`，上游提交 `1094e067`、`48319a43`
+- 所属计划项：无（独立 fix）
+- 任务描述：`ContextBuilder.initializeDatabase()` 为纯查询创建 `SessionStore`；构造器会创建数据目录/数据库、设置 WAL、初始化 schema 并检查迁移，使 Context Hook 参与写锁竞争，数据库不存在时还会产生新文件。
+- 涉及文件与行号：`src/services/context/ContextBuilder.ts:39-58`、`src/services/context/ObservationCompiler.ts`、`src/services/sqlite/SessionStore.ts:62-105`
+- 关联需求：`doc/A-系统需求文档.md` SR-CLI-02；`doc/B-系统设计文档.md` 非阻断 Hook 与本地 SQLite 可靠性设计。
+- 根因分析：Why-1——Context 并发时可能锁等待/超时，因为纯读路径执行了可能写 schema 的 store 初始化；Why-2——查询编译器参数绑定到完整 `SessionStore`；Why-3——缺少最小只读数据库接口；Why-4——未使用 SQLite `readonly/create:false` 与 busy timeout；Why-5——测试没有约束“不存在时不建库、读取时不改 schema”。
+- 影响评估：P1。会增加高频/并发 Hook 的 SQLite 锁竞争、启动延迟，并可能在 worker 未初始化时创建不完整数据库。
+- 实现/解决方案：数据库存在时直接打开 `bun:sqlite` 只读连接，设置 5 秒 `busy_timeout`，查询参数收窄为 `{ db: Database }`，所有路径可靠关闭；数据库不存在时返回空结果且不创建文件。保持本地单/多项目查询语义不变。
+- 验收/测试方法：(1) DB 不存在时不创建文件；(2) 已提交记录可读、未提交记录不可见；(3) schema/记录计数不变且 integrity_check=ok；(4) 350ms 独占锁后可等待成功；(5) 构建、定向测试通过并刷新 context bundle。
+
+### X-016 Chroma 本地并发写无背压，重复批与单水位可能丢失同步
+
+本地 Chroma MCP 的 mutation 当前可并发直达同一 stdio 服务；重复 ID 冲突使用 delete+add，混合批与最大 ID 水位无法表达局部失败。本任务将写入变成有界单航道，并以幂等调和和持久化缺口账本保证失败可恢复。
+
+- 编号：X-016
+- 任务类型：缺陷（性能/数据一致性）
+- 严重程度：P0
+- 状态：新建
+- 来源：`review-report-20260809041304.md`，上游提交 `a90066f9`、`26d8cd3d`、`bdc78123`、`964104b6`
+- 所属计划项：无（独立 fix）
+- 任务描述：本地 Chroma mutation 没有串行化/队列上限，collection 创建只靠布尔值；重复冲突执行 delete+add，混合重复/新 ID 批可能整批失败或吞新记录；同步状态只看最大 ID，低位失败在水位前进后无法重试。
+- 涉及文件与行号：`src/services/sync/ChromaMcpManager.ts:244-306`、`src/services/sync/ChromaSync.ts:178-196,335-405,631-647`、`src/services/sync/ChromaSyncState.ts`
+- 关联需求：`doc/A-系统需求文档.md` SR-SVC-01、向量检索与持久化可靠性；`doc/B-系统设计文档.md` 数据一致性和优雅降级约束。
+- 根因分析：Why-1——Chroma/uvx 可能出现写风暴，因为本地 mutation 全部并发执行；Why-2——没有共享 mutation tail、队列上限和 shutdown generation；Why-3——重复恢复以 delete+add 代替原位 update；Why-4——批次未拆分 existing/new；Why-5——水位只记录最大进度，没有持久化局部失败 gap。
+- 影响评估：P0。可能造成 CPU/内存放大、HNSW 索引膨胀，以及水位已推进但向量记录永久缺失的静默数据不一致。
+- 实现/解决方案：本地模式的 mutation 进入共享串行 tail 并设置 5000 有界积压，读请求与远程模式保持并发；collection 创建使用 single-flight Promise；重复批先 get 后拆为 update/add；同步状态持久化 pending row IDs，只有一行全部文档成功后才清 gap/推进水位。保持现有重连和降级行为。
+- 验收/测试方法：(1) 并发本地 mutation 同时最多 1 个，远程读写不被错误串行；(2) collection 并发创建只调用一次；(3) 队列溢出/关闭后确定失败并可由 backfill 恢复；(4) 全重复、混合批、重启 gap、已删除 pending 行正确；(5) 不再 delete+add 重复文档；(6) typecheck、构建与 Chroma 定向测试通过。
+- 涉及文档刷新：需 ree 刷新 E/F（ChromaSyncState 持久化状态契约）；当前缺完整 A-F 体系，只在 X 标注。
+
+### X-015 SDK 并发检查与实际 spawn 之间无预留，配置上限可被并发超发
+
+`waitForSlot()` 只统计已经登记的 SDK 进程，在 OAuth 刷新和实际 spawn 前没有占位。多个请求可同时观察到空位并全部通过，本任务用幂等 reservation 把检查与占用合并为一个原子决策。
+
+- 编号：X-015
+- 任务类型：缺陷（性能/并发）
+- 严重程度：P0
+- 状态：新建
+- 来源：`review-report-20260809041304.md`，上游提交 `17dbeea6`、`04734d70`
+- 所属计划项：无（独立 fix）
+- 任务描述：`waitForSlot(): Promise<void>` 在 active count 小于上限时立即放行；调用方之后仍需 OAuth、query 与 spawn，进程稍后才注册。并发调用会在登记前共同越过上限，官方曾复现 max=2 实际启动 9 个 SDK agent。
+- 涉及文件与行号：`src/supervisor/process-registry.ts:438-509`、`src/services/worker/ClaudeProvider.ts:213-250`
+- 关联需求：`doc/A-系统需求文档.md` SR-SVC-01、SR-INFRA-04；资源有界与优雅降级约束。
+- 根因分析：Why-1——SDK 子进程可能超过配置上限，因为检查与实际占用不原子；Why-2——registry 只统计 spawn 后登记的进程；Why-3——等待函数不返回占位凭证；Why-4——OAuth/query 的异步窗口扩大竞态；Why-5——测试只覆盖已有活动进程，没有覆盖“尚未登记的并发申请”。
+- 影响评估：P0。昂贵 SDK agent 超发会造成与 Bun 风暴相似的 CPU/内存峰值，并使 `CLAUDE_MEM_MAX_CONCURRENT_AGENTS` 失去保护作用。
+- 实现/解决方案：增加计入容量的 `SlotReservation`，立即获准和排队获准时原子预留；reservation `release()` 幂等，abort/OAuth/query/spawn 失败及 finally 全部释放；spawn 登记后释放预留，避免双计数。
+- 验收/测试方法：(1) 5 并发、上限 2、无进程登记时只放行 2；(2) 未 release 时后续等待；(3) release 幂等；(4) reservation→registry record 总占用为 1；(5) abort/OAuth/query/spawn 失败不泄漏；(6) typecheck、构建和 supervisor/ClaudeProvider 定向测试通过。
+
+### X-014 daemon 多入口启动缺原子互斥，版本判断与实际脚本来源不统一
+
+X-013 已切断高频 Hook 的 Bun 启动权，但 SessionStart、MCP、transcript watcher 与显式 CLI 仍可能竞争启动或重启 daemon；版本检查和实际 spawn 还可能解析到不同脚本。本任务补齐唯一 daemon 的控制面，不改变 Node-only Hook 数据面。
+
+- 编号：X-014
+- 任务类型：缺陷（生命周期/并发）
+- 严重程度：P0
+- 状态：新建
+- 来源：`review-report-20260809041304.md`，上游提交 `c0b96288`、`1fe9bea6`、`7d3f1879`、`906ffe37`
+- 所属计划项：无（独立 fix）
+- 任务描述：多个非 Hook 控制面采用“先检查健康、后 spawn”的观察式逻辑，没有跨进程原子锁；版本检查固定读取 marketplace，spawn 路径另行解析；restart 发起后缺少新 PID 与预期版本验收，可能重复启动、版本乒乓或假成功。
+- 涉及文件与行号：`src/services/worker-spawner.ts:70-153`、`src/shared/worker-utils.ts:134-327`、`src/services/infrastructure/HealthMonitor.ts:114-158`、`src/services/worker-service.ts:1422-1437`
+- 关联需求：`doc/A-系统需求文档.md` SR-SVC-01、SR-INFRA-04；`doc/B-系统设计文档.md` 单机单 worker、非阻断和优雅降级设计。
+- 根因分析：Why-1——冷启动/升级时仍可能出现多个 daemon，因为多个入口可同时通过健康检查；Why-2——检查与 spawn 之间没有跨进程原子所有权；Why-3——版本来源与脚本路径来源分裂；Why-4——restart 只等待端口/固定延迟，没有证明 PID 与版本已切换；Why-5——现有测试没有覆盖多个独立 launcher 的竞争和版本同源契约。
+- 影响评估：P0。正常高频 Hook 已受 X-013 保护，但冷启动、MCP、transcript 与升级路径仍可能重复 spawn 或循环重启，造成 CPU 峰值和运行错误版本。
+- 实现/解决方案：新增 `<DATA_DIR>/spawn.lock` 的 `wx` 原子 gate（90s stale、re-stat 防 TOCTOU、owner-only release），只包实际 spawn 并持有到 ready/warming；新增身份优先、path+version 同源的 worker script resolver，禁止按最高官方 cache 覆盖定制 worker；restart 只有在新 PID 且版本等于构建期预期值后才成功。高频 Node Hook 继续 client-only，绝不移植上游 Hook SIGKILL/respawn。
+- 验收/测试方法：(1) 20 个并发 launcher 最多 spawn 一个 daemon；(2) gate 的竞争、90s stale、owner release、finally 释放通过；(3) custom/upstream cache 并存时不越身份选官方；(4) restart 对旧 PID/错误版本/不可达返回失败，新 PID+正确版本成功；(5) Hook bundle 仍零 Bun/零 spawn；(6) typecheck、构建、生命周期定向测试与实际并发验证通过。
+- 涉及文档刷新：需 ree 刷新 A/B 的 daemon 控制面事实；当前缺完整 A-F 体系，只在 X 标注。
