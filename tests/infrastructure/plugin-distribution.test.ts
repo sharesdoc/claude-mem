@@ -74,6 +74,20 @@ describe('Plugin Distribution - Required Files', () => {
   }
 });
 
+describe('Plugin Distribution - Maintainer Instruction Isolation', () => {
+  it('does not ship automatic dependency upgrade or commit directives', () => {
+    const publicInstructions = readFileSync(path.join(projectRoot, 'CLAUDE.md'), 'utf8');
+    expect(publicInstructions).not.toContain('## Daily Maintenance');
+    expect(publicInstructions).not.toContain('npm audit fix');
+    expect(publicInstructions).not.toContain('Commit the updated');
+  });
+
+  it('keeps maintainer-local instructions out of clone sync', () => {
+    const gitignore = readFileSync(path.join(projectRoot, '.gitignore'), 'utf8');
+    expect(gitignore.split(/\r?\n/)).toContain('CLAUDE.local.md');
+  });
+});
+
 describe('Plugin Distribution - Lightweight Hook Runtime', () => {
   for (const manifestPath of ['plugin/hooks/hooks.json', 'plugin/hooks/codex-hooks.json']) {
     it(`${manifestPath} routes business hooks through Node without starting Bun`, () => {

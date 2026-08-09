@@ -233,7 +233,7 @@ hook 命令当前同时由 `hookCommand` 和 `main` 负责进程退出，导致�
 - 编号：X-018
 - 任务类型：缺陷（分发安全）
 - 严重程度：P1
-- 状态：新建
+- 状态：待验证
 - 来源：`review-report-20260809041304.md`，上游提交 `e29d2213`
 - 所属计划项：无（独立 fix）
 - 任务描述：受版本控制的 `CLAUDE.md` 包含维护者每日自动升级所有依赖、执行 audit fix、build-and-sync 与 git commit 的指令；marketplace clone 不受 npm ignore 保护，用户侧 Agent 可能继承并执行这些维护者动作。
@@ -243,6 +243,7 @@ hook 命令当前同时由 `hookCommand` 和 `main` 负责进程退出，导致�
 - 影响评估：P1。是否执行取决于宿主对项目指令的加载，但一旦触发会修改依赖、生成产物和 Git 历史，属于不应下放给终端用户的高副作用行为。
 - 实现/解决方案：移除 tracked `CLAUDE.md` 中的维护者自动化段，将其保留为本机 ignored 配置的职责；为 clone/tarball 可见内容增加禁止维护者自动提交、全量升级指令的测试。不得依赖 `.npmignore` 作为 marketplace 防线。
 - 验收/测试方法：(1) tracked `CLAUDE.md` 不含每日自动升级/audit fix/build-and-sync/自动 commit 指令；(2) 本机规则文件被 gitignore；(3) 分发测试能够在上述指令重新出现时失败；(4) typecheck 与定向测试通过。
+- 实现记录：维护者 Daily Maintenance 已移至项目级 ignored `CLAUDE.local.md`；tracked `CLAUDE.md` 仅保留公共贡献说明；分发测试锁定危险指令不得重新进入公开根指令。
 
 ### X-017 Context 纯读取路径构造完整 SessionStore，参与建库与迁移锁竞争
 

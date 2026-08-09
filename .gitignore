@@ -10,6 +10,7 @@ dist/
 *.temp
 .install-version
 .claude/settings.local.json
+CLAUDE.local.md
 .claude/agents/
 .claude/skills/
 .claude/plans/
