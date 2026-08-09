@@ -438,9 +438,33 @@ export async function ensureSdkProcessExit(
 const TOTAL_PROCESS_HARD_CAP = 10;
 const SLOT_RECHECK_INTERVAL_MS = 5_000;
 const slotWaiters: Array<() => void> = [];
+let reservedSlots = 0;
+
+export interface SlotReservation {
+  /** Frees a granted but not yet registered SDK slot. Idempotent. */
+  release(): void;
+}
+
+function takeSlotReservation(): SlotReservation {
+  reservedSlots += 1;
+  let released = false;
+  return {
+    release(): void {
+      if (released) return;
+      released = true;
+      reservedSlots -= 1;
+      notifySlotAvailable();
+    },
+  };
+}
 
 function getActiveSdkCount(): number {
-  return getProcessRegistry().getAll().filter(record => record.type === 'sdk').length;
+  return getProcessRegistry().getAll().filter(record => record.type === 'sdk').length + reservedSlots;
+}
+
+/** Returns registered plus reserved SDK occupancy for diagnostics and tests. */
+export function getSdkSlotOccupancy(): number {
+  return getActiveSdkCount();
 }
 
 function notifySlotAvailable(): void {
@@ -448,14 +472,15 @@ function notifySlotAvailable(): void {
   if (waiter) waiter();
 }
 
-export async function waitForSlot(maxConcurrent: number, signal?: AbortSignal): Promise<void> {
+/** Atomically waits for and reserves one SDK process slot. */
+export async function waitForSlot(maxConcurrent: number, signal?: AbortSignal): Promise<SlotReservation> {
   getProcessRegistry().pruneDeadEntries();
   const activeCount = getActiveSdkCount();
   if (activeCount >= TOTAL_PROCESS_HARD_CAP) {
     throw new Error(`Hard cap exceeded: ${activeCount} processes in registry (cap=${TOTAL_PROCESS_HARD_CAP}). Refusing to spawn more.`);
   }
 
-  if (activeCount < maxConcurrent) return;
+  if (activeCount < maxConcurrent) return takeSlotReservation();
 
   if (signal?.aborted) {
     throw new Error('waitForSlot aborted before queuing');
@@ -463,7 +488,7 @@ export async function waitForSlot(maxConcurrent: number, signal?: AbortSignal): 
 
   logger.info('PROCESS', `Pool limit reached (${activeCount}/${maxConcurrent}), waiting for slot...`);
 
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<SlotReservation>((resolve, reject) => {
     let recheckTimer: ReturnType<typeof setInterval> | null = null;
     let abortHandler: (() => void) | null = null;
     const cleanup = () => {
@@ -482,7 +507,7 @@ export async function waitForSlot(maxConcurrent: number, signal?: AbortSignal): 
 
       if (count < maxConcurrent) {
         cleanup();
-        resolve();
+        resolve(takeSlotReservation());
       } else {
         slotWaiters.push(onSlot);
       }
@@ -634,7 +659,7 @@ export function spawnSdkProcess(
   return { process: spawned, pid, pgid };
 }
 
-export function createSdkSpawnFactory(sessionDbId: number) {
+export function createSdkSpawnFactory(sessionDbId: number, slotReservation?: SlotReservation) {
   return (spawnOptions: SpawnSdkOptions): SpawnedSdkProcess => {
     const registry = getProcessRegistry();
 
@@ -669,7 +694,13 @@ export function createSdkSpawnFactory(sessionDbId: number) {
       }
     }
 
-    const result = spawnSdkProcess(sessionDbId, spawnOptions);
+    let result: ReturnType<typeof spawnSdkProcess>;
+    try {
+      result = spawnSdkProcess(sessionDbId, spawnOptions);
+    } finally {
+      // The registry record takes over accounting after a successful spawn.
+      slotReservation?.release();
+    }
     if (!result) {
       throw new Error(`Failed to spawn SDK subprocess for session ${sessionDbId}`);
     }

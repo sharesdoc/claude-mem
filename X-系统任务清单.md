@@ -288,7 +288,7 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 编号：X-015
 - 任务类型：缺陷（性能/并发）
 - 严重程度：P0
-- 状态：新建
+- 状态：待验证
 - 来源：`review-report-20260809041304.md`，上游提交 `17dbeea6`、`04734d70`
 - 所属计划项：无（独立 fix）
 - 任务描述：`waitForSlot(): Promise<void>` 在 active count 小于上限时立即放行；调用方之后仍需 OAuth、query 与 spawn，进程稍后才注册。并发调用会在登记前共同越过上限，官方曾复现 max=2 实际启动 9 个 SDK agent。
@@ -298,6 +298,7 @@ Context 注入只需要查询 SQLite，却会创建完整 `SessionStore` 并执�
 - 影响评估：P0。昂贵 SDK agent 超发会造成与 Bun 风暴相似的 CPU/内存峰值，并使 `CLAUDE_MEM_MAX_CONCURRENT_AGENTS` 失去保护作用。
 - 实现/解决方案：增加计入容量的 `SlotReservation`，立即获准和排队获准时原子预留；reservation `release()` 幂等，abort/OAuth/query/spawn 失败及 finally 全部释放；spawn 登记后释放预留，避免双计数。
 - 验收/测试方法：(1) 5 并发、上限 2、无进程登记时只放行 2；(2) 未 release 时后续等待；(3) release 幂等；(4) reservation→registry record 总占用为 1；(5) abort/OAuth/query/spawn 失败不泄漏；(6) typecheck、构建和 supervisor/ClaudeProvider 定向测试通过。
+- 实现记录：`waitForSlot` 在同步判定内返回计入容量的幂等 reservation；spawn factory 在登记成功/失败时释放，ClaudeProvider 的外层 finally 覆盖 OAuth、query 与 abort 等未 spawn 路径。
 
 ### X-014 daemon 多入口启动缺原子互斥，版本判断与实际脚本来源不统一
 

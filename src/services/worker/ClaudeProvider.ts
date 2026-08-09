@@ -211,8 +211,9 @@ export class ClaudeProvider {
 
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
     const maxConcurrent = parseInt(settings.CLAUDE_MEM_MAX_CONCURRENT_AGENTS, 10) || 2;
-    await waitForSlot(maxConcurrent, session.abortController.signal);
+    const slotReservation = await waitForSlot(maxConcurrent, session.abortController.signal);
 
+    try {
     const isolatedEnv = sanitizeEnv(await buildIsolatedEnvWithFreshOAuth());
     const authMethod = getAuthMethodDescription();
 
@@ -247,7 +248,7 @@ export class ClaudeProvider {
         disallowedTools,
         abortController: session.abortController,
         pathToClaudeCodeExecutable: claudePath,
-        spawnClaudeCodeProcess: createSdkSpawnFactory(session.sessionDbId),
+        spawnClaudeCodeProcess: createSdkSpawnFactory(session.sessionDbId, slotReservation),
         env: isolatedEnv,  // Use isolated credentials from ~/.claude-mem/.env, not process.env
         mcpServers: {},
         settingSources: [],
@@ -255,7 +256,6 @@ export class ClaudeProvider {
       }
     });
 
-    try {
       for await (const message of queryResult) {
         // Quota-aware wall-clock guard (#2234): the SDK pushes `system` events
         // with subtype `rate_limit` carrying live subscription quota state.
@@ -404,6 +404,7 @@ export class ClaudeProvider {
         }
       }
     } finally {
+      slotReservation.release();
       const tracked = getSdkProcessForSession(session.sessionDbId);
       if (tracked && tracked.process.exitCode === null) {
         await ensureSdkProcessExit(tracked, 5000);
