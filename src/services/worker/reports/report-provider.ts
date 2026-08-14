@@ -15,6 +15,7 @@ import { getCredential } from '../../../shared/EnvManager.js';
 import { logger } from '../../../utils/logger.js';
 import { resolveQwenApiKey, resolveQwenEndpoint, resolveQwenModel } from '../QwenProvider.js';
 import { resolveDeepSeekApiKey, resolveDeepSeekEndpoint, resolveDeepSeekModel } from '../DeepSeekProvider.js';
+import { isHttpEndpoint } from '../provider-endpoint.js';
 
 export type ReportProviderId = 'claude' | 'qwen' | 'gemini' | 'openrouter' | 'deepseek';
 
@@ -65,6 +66,11 @@ export function resolveReportProviderConfig(settings?: SettingsDefaults): Report
       const apiKey = resolveQwenApiKey(s);
       if (!apiKey) return null;
       const endpoint = resolveQwenEndpoint(s);
+      // X-035: 非 http(s) 端点直接禁用 AI 段并告警(保持本函数"失败即 null"契约)。
+      if (!isHttpEndpoint(endpoint)) {
+        logger.warn('WORKER', `Invalid CLAUDE_MEM_QWEN_URL (not http(s)) — report AI section disabled`, {});
+        return null;
+      }
       warnOnCustomEndpoint('qwen', endpoint, DASHSCOPE_COMPLETIONS_URL);
       return { provider: 'qwen', apiKey, model: resolveQwenModel(s), endpoint };
     }
@@ -72,6 +78,11 @@ export function resolveReportProviderConfig(settings?: SettingsDefaults): Report
       const apiKey = resolveDeepSeekApiKey(s);
       if (!apiKey) return null;
       const endpoint = resolveDeepSeekEndpoint(s);
+      // X-035: 非 http(s) 端点直接禁用 AI 段并告警(保持本函数"失败即 null"契约)。
+      if (!isHttpEndpoint(endpoint)) {
+        logger.warn('WORKER', `Invalid CLAUDE_MEM_DEEPSEEK_URL (not http(s)) — report AI section disabled`, {});
+        return null;
+      }
       warnOnCustomEndpoint('deepseek', endpoint, DEEPSEEK_COMPLETIONS_URL);
       return { provider: 'deepseek', apiKey, model: resolveDeepSeekModel(s), endpoint };
     }
@@ -153,6 +164,8 @@ async function callOpenAiCompatible(
         max_tokens: MAX_OUTPUT_TOKENS,
       }),
       signal: controller.signal,
+      // X-035: 不自动跟随重定向, 防 302 把带凭据的请求弹到任意目标。
+      redirect: 'manual',
     });
     if (!resp.ok) {
       logger.warn('WORKER', `${config.provider} non-2xx`, { status: resp.status });
@@ -193,6 +206,8 @@ async function callAnthropic(
         messages: input.messages,
       }),
       signal: controller.signal,
+      // X-035: 不自动跟随重定向, 防 302 把带凭据的请求弹到任意目标。
+      redirect: 'manual',
     });
     if (!resp.ok) {
       logger.warn('WORKER', `claude non-2xx`, { status: resp.status });
@@ -235,6 +250,8 @@ async function callGemini(
         generationConfig: { temperature: 0.4, maxOutputTokens: MAX_OUTPUT_TOKENS },
       }),
       signal: controller.signal,
+      // X-035: 不自动跟随重定向, 防 302 把带凭据的请求弹到任意目标。
+      redirect: 'manual',
     });
     if (!resp.ok) {
       logger.warn('WORKER', `gemini non-2xx`, { status: resp.status });

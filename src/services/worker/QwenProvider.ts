@@ -15,6 +15,7 @@ import {
 } from './agents/index.js';
 import { ClassifiedProviderError } from './provider-errors.js';
 import { withRetry } from './retry.js';
+import { assertHttpEndpoint } from './provider-endpoint.js';
 
 export const DASHSCOPE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
 const DEFAULT_MODEL = 'qwen3-max';
@@ -338,6 +339,9 @@ export class QwenProvider {
             max_tokens: 4096,
           } satisfies QwenRequest),
           signal: attemptSignal,
+          // X-035: 不自动跟随重定向, 防止自定义端点用 302 把带 Bearer 凭据的
+          // 请求弹到任意目标(3xx 由 classifyQwenError 归 unrecoverable)。
+          redirect: 'manual',
         });
       } catch (networkError: unknown) {
         throw classifyQwenError({ cause: networkError });
@@ -364,10 +368,13 @@ export class QwenProvider {
 
   private getQwenConfig(): { apiKey: string; model: QwenModel; endpoint: string } {
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const endpoint = resolveQwenEndpoint(settings);
+    // X-035: 形状校验——非 http(s) 端点启动期快速失败, 而非 fetch 时报 opaque 网络错。
+    assertHttpEndpoint(endpoint, 'CLAUDE_MEM_QWEN_URL');
     return {
       apiKey: resolveQwenApiKey(settings),
       model: resolveQwenModel(settings),
-      endpoint: resolveQwenEndpoint(settings),
+      endpoint,
     };
   }
 

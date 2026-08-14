@@ -16,6 +16,7 @@ import {
 } from './agents/index.js';
 import { ClassifiedProviderError } from './provider-errors.js';
 import { withRetry } from './retry.js';
+import { assertHttpEndpoint } from './provider-endpoint.js';
 
 // ---------------------------------------------------------------------------
 // DeepSeekProvider — 用 DeepSeek 驱动 observation / summary 生成。
@@ -337,6 +338,9 @@ export class DeepSeekProvider {
             max_tokens: 4096,
           } satisfies DeepSeekRequest),
           signal: attemptSignal,
+          // X-035: 不自动跟随重定向, 防止自定义端点用 302 把带 Bearer 凭据的
+          // 请求弹到任意目标(3xx 由 classifyDeepSeekError 归 unrecoverable)。
+          redirect: 'manual',
         });
       } catch (networkError: unknown) {
         throw classifyDeepSeekError({ cause: networkError });
@@ -363,10 +367,13 @@ export class DeepSeekProvider {
 
   private getDeepSeekConfig(): { apiKey: string; model: string; endpoint: string } {
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const endpoint = resolveDeepSeekEndpoint(settings);
+    // X-035: 形状校验——非 http(s) 端点启动期快速失败, 而非 fetch 时报 opaque 网络错。
+    assertHttpEndpoint(endpoint, 'CLAUDE_MEM_DEEPSEEK_URL');
     return {
       apiKey: resolveDeepSeekApiKey(settings),
       model: resolveDeepSeekModel(settings),
-      endpoint: resolveDeepSeekEndpoint(settings),
+      endpoint,
     };
   }
 

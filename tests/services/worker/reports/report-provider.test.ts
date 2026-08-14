@@ -135,6 +135,23 @@ describe('resolveReportProviderConfig (X-019)', () => {
     s.CLAUDE_MEM_REPORT_PROVIDER = 'qwen';
     expect(resolveReportProviderConfig(s)).toBeNull();
   });
+
+  // X-035: 非 http(s) 端点禁用 AI 段(保持 null 契约)。
+  it('should return null when the qwen endpoint is not http(s)', () => {
+    const s = freshSettings();
+    s.CLAUDE_MEM_REPORT_PROVIDER = 'qwen';
+    s.CLAUDE_MEM_QWEN_API_KEY = 'sk-q';
+    s.CLAUDE_MEM_QWEN_URL = 'ftp://evil.example/v1';
+    expect(resolveReportProviderConfig(s)).toBeNull();
+  });
+
+  it('should return null when the deepseek endpoint is not http(s)', () => {
+    const s = freshSettings();
+    s.CLAUDE_MEM_REPORT_PROVIDER = 'deepseek';
+    s.CLAUDE_MEM_DEEPSEEK_API_KEY = 'sk-ds';
+    s.CLAUDE_MEM_DEEPSEEK_URL = 'not-a-url';
+    expect(resolveReportProviderConfig(s)).toBeNull();
+  });
 });
 
 describe('callReportProvider protocol dispatch (X-019)', () => {
@@ -176,6 +193,8 @@ describe('callReportProvider protocol dispatch (X-019)', () => {
     expect(body.messages[0]).toEqual({ role: 'system', content: 'sys-prompt' });
     expect(body.messages[1]).toEqual({ role: 'user', content: 'user-prompt' });
     expect((fetchCalls[0].init.headers as Record<string, string>).Authorization).toBe('Bearer sk-q');
+    // X-035: 凭据请求不自动跟随重定向。
+    expect(fetchCalls[0].init.redirect).toBe('manual');
   });
 
   it('should send Anthropic requests with x-api-key and separated system', async () => {
