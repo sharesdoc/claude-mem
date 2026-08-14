@@ -333,7 +333,7 @@ export function ContextSettingsModal({
             >
               <FormField
                 label="AI Provider"
-                tooltip="Choose between Claude (via Agent SDK) or Gemini (via REST API)"
+                tooltip="Choose the model vendor for memory observation/summary generation"
               >
                 <select
                   value={formState.CLAUDE_MEM_PROVIDER || 'claude'}
@@ -342,6 +342,8 @@ export function ContextSettingsModal({
                   <option value="claude">Claude (uses your Claude account)</option>
                   <option value="gemini">Gemini (uses API key)</option>
                   <option value="openrouter">OpenRouter (multi-model)</option>
+                  <option value="qwen">Qwen (DashScope, OpenAI-compatible)</option>
+                  <option value="deepseek">DeepSeek (OpenAI-compatible)</option>
                 </select>
               </FormField>
 
@@ -447,6 +449,99 @@ export function ContextSettingsModal({
                   </FormField>
                 </>
               )}
+
+              {formState.CLAUDE_MEM_PROVIDER === 'qwen' && (
+                <>
+                  <FormField
+                    label="Qwen API Key"
+                    tooltip="Your Aliyun DashScope API key (or set CLAUDE_MEM_QWEN_API_KEY env var)"
+                  >
+                    <input
+                      type="password"
+                      value={formState.CLAUDE_MEM_QWEN_API_KEY || ''}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_QWEN_API_KEY', e.target.value)}
+                      placeholder="Enter Qwen API key..."
+                    />
+                  </FormField>
+                  <FormField
+                    label="Qwen Model"
+                    tooltip="Qwen model id (blank = qwen3-max)"
+                  >
+                    <input
+                      type="text"
+                      value={formState.CLAUDE_MEM_QWEN_MODEL || ''}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_QWEN_MODEL', e.target.value)}
+                      placeholder="qwen3-max"
+                    />
+                  </FormField>
+                  <FormField
+                    label="Endpoint URL (Optional)"
+                    tooltip="OpenAI-compatible endpoint. Blank = DashScope compatible-mode. Custom URLs must be OpenAI-compatible."
+                  >
+                    <input
+                      type="text"
+                      value={formState.CLAUDE_MEM_QWEN_URL || ''}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_QWEN_URL', e.target.value)}
+                      placeholder="blank = DashScope compatible-mode"
+                    />
+                  </FormField>
+                </>
+              )}
+
+              {formState.CLAUDE_MEM_PROVIDER === 'deepseek' && (
+                <>
+                  <FormField
+                    label="DeepSeek API Key"
+                    tooltip="Your DeepSeek API key (or set CLAUDE_MEM_DEEPSEEK_API_KEY env var)"
+                  >
+                    <input
+                      type="password"
+                      value={formState.CLAUDE_MEM_DEEPSEEK_API_KEY || ''}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_DEEPSEEK_API_KEY', e.target.value)}
+                      placeholder="Enter DeepSeek API key..."
+                    />
+                  </FormField>
+                  <FormField
+                    label="DeepSeek Model"
+                    tooltip="DeepSeek model id (deepseek-chat alias retired 2026-07-24; use the v4 series)"
+                  >
+                    <input
+                      type="text"
+                      value={formState.CLAUDE_MEM_DEEPSEEK_MODEL || 'deepseek-v4-flash'}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_DEEPSEEK_MODEL', e.target.value)}
+                      placeholder="deepseek-v4-flash"
+                    />
+                  </FormField>
+                  <FormField
+                    label="Endpoint URL (Optional)"
+                    tooltip="OpenAI-compatible endpoint. Blank = https://api.deepseek.com"
+                  >
+                    <input
+                      type="text"
+                      value={formState.CLAUDE_MEM_DEEPSEEK_URL || ''}
+                      onChange={(e) => updateSetting('CLAUDE_MEM_DEEPSEEK_URL', e.target.value)}
+                      placeholder="blank = https://api.deepseek.com"
+                    />
+                  </FormField>
+                </>
+              )}
+
+              <FormField
+                label="Report AI Provider"
+                tooltip="Provider for the daily/weekly report AI section. Off = data summary only. Reuses the same vendor key/model from the groups above."
+              >
+                <select
+                  value={formState.CLAUDE_MEM_REPORT_PROVIDER || ''}
+                  onChange={(e) => updateSetting('CLAUDE_MEM_REPORT_PROVIDER', e.target.value)}
+                >
+                  <option value="">Off (no AI section)</option>
+                  <option value="claude">Claude (needs ANTHROPIC_API_KEY)</option>
+                  <option value="qwen">Qwen (DashScope)</option>
+                  <option value="gemini">Gemini</option>
+                  <option value="openrouter">OpenRouter</option>
+                  <option value="deepseek">DeepSeek</option>
+                </select>
+              </FormField>
 
               <FormField
                 label="Worker Port"
