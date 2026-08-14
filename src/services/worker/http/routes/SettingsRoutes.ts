@@ -26,6 +26,17 @@ const switchBranchSchema = z.object({
 
 const updateBranchSchema = z.object({}).passthrough();
 
+// X-018: 摘要/报表 provider 的合法取值（claude 默认；deepseek/qwen 为统一化新增）。
+export const VALID_PROVIDERS = ['claude', 'qwen', 'gemini', 'openrouter', 'deepseek'] as const;
+
+/** provider 值校验：undefined/空 允许（默认或禁用语义），否则必须命中合法值。 */
+export function isValidProviderValue(value: string | undefined): boolean {
+  if (value === undefined) return true;
+  const trimmed = value.trim().toLowerCase();
+  if (trimmed === '') return true;
+  return (VALID_PROVIDERS as readonly string[]).includes(trimmed);
+}
+
 export class SettingsRoutes extends BaseRouteHandler {
   constructor(
     private settingsManager: SettingsManager
@@ -115,6 +126,13 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_SUMMARY',
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE',
       'CLAUDE_MEM_FOLDER_CLAUDEMD_ENABLED',
+      'CLAUDE_MEM_QWEN_MODEL',
+      'CLAUDE_MEM_QWEN_API_KEY',
+      'CLAUDE_MEM_QWEN_URL',
+      'CLAUDE_MEM_DEEPSEEK_API_KEY',
+      'CLAUDE_MEM_DEEPSEEK_MODEL',
+      'CLAUDE_MEM_DEEPSEEK_URL',
+      'CLAUDE_MEM_REPORT_PROVIDER',
     ];
 
     for (const key of settingKeys) {
@@ -188,11 +206,12 @@ export class SettingsRoutes extends BaseRouteHandler {
   });
 
   private validateSettings(settings: any): { valid: boolean; error?: string } {
-    if (settings.CLAUDE_MEM_PROVIDER) {
-    const validProviders = ['claude', 'gemini', 'openrouter'];
-    if (!validProviders.includes(settings.CLAUDE_MEM_PROVIDER)) {
-      return { valid: false, error: 'CLAUDE_MEM_PROVIDER must be "claude", "gemini", or "openrouter"' };
-      }
+    if (!isValidProviderValue(settings.CLAUDE_MEM_PROVIDER)) {
+      return { valid: false, error: `CLAUDE_MEM_PROVIDER must be one of: ${VALID_PROVIDERS.join(', ')}` };
+    }
+
+    if (!isValidProviderValue(settings.CLAUDE_MEM_REPORT_PROVIDER)) {
+      return { valid: false, error: `CLAUDE_MEM_REPORT_PROVIDER must be one of: ${VALID_PROVIDERS.join(', ')} or empty` };
     }
 
     if (settings.CLAUDE_MEM_CLAUDE_AUTH_METHOD) {
