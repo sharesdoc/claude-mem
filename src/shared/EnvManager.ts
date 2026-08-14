@@ -179,6 +179,14 @@ export function saveClaudeMemEnv(env: ClaudeMemEnv): void {
       delete updated.CLAUDE_MEM_QWEN_API_KEY;
     }
   }
+  // X-032: 与 QWEN 对称——saveClaudeMemEnv 曾缺该分支, deepseek key 会被静默丢弃。
+  if (env.CLAUDE_MEM_DEEPSEEK_API_KEY !== undefined) {
+    if (env.CLAUDE_MEM_DEEPSEEK_API_KEY) {
+      updated.CLAUDE_MEM_DEEPSEEK_API_KEY = env.CLAUDE_MEM_DEEPSEEK_API_KEY;
+    } else {
+      delete updated.CLAUDE_MEM_DEEPSEEK_API_KEY;
+    }
+  }
 
   try {
     writeFileSync(envFile, serializeEnvFile(updated), { encoding: 'utf-8', mode: 0o600 });
