@@ -64,13 +64,15 @@ export class GeminiObservationProvider implements ServerGenerationProvider {
       };
     }
 
-    const url = `${GEMINI_API_URL}/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`;
+    // X-031: key 走 x-goog-api-key 请求头, 不拼 URL query(避免密钥进入
+    // 代理/访问日志; 与报表层 X-027 处置一致)。
+    const url = `${GEMINI_API_URL}/${encodeURIComponent(this.model)}:generateContent`;
 
     let response: Response;
     try {
       response = await this.fetchImpl(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
         body: JSON.stringify({
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
           generationConfig: {

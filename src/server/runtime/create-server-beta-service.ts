@@ -248,7 +248,9 @@ function warnServerCustomEndpoint(provider: string, endpoint: string, defaultEnd
 // settings 参数可注入(测试), 缺省读 settings.json (env 覆盖由 loadFromFile 处理)。
 export function buildServerGenerationProviderFromEnv(settings?: SettingsDefaults): ServerGenerationProvider | null {
   const s = settings ?? SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-  const provider = (s.CLAUDE_MEM_PROVIDER ?? 'claude').trim().toLowerCase();
+  // X-031: 空串按未配置静默处理(默认 claude), 与报表层"空=默认语义"对齐,
+  // 不再落入 unknown 告警。
+  const provider = (s.CLAUDE_MEM_PROVIDER ?? '').trim().toLowerCase() || 'claude';
   try {
     if (provider === 'claude' || provider === 'anthropic') {
       const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.CLAUDE_MEM_ANTHROPIC_API_KEY ?? '';

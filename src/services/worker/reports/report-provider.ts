@@ -5,7 +5,7 @@
 // 模型/key 复用各厂商配置组; 调用按厂商分发三种协议:
 //   - OpenAI 兼容 (qwen / deepseek / openrouter): POST {endpoint} Bearer
 //   - Anthropic Messages (claude): x-api-key + anthropic-version, system 分离
-//   - Gemini generateContent: URL ?key=, systemInstruction 分离
+//   - Gemini generateContent: x-goog-api-key 请求头鉴权, systemInstruction 分离
 // 任何失败/超时 → null (调用方降级为确定性简版)。
 // ---------------------------------------------------------------------------
 
@@ -100,7 +100,9 @@ export function resolveReportProviderConfig(settings?: SettingsDefaults): Report
       };
     }
     case 'claude': {
+      // X-032: 认 CLAUDE_MEM_ANTHROPIC_API_KEY 别名, 与 server-beta claude 分支对齐。
       const apiKey = (process.env.ANTHROPIC_API_KEY ?? '').trim()
+        || (process.env.CLAUDE_MEM_ANTHROPIC_API_KEY ?? '').trim()
         || getCredential('ANTHROPIC_API_KEY') || '';
       if (!apiKey) return null;
       return {
@@ -185,6 +187,8 @@ async function callAnthropic(
       body: JSON.stringify({
         model: config.model,
         max_tokens: CLAUDE_MAX_OUTPUT_TOKENS,
+        // X-032: 显式 0.4 与 OpenAI 兼容/Gemini 协议对齐, 降低默认 1.0 的随机性。
+        temperature: 0.4,
         system: input.system,
         messages: input.messages,
       }),
