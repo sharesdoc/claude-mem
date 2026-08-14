@@ -37,6 +37,8 @@ npm run build-and-sync        # Build, sync to marketplace, restart worker
 
 Settings are managed in `~/.claude-mem/settings.json`. The file is auto-created with defaults on first run.
 
+**Sync token auth**: server validates, client presents — `CLAUDE_MEM_SERVER_ACCESS_TOKEN` (server, legacy plaintext) / `CLAUDE_MEM_SYNC_ACCESS_TOKEN` (client, plaintext) / `CLAUDE_MEM_SYNC_SHASUM_VALUE` (server, sha1 hash; clients with `CLAUDE_MEM_SYNC_AUTH_VERSION='2'` validate against it — upgrade order: server first, clients next, then delete the plaintext keys to converge).
+
 **LLM Provider Architecture** (unified, 2026-08): memory observation/summary generation selects its vendor strictly via `CLAUDE_MEM_PROVIDER` (`claude` default | `qwen` | `gemini` | `openrouter` | `deepseek`); there is no implicit fallback based on which keys exist. Each vendor group carries its own `_API_KEY` / `_MODEL` (+ `_URL` for the OpenAI-compatible qwen/deepseek endpoints — custom URLs must be OpenAI-compatible). Daily/weekly report AI uses `CLAUDE_MEM_REPORT_PROVIDER` (same five values; empty = AI section disabled; model/key reused from the vendor groups). The server-beta runtime reads the same `CLAUDE_MEM_PROVIDER`, but its `claude` branch only accepts an API key (`ANTHROPIC_API_KEY`) — personal OAuth/login state is never consumed server-side (multi-tenant safety). Provider selection logic lives in `src/services/worker/provider-selection.ts` (summary), `src/services/worker/reports/report-provider.ts` (reports), and `src/server/runtime/create-server-beta-service.ts` (server-beta).
 
 ## Multi-account

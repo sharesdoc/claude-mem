@@ -71,6 +71,27 @@ See [OpenRouter Provider](usage/openrouter-provider) for detailed configuration,
 **Server-side deployments (`server-beta` runtime):** the `claude` provider only accepts an API key (`ANTHROPIC_API_KEY`). Personal OAuth/login state is never consumed server-side — multi-tenant deployments must provision an API key to avoid burning the operator's subscription.
 </Note>
 
+### Sync Token Authentication (server / client shared secret)
+
+The LAN shared token pairs a server-side validation key with a client-side credential key. **Both hold the same secret in different roles** — the client presents the plaintext, the server validates it.
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `CLAUDE_MEM_SERVER_ACCESS_TOKEN` | _(empty = no auth)_ | Server side: the shared token (legacy plaintext path) |
+| `CLAUDE_MEM_SYNC_ACCESS_TOKEN` | _(empty)_ | Client side: the plaintext credential sent as `Authorization: Bearer` |
+| `CLAUDE_MEM_SYNC_SHASUM_VALUE` | _(empty)_ | Server side: `sha1` of the token (40-char lowercase hex). Clients presenting `X-Claude-Mem-Auth-Version: 2` are validated against this hash, so the plaintext no longer needs to live on the server |
+| `CLAUDE_MEM_SYNC_AUTH_VERSION` | _(empty = legacy)_ | Client side: `'2'` sends the version header and authenticates against the server shasum value |
+
+**Versioned (hash) auth — upgrade order matters:**
+
+1. **Server first**: compute `sha1` of the token (`printf <token> | shasum`) and set `CLAUDE_MEM_SYNC_SHASUM_VALUE` on the server. Keep the plaintext keys for legacy clients.
+2. **Clients next**: set `CLAUDE_MEM_SYNC_AUTH_VERSION='2'` (client keeps `CLAUDE_MEM_SYNC_ACCESS_TOKEN`).
+3. **Converge**: once every client sends the version header, delete `CLAUDE_MEM_SERVER_ACCESS_TOKEN` (and the client-side copy on server nodes) — the server then stores only the hash.
+
+<Note>
+The token **must** have ≥128 bits of random entropy (e.g. 40 random hex chars from `shasum`) — an unsalted sha1 of a low-entropy token is recoverable offline.
+</Note>
+
 ### Claude Gateway Settings
 
 Gateway credentials live in `~/.claude-mem/.env`, not `settings.json`.
