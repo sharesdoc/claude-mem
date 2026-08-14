@@ -11,7 +11,9 @@ mock.module('../../../src/shared/SettingsDefaultsManager.js', () => ({
       return '';
     },
     getInt: () => 0,
-    loadFromFile: () => ({ CLAUDE_MEM_EXCLUDED_PROJECTS: [] }),
+    // X-033: 消费端 project-filter.ts:24 对 EXCLUDED_PROJECTS 执行 .trim(),
+    // 必须是字符串而非数组。
+    loadFromFile: () => ({ CLAUDE_MEM_EXCLUDED_PROJECTS: '' }),
   },
 }));
 
@@ -25,6 +27,11 @@ mock.module('../../../src/shared/worker-utils.js', () => ({
     throw new Error(
       `workerHttpRequest MUST NOT be called in subagent context (called with ${apiPath})`
     );
+  },
+  // X-033: summarize.ts:3 直接 import 该导出, 缺失导致本文件全部用例模块加载失败。
+  executeWithWorkerFallback: async (apiPath: string, method: string, body: unknown) => {
+    workerCallLog.push({ path: apiPath, options: { method, body } });
+    return { status: 'queued' };
   },
   isWorkerFallback: () => false,
 }));

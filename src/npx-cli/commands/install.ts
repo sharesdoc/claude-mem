@@ -1139,7 +1139,8 @@ async function promptClaudeModel(options: InstallOptions): Promise<void> {
 
 export interface InstallOptions {
   ide?: string[];
-  provider?: 'claude' | 'gemini' | 'openrouter';
+  // X-033: 与 ProviderId 同步五厂商(此前 index.ts 靠 as 断言掩盖类型缺口)。
+  provider?: ProviderId;
   model?: string;
   noAutoStart?: boolean;
 }
