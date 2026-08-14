@@ -1,3 +1,23 @@
+### X-017 SessionRoutes/worker-service 统一 provider 选择（大模型配置统一化 T-04）
+
+现状调查发现与 TODO 文本的偏差：(1) 真正的"Qwen 有 key 就自动抢跑"兜底在 `worker-service.ts:654-668` 的 getActiveAgent（startSessionProcessor 调用），SessionRoutes 内的 getActiveAgent 是死代码（无调用点）；(2) TODO 文本"显式配置 provider 但 key 缺失→抛错"与活路径现状不符——抛错只存在于死代码，活路径（getSelectedProvider/worker-service.getActiveAgent）的实际语义是回落 claude SDK。按"最小修改 + 保持活路径现状"实现：选中但不可用 → 回落 claude，并把选择逻辑抽取为单一纯函数供两处复用（消灭双份重复的分支逻辑）。worker-service 的 runFallbackForTerminatedSession 备用链（gemini→openrouter）属错误恢复机制，不在本任务范围。
+
+- 编号：X-017
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-04（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-04（独立 fix，无 A-F/M 体系）
+- 任务描述：删除两处"Qwen 有 key 自动抢跑"兜底（worker-service.ts:664-666 活路径 + SessionRoutes.ts:69-73 死代码），provider 选择严格按 CLAUDE_MEM_PROVIDER（qwen/deepseek/openrouter/gemini/claude 默认）；新增 DeepSeek 分支（worker-service 与 SessionRoutes 两处接线）；选择逻辑抽取为 `provider-selection.ts` 纯函数 resolveProviderId(flags)，语义：selected && available → 该厂商，否则 → claude；worker-types.currentProvider 联合类型加 deepseek；reclassifyAtDispatch 增加 DeepSeekProvider 分支。
+- 验收标准：(1) qwenAvailable 为 true 但未选中时选择结果仍为 claude（核心回归护栏）；(2) 五个厂商 selected&&available 各自命中；(3) 选中但 key 缺失 → claude（保持活路径现状）；(4) 新增 DeepSeek 接线后 typecheck/构建通过；(5) 死代码 getActiveAgent（SessionRoutes）移除；(6) 无新增测试失败。
+- 涉及文件与行号：`src/services/worker-service.ts:171-174,210-213,245-248,333,654-701,845-892`、`src/services/worker/http/routes/SessionRoutes.ts:29-92,118-208`、`src/services/worker-types.ts:27`。
+- 关联需求：`doc/B-系统设计文档.md` provider 选择逻辑章节（需 ree 刷新）
+- 实际修改位置：`src/services/worker/provider-selection.ts`（新增，ProviderId 类型 + resolveProviderId 纯函数 + collectProviderFlags）、`src/services/worker-service.ts:74-79,174-178,213-215,246-248,336,654-668,683-702`（新增 deepSeekAgent 字段与实例化、SessionRoutes 构造传参、getAiStatus 与 getActiveAgent 改用 resolveProviderId、reclassifyAtDispatch 加 DeepSeek 分支）、`src/services/worker/http/routes/SessionRoutes.ts:29-92,118-138`（imports 换 provider-selection、构造器加 deepSeekAgent、删除死代码 getActiveAgent、getSelectedProvider 收敛为 resolveProviderId、startGeneratorWithProvider 加 deepseek 映射）、`src/services/worker-types.ts:27`（currentProvider 联合加 deepseek）、`tests/services/worker/provider-selection.test.ts`（新增 9 用例）。
+- 阶段验证结果：纯函数测试 9 pass/0 fail（模块与测试同批产出，RED 证据为旧代码语义对比：旧实现存在"有 key 自动抢跑"分支，新模块无此分支且由回归护栏用例锁定）；`npm run typecheck` 通过；`bun test tests/services/` 309 用例 12 fail/2 errors，与干净 HEAD 基线（300 用例 12 fail/2 errors）对比**零新增失败**（git stash 基线对比验证）；runFallbackForTerminatedSession 备用链（gemini→openrouter）经现状调查确认为错误恢复机制，按最小修改不纳入本任务。
+- 涉及文档刷新：需 ree 刷新 `doc/B-系统设计文档.md` provider 选择逻辑章节；本次按 fix 规则只在 X 标注。
+- 测试方法：(1) `bun test tests/services/worker/provider-selection.test.ts` 全绿；(2) `bun test tests/services/worker/` 全绿；(3) `bun test tests/services/` 与基线对比零新增失败；(4) `npm run typecheck` 通过。
+- 代码修复提交：`cd6f8b36`
+
 ### X-016 新增 DeepSeekProvider（大模型配置统一化 T-03）
 
 现状调查：DeepSeek API 为原生 OpenAI 兼容协议（base_url https://api.deepseek.com），与 OpenRouterProvider/QwenProvider 同构；无 site-url 类头部要求。参照 QwenProvider 结构新建独立 provider 类，配置组 CLAUDE_MEM_DEEPSEEK_API_KEY/_MODEL/_URL 已在 X-014 落键。本任务仅新增 provider 与配置解析，SessionRoutes 接线在 X-017 统一处理。
