@@ -44,6 +44,7 @@ export interface ClaudeMemEnv {
   OPENROUTER_API_KEY?: string;
   CLAUDE_MEM_REPORT_QWEN_API_KEY?: string;  // [deprecated X-021] replaced by CLAUDE_MEM_QWEN_API_KEY
   CLAUDE_MEM_QWEN_API_KEY?: string;
+  CLAUDE_MEM_DEEPSEEK_API_KEY?: string;
 }
 
 function parseEnvFile(content: string): Record<string, string> {
@@ -113,6 +114,7 @@ export function loadClaudeMemEnv(): ClaudeMemEnv {
     // [deprecated X-021] 随 CLAUDE_MEM_REPORT_QWEN_API_KEY 一并移除。
     else if (parsed.DASHSCOPE_API_KEY) result.CLAUDE_MEM_REPORT_QWEN_API_KEY = parsed.DASHSCOPE_API_KEY;
     if (parsed.CLAUDE_MEM_QWEN_API_KEY) result.CLAUDE_MEM_QWEN_API_KEY = parsed.CLAUDE_MEM_QWEN_API_KEY;
+    if (parsed.CLAUDE_MEM_DEEPSEEK_API_KEY) result.CLAUDE_MEM_DEEPSEEK_API_KEY = parsed.CLAUDE_MEM_DEEPSEEK_API_KEY;
 
     return result;
   } catch (error: unknown) {
