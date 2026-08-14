@@ -15,7 +15,7 @@
 - 实际修改位置：同上。
 - 阶段验证结果：RED——测试 0 pass/1 error（导出不存在）；GREEN——7 pass/0 fail（含模块加载期 DATA_DIR 隔离：env 先行+动态 import，否则 USER_SETTINGS_PATH 冻结为真实路径）；`bun test tests/worker/middleware/` 37 pass/0 fail；`npm run typecheck` 0 错误。
 - 测试方法：(1) `bun test tests/worker/middleware/token-auth-version.test.ts` 全绿；(2) `bun test tests/worker/middleware/` 无新增失败；(3) `npm run typecheck` 通过。
-- 代码修复提交：`7db2c436`
+- 代码修复提交：`7db2c436`、`23dd8d67`(注入式修正)
 
 ### X-035 自定义端点 SSRF 加固：scheme 校验 + redirect manual（rev 委托）
 
