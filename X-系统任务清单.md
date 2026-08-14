@@ -1,3 +1,43 @@
+### X-015 QwenProvider 切换新配置组与可配置端点（大模型配置统一化 T-02）
+
+现状调查结论与 TODO 原估的"协议重写"不同：现 QwenProvider（`src/services/worker/QwenProvider.ts:19`）已使用 OpenAI 兼容端点 `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` 与 OpenAI 结构解析（`choices[0].message.content`），无需协议层重写。本任务收敛为三点：凭证换新键 `CLAUDE_MEM_QWEN_API_KEY`、端点改由 `CLAUDE_MEM_QWEN_URL` 配置（空=回落默认端点）、模型白名单放开（自定义 OpenAI 兼容端点下模型名任意，配置值直接采用）。旧键 `CLAUDE_MEM_REPORT_QWEN_API_KEY` 保留至 X-021（EnvManager 类型与解析仍引用，保证每步编译绿），其 X-008 遗留 DASHSCOPE_API_KEY 映射同样暂留。
+
+- 编号：X-015
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-02（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-02（独立 fix，无 A-F/M 体系）
+- 任务描述：QwenProvider 凭证读取从 CLAUDE_MEM_REPORT_QWEN_API_KEY 切换到 CLAUDE_MEM_QWEN_API_KEY（三级回脱：env > settings.json > ~/.claude-mem/.env 凭证库）；端点从硬编码改为 CLAUDE_MEM_QWEN_URL 配置（空=回落 DASHSCOPE 兼容端点，非空=用户自担责保证 OpenAI 兼容）；模型从四值白名单联合类型放开为任意字符串（空=回落 DEFAULT_MODEL qwen3-max）。
+- 验收标准：(1) 配置 CLAUDE_MEM_QWEN_API_KEY 后 isQwenAvailable 为 true，旧键不再参与判定；(2) CLAUDE_MEM_QWEN_URL 非空时请求打到该端点，空时回落默认端点；(3) 任意模型名（含白名单外）被直接采用，空值回落 qwen3-max；(4) EnvManager 的 ClaudeMemEnv 支持 CLAUDE_MEM_QWEN_API_KEY 解析；(5) typecheck 通过且无新增测试失败。
+- 涉及文件与行号：`src/services/worker/QwenProvider.ts:19-21,121,297-344,348-408`、`src/shared/EnvManager.ts:39-46,103-112`、`tests/shared/qwen-key-compat.test.ts:62-75`（isQwenAvailable 用例的 key 前提随新键变化）。
+- 关联需求：`doc/B-系统设计文档.md` 环境变量/凭证链章节（需 ree 刷新）
+- 实际修改位置：`src/services/worker/QwenProvider.ts`（导出 resolveQwenApiKey/resolveQwenEndpoint/resolveQwenModel 纯函数；getQwenConfig 收敛为三字段 {apiKey, model, endpoint}；endpoint 沿 startSession→processMessageLoop→processObservation/SummaryMessage→queryQwen 透传；isQwenAvailable 改读新键；QwenModel 放开为 string；错误提示与文件头注释同步）、`src/shared/EnvManager.ts:39-46,112`（ClaudeMemEnv 增加 CLAUDE_MEM_QWEN_API_KEY 并解析；旧键与 X-008 映射暂留待 X-021）、`tests/services/worker/qwen-provider-config.test.ts`（新增 12 用例）、`tests/shared/qwen-key-compat.test.ts`（isQwenAvailable 用例改用新键 + 环境变量隔离补新键）。
+- 阶段验证结果：RED——新测试 0 pass/1 fail（模块加载失败，resolve* 函数不存在）；GREEN——14 pass/0 fail（qwen-provider-config 12 + qwen-key-compat 2）；`npm run typecheck` 通过；`tests/shared/` 187 pass/1 fail，唯一失败为预存问题（settings-defaults-manager.test.ts:334）。
+- 涉及文档刷新：需 ree 刷新 `doc/B-系统设计文档.md` 环境变量/凭证链章节；本次按 fix 规则只在 X 标注。
+- 测试方法：(1) `bun test tests/services/worker/qwen-provider-config.test.ts tests/shared/qwen-key-compat.test.ts` 全绿；(2) `bun test tests/shared/` 无新增失败；(3) `npm run typecheck` 通过。
+- 代码修复提交：`169f344f`
+
+### X-014 新增 Qwen/DeepSeek/报表 provider 配置键（大模型配置统一化 T-01 加键阶段）
+
+大模型配置统一化方案（TODO-llm-provider.md，2026-08-14 设计定稿）的配置键基础设施任务。设计目标是把摘要生成（CLAUDE_MEM_PROVIDER）、报表（CLAUDE_MEM_REPORT_PROVIDER）、server-beta 三处 provider 入口统一到同一套厂商配置组；本条目完成新增键的落地，废弃键的删除在消费者清零后由 X-021 执行，保证每步提交编译绿。
+
+- 编号：X-014
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-01（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-01（独立 fix，无 A-F/M 体系）
+- 任务描述：在 SettingsDefaultsManager 中新增 6 个配置键——CLAUDE_MEM_QWEN_API_KEY、CLAUDE_MEM_QWEN_URL、CLAUDE_MEM_DEEPSEEK_API_KEY、CLAUDE_MEM_DEEPSEEK_MODEL、CLAUDE_MEM_DEEPSEEK_URL、CLAUDE_MEM_REPORT_PROVIDER。QWEN_URL 空 = provider 内回落 DashScope 兼容端点（https://dashscope.aliyuncs.com/compatible-mode/v1）；DEEPSEEK_MODEL 默认 deepseek-v4-flash（deepseek-chat 别名已于 2026-07-24 官方停用）；DEEPSEEK_URL 默认 https://api.deepseek.com（OpenAI 兼容）；REPORT_PROVIDER 空 = 报表 AI 段禁用。设计明确不做旧版兼容，4 个废弃键（WEEKLY_REPORT_MODEL/REPORT_QWEN_API_KEY/SERVER_PROVIDER/SERVER_MODEL）暂留待 X-021 删除。
+- 验收标准：(1) 6 个新键出现在 SettingsDefaults 接口与 DEFAULTS 中；(2) 默认值符合上表语义；(3) loadFromFile 对缺失键的文件能合并新默认值；(4) typecheck 通过；(5) 不新增测试失败。
+- 涉及文件与行号：`src/shared/SettingsDefaultsManager.ts`（接口 112-141 行区、DEFAULTS 224-240 行区）；预调查发现 `SettingsDefaultsManager.ts:313-336` 的 X-008 DASHSCOPE_API_KEY 遗留迁移块引用 CLAUDE_MEM_REPORT_QWEN_API_KEY，X-021 删键时须一并移除。
+- 关联需求：`doc/B-系统设计文档.md` 配置管理章节（涉及环境变量事实，需 ree 刷新）
+- 实际修改位置：`src/shared/SettingsDefaultsManager.ts:112-141`（接口新增 Qwen/DeepSeek 组与 REPORT_PROVIDER）、`src/shared/SettingsDefaultsManager.ts:224-240`（DEFAULTS 新增 6 键）、`tests/shared/llm-provider-settings.test.ts`（新增）。
+- 阶段验证结果：RED——新测试 4 fail（新键不存在）；GREEN——4 pass；`tests/shared/settings-defaults-manager.test.ts` 73 pass/1 fail，唯一失败为预存问题（:334 断言默认模型 claude-sonnet-4-6，由 9e297305 改默认值时漏改测试引入，与本次无关，不顺手修）；`npm run typecheck` 通过。
+- 涉及文档刷新：需 ree 刷新 `doc/B-系统设计文档.md` 环境变量清单；本次按 fix 规则只在 X 标注。
+- 测试方法：(1) `bun test tests/shared/llm-provider-settings.test.ts` 全绿；(2) `bun test tests/shared/settings-defaults-manager.test.ts` 无新增失败；(3) `npm run typecheck` 通过。
+- 代码修复提交：`e1486469`
+
 ### X-013 高频 Hook 为每个事件启动 Bun CLI，突发时形成进程风暴
 
 Claude/Codex 的高频 Hook 当前经过 `node bun-runner.js → bun worker-service.cjs hook`，使一次 Hook 对应一个临时 Bun CLI；异步全量 `PostToolUse` 在事件突发或 stdin 退出延迟时会累积大量进程。任务将热路径改为轻量 Node bundle，并把 Bun worker 启动权收敛到 SessionStart/显式生命周期命令。
