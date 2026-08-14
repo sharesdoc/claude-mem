@@ -14,7 +14,7 @@ Settings are managed in `~/.claude-mem/settings.json`. The file is auto-created 
 | Setting                       | Default                         | Description                           |
 |-------------------------------|---------------------------------|---------------------------------------|
 | `CLAUDE_MEM_MODEL`            | `claude-haiku-4-5-20251001`     | Claude model used to compress observations (when using the Claude provider) |
-| `CLAUDE_MEM_PROVIDER`         | `claude`                        | AI provider: `claude`, `gemini`, or `openrouter` |
+| `CLAUDE_MEM_PROVIDER`         | `claude`                        | AI provider for memory observation/summary generation: `claude`, `qwen`, `gemini`, `openrouter`, or `deepseek`. Unset = `claude` (uses your logged-in Claude Code account via the Agent SDK) |
 | `CLAUDE_MEM_CLAUDE_AUTH_METHOD` | `subscription`                | Claude provider auth mode: `subscription`, `api-key`, or `gateway` |
 | `CLAUDE_MEM_MODE`             | `code`                          | Active mode profile (e.g., `code--es`, `email-investigation`) |
 | `CLAUDE_MEM_CONTEXT_OBSERVATIONS` | `50`                        | Number of observations to inject      |
@@ -44,6 +44,32 @@ See [Gemini Provider](usage/gemini-provider) for detailed configuration and free
 | `CLAUDE_MEM_OPENROUTER_APP_NAME`             | `claude-mem`                | Optional: App name for analytics      |
 
 See [OpenRouter Provider](usage/openrouter-provider) for detailed configuration, free model list, and usage guide.
+
+### Qwen Provider Settings (DashScope, OpenAI-compatible)
+
+| Setting                       | Default                         | Description                           |
+|-------------------------------|---------------------------------|---------------------------------------|
+| `CLAUDE_MEM_QWEN_API_KEY`     | —                               | Aliyun DashScope API key. Set it to enable Qwen |
+| `CLAUDE_MEM_QWEN_MODEL`       | `qwen3-max`                     | Qwen model id (any id accepted — custom endpoints define their own models) |
+| `CLAUDE_MEM_QWEN_URL`         | _(DashScope compatible-mode)_   | OpenAI-compatible endpoint. Blank = `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions`. Custom URLs **must be OpenAI-compatible** — you are responsible for the endpoint |
+
+### DeepSeek Provider Settings (OpenAI-compatible)
+
+| Setting                       | Default                         | Description                           |
+|-------------------------------|---------------------------------|---------------------------------------|
+| `CLAUDE_MEM_DEEPSEEK_API_KEY` | —                               | DeepSeek API key. Set it to enable DeepSeek |
+| `CLAUDE_MEM_DEEPSEEK_MODEL`   | `deepseek-v4-flash`             | Model id. Note: the `deepseek-chat`/`deepseek-reasoner` aliases were retired on 2026-07-24 — use the v4 series |
+| `CLAUDE_MEM_DEEPSEEK_URL`     | `https://api.deepseek.com`      | OpenAI-compatible endpoint (base URL or full completions path) |
+
+### Report AI Provider (daily/weekly reports)
+
+| Setting                       | Default                         | Description                           |
+|-------------------------------|---------------------------------|---------------------------------------|
+| `CLAUDE_MEM_REPORT_PROVIDER`  | _(empty)_                       | Provider for the report AI section: `claude`, `qwen`, `gemini`, `openrouter`, or `deepseek`. **Empty = AI section disabled** (reports become pure data summaries). Model and key are reused from each vendor's provider group above |
+
+<Note>
+**Server-side deployments (`server-beta` runtime):** the `claude` provider only accepts an API key (`ANTHROPIC_API_KEY`). Personal OAuth/login state is never consumed server-side — multi-tenant deployments must provision an API key to avoid burning the operator's subscription.
+</Note>
 
 ### Claude Gateway Settings
 

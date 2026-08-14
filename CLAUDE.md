@@ -37,6 +37,8 @@ npm run build-and-sync        # Build, sync to marketplace, restart worker
 
 Settings are managed in `~/.claude-mem/settings.json`. The file is auto-created with defaults on first run.
 
+**LLM Provider Architecture** (unified, 2026-08): memory observation/summary generation selects its vendor strictly via `CLAUDE_MEM_PROVIDER` (`claude` default | `qwen` | `gemini` | `openrouter` | `deepseek`); there is no implicit fallback based on which keys exist. Each vendor group carries its own `_API_KEY` / `_MODEL` (+ `_URL` for the OpenAI-compatible qwen/deepseek endpoints — custom URLs must be OpenAI-compatible). Daily/weekly report AI uses `CLAUDE_MEM_REPORT_PROVIDER` (same five values; empty = AI section disabled; model/key reused from the vendor groups). The server-beta runtime reads the same `CLAUDE_MEM_PROVIDER`, but its `claude` branch only accepts an API key (`ANTHROPIC_API_KEY`) — personal OAuth/login state is never consumed server-side (multi-tenant safety). Provider selection logic lives in `src/services/worker/provider-selection.ts` (summary), `src/services/worker/reports/report-provider.ts` (reports), and `src/server/runtime/create-server-beta-service.ts` (server-beta).
+
 ## Multi-account
 
 Claude-mem supports running multiple isolated profiles on the same machine (e.g. work vs personal accounts) via environment variables. No CLI subcommand needed — set the env vars in the shell where you run Claude Code.

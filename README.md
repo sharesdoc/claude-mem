@@ -303,6 +303,8 @@ Make sure Node.js and npm are installed and added to your PATH. Download the lat
 
 Settings are managed in `~/.claude-mem/settings.json` (auto-created with defaults on first run). Configure AI model, worker port, data directory, log level, and context injection settings.
 
+Memory generation vendors are selected via `CLAUDE_MEM_PROVIDER` (`claude` default, `qwen`, `gemini`, `openrouter`, `deepseek`), each with its own `_API_KEY` / `_MODEL` group (`_URL` for the OpenAI-compatible qwen/deepseek endpoints). The daily/weekly report AI section uses `CLAUDE_MEM_REPORT_PROVIDER` (empty = disabled).
+
 See the **[Configuration Guide](https://docs.claude-mem.ai/configuration)** for all available settings and examples.
 
 ### Mode & Language Configuration
