@@ -1,3 +1,23 @@
+### X-019 报表 provider 工厂化（大模型配置统一化 T-05）
+
+现状调查：两个报表生成器（ReportGenerator/DailyReportGenerator）各自内嵌 resolveApiKey（读旧键 CLAUDE_MEM_REPORT_QWEN_API_KEY）+ callQwen（硬编码 DashScope 端点），模型由路由层（ReportRoutes/DailyReportRoutes 的 model() 方法）与 ReportScheduler 读 CLAUDE_MEM_WEEKLY_REPORT_MODEL 传入——旧键消费点共 6 处。设计（TODO T-05）要求报表改读 CLAUDE_MEM_REPORT_PROVIDER（空=AI 段禁用），模型/key 复用厂商组，支持 5 厂商。实现为共享模块 report-provider.ts：配置解析（复用 Qwen/DeepSeek 的 resolve* 纯函数）+ 三协议单次调用分发（OpenAI 兼容= qwen/deepseek/openrouter；Anthropic Messages= claude；generateContent= gemini）。generate() 的 model 参数随之删除（配置自解析），GeneratedReport.model 元数据由解析结果填充。
+
+- 编号：X-019
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-05（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-05（独立 fix，无 A-F/M 体系）
+- 任务描述：新增 `src/services/worker/reports/report-provider.ts`——resolveReportProviderConfig(settings?) 返回 {provider, apiKey, model, endpoint} | null（空/非法=AI 禁用，非法值 WARN），callReportProvider(config, {system, messages}) 按厂商分发三种协议；ReportGenerator/DailyReportGenerator 删除 resolveApiKey/callQwen/DASHSCOPE_URL，synthesize* 改收 config；generate() 与 synthesize* 删除 model 参数；ReportRoutes/DailyReportRoutes 删除 model() 方法与 WEEKLY_REPORT_MODEL 读取；ReportScheduler 同步。GeneratedReport.model 填解析出的模型（AI 禁用时为空串）。
+- 验收标准：(1) REPORT_PROVIDER 空 → AI 段禁用且确定性简版路径不变；(2) 5 厂商各自解析出正确 key/model/endpoint，缺 key → null；(3) callReportProvider 对三协议生成正确请求（OpenAI 兼容 Bearer+system 合并；Anthropic x-api-key+anthropic-version+system 分离；Gemini generateContent?key=+systemInstruction）；(4) 旧键 CLAUDE_MEM_REPORT_QWEN_API_KEY / CLAUDE_MEM_WEEKLY_REPORT_MODEL 在 src 中零消费（SettingsDefaultsManager 定义除外，X-021 删）；(5) typecheck 通过且无新增测试失败。
+- 涉及文件与行号：`src/services/worker/reports/ReportGenerator.ts:1-18,135-215,287-298,305-483`、`src/services/worker/reports/DailyReportGenerator.ts:119-135,180-190,265-424`、`src/services/worker/http/routes/ReportRoutes.ts:86-90,197`、`src/services/worker/http/routes/DailyReportRoutes.ts:82-84,163`、`src/services/worker/reports/ReportScheduler.ts:39-58,61-92`。
+- 关联需求：`doc/B-系统设计文档.md` 报表生成章节（需 ree 刷新）
+- 实际修改位置：`src/services/worker/reports/report-provider.ts`（新增：配置解析 + OpenAI 兼容/Anthropic/Gemini 三协议调用分发）、`ReportGenerator.ts`、`DailyReportGenerator.ts`（换用 report-provider，删 resolveApiKey/callQwen/DASHSCOPE_URL，generate/synthesize* 删 model 参数）、`ReportRoutes.ts`、`DailyReportRoutes.ts`（删 model() 与未用 import）、`ReportScheduler.ts`（runForAllActiveUsers 删 model 参数）、`src/services/worker/DeepSeekProvider.ts`、`src/services/worker/QwenProvider.ts`（端点解析补 base-URL 自动补全 /chat/completions——RED 测试发现 DEEPSEEK_URL 默认值即 base URL 形态，原样采用会打到错误路径；同类缺陷预防性修复 Qwen）、`tests/services/worker/reports/report-provider.test.ts`（新增 13 用例）。
+- 阶段验证结果：RED——12 用例中 1 fail（deepseek 默认 URL 解析缺失 /chat/completions，暴露端点归一化缺陷）；修复 resolver 后 GREEN——13 pass/0 fail；`bun test tests/services/worker/` 66 pass/0 fail；`npm run typecheck` 0 错误；旧键消费 grep 确认仅剩 EnvManager（X-021 范围，deprecated 标记）与 install.ts（X-022 范围）。
+- 涉及文档刷新：需 ree 刷新 `doc/B-系统设计文档.md` 报表生成章节；本次按 fix 规则只在 X 标注。
+- 测试方法：(1) `bun test tests/services/worker/reports/report-provider.test.ts` 全绿；(2) `bun test tests/services/worker/` 无新增失败；(3) `npm run typecheck` 通过。
+- 代码修复提交：`448b7d7d`
+
 ### X-018 SettingsRoutes 校验与可写白名单更新（大模型配置统一化 T-07）
 
 现状调查：`SettingsRoutes.ts:192-194` validProviders 仅 claude/gemini/openrouter（缺 qwen，且未校验 CLAUDE_MEM_PROVIDER 为空的情况语义上允许默认）；可写白名单 settingKeys（:84-118）未包含新增 7 键，UI 写入会被静默丢弃；无 REPORT_PROVIDER 校验。任务按 TODO T-07 补齐，并把 provider 值校验抽取为可测纯函数（原 validateSettings 为私有、无测试覆盖）。
