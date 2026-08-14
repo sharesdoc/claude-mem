@@ -109,7 +109,6 @@ export interface SyncRoutesSettings {
   CLAUDE_MEM_SERVER_REQUIRE_TLS: string;
   CLAUDE_MEM_SERVER_AUTH_MODE: string;
   CLAUDE_MEM_SERVER_ALLOWED_USERS: string;
-  CLAUDE_MEM_SERVER_ACCESS_TOKEN: string;
   CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: string;
 }
 
@@ -136,7 +135,7 @@ export class SyncRoutes extends BaseRouteHandler {
   setupRoutes(app: express.Application): void {
     app.post(
       '/api/sync/ingest',
-      tokenAuth(this.settings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? ''),
+      tokenAuth(),
       this.requireTls(),
       this.authMiddleware(),
       enforceAllowList(this.settings.CLAUDE_MEM_SERVER_ALLOWED_USERS ?? ''),

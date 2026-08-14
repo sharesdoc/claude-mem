@@ -286,13 +286,12 @@ export class WorkerService implements WorkerRef {
     const isServerMode = resolveBindAddress().role === 'server';
     const adminSessions = new AdminSessionStore();
     const statsSettings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-    const serverAccessToken = (statsSettings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim();
 
     // X-006: server mode is default-deny — mounted before every route below
     // so no endpoint is reachable without loopback origin, the shared access
     // token, or an admin session (public login shell excepted).
     if (isServerMode) {
-      this.server.app.use(serverApiGate(adminSessions, serverAccessToken));
+      this.server.app.use(serverApiGate(adminSessions));
     }
 
     this.server.registerRoutes(new ChromaRoutes());
@@ -340,9 +339,9 @@ export class WorkerService implements WorkerRef {
     // In server mode, destructive DataRoutes endpoints require a valid admin
     // token; in client/standalone mode there is no login so the flag is false
     // and those endpoints stay open (loopback-only by CORS anyway).
-    this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime, adminSessions, isServerMode, serverAccessToken));
-    this.server.registerRoutes(new ReportRoutes(this.dbManager, isServerMode, serverAccessToken, isServerMode ? adminSessions : undefined));
-    this.server.registerRoutes(new DailyReportRoutes(this.dbManager, isServerMode, serverAccessToken, isServerMode ? adminSessions : undefined));
+    this.server.registerRoutes(new DataRoutes(this.paginationHelper, this.dbManager, this.sessionManager, this.sseBroadcaster, this, this.startTime, adminSessions, isServerMode));
+    this.server.registerRoutes(new ReportRoutes(this.dbManager, isServerMode, isServerMode ? adminSessions : undefined));
+    this.server.registerRoutes(new DailyReportRoutes(this.dbManager, isServerMode, isServerMode ? adminSessions : undefined));
     this.server.registerRoutes(new SettingsRoutes(this.settingsManager));
     this.server.registerRoutes(new LogsRoutes());
     this.server.registerRoutes(new MemoryRoutes(this.dbManager, 'claude-mem'));
@@ -364,7 +363,6 @@ export class WorkerService implements WorkerRef {
         CLAUDE_MEM_SERVER_REQUIRE_TLS: settings.CLAUDE_MEM_SERVER_REQUIRE_TLS ?? 'false',
         CLAUDE_MEM_SERVER_AUTH_MODE: settings.CLAUDE_MEM_SERVER_AUTH_MODE ?? 'none',
         CLAUDE_MEM_SERVER_ALLOWED_USERS: settings.CLAUDE_MEM_SERVER_ALLOWED_USERS ?? '',
-        CLAUDE_MEM_SERVER_ACCESS_TOKEN: settings.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '',
         CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: settings.CLAUDE_MEM_SERVER_INGEST_MAX_BATCH ?? '1000',
       }, this.sseBroadcaster));
     }

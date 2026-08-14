@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../../../../utils/logger.js';
 import type { AdminSessionStore } from '../AdminSessionStore.js';
@@ -6,6 +5,7 @@ import { extractBearerToken } from '../AdminSessionStore.js';
 import { isAutoLoginAllowed } from '../middleware.js';
 import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
+import { loadAccessAuth, verifyAccessTokenAgainst } from './tokenAuth.js';
 
 /**
  * Server-mode default-deny gate (X-006). Mounted before every route in
@@ -45,14 +45,10 @@ const QUERY_TOKEN_PATHS = new Set([
   '/api/daily-reports/download',
 ]);
 
-function tokenMatches(provided: string, expected: string): boolean {
-  if (!provided || !expected) return false;
-  const a = Buffer.from(provided);
-  const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b);
-}
-
-export function serverApiGate(adminSessions: AdminSessionStore, serverToken: string) {
+// X-038: 不再自持明文比对——统一走 tokenAuth 的 loadAccessAuth 构造期缓存 +
+// verifyAccessTokenAgainst(明文/哈希双轨)。旧 tokenMatches 删除。
+export function serverApiGate(adminSessions: AdminSessionStore) {
+  const auth = loadAccessAuth();
   return (req: Request, res: Response, next: NextFunction): void => {
     if (req.method === 'OPTIONS') {
       next();
@@ -60,7 +56,7 @@ export function serverApiGate(adminSessions: AdminSessionStore, serverToken: str
     }
 
     const bearer = extractBearerToken(req) ?? '';
-    if (tokenMatches(bearer, serverToken) || adminSessions.verify(bearer)) {
+    if (verifyAccessTokenAgainst(auth, req, bearer) || adminSessions.verify(bearer)) {
       res.locals.authVia = 'token';
       next();
       return;
@@ -97,7 +93,7 @@ export function serverApiGate(adminSessions: AdminSessionStore, serverToken: str
 
     if (QUERY_TOKEN_PATHS.has(req.path)) {
       const queryToken = typeof req.query.token === 'string' ? req.query.token : '';
-      if (tokenMatches(queryToken, serverToken) || adminSessions.verify(queryToken)) {
+      if (verifyAccessTokenAgainst(auth, req, queryToken) || adminSessions.verify(queryToken)) {
         res.locals.authVia = 'token';
         next();
         return;

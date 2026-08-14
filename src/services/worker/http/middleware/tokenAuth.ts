@@ -124,10 +124,8 @@ export function verifyAccessToken(req: Request, presented: string, settings?: Se
   return verifyAccessTokenAgainst(loadAccessAuth(settings), req, presented);
 }
 
-export function tokenAuth(serverToken: string, adminSessions?: AdminSessionStore) {
-  // @deprecated X-037: serverToken 参数仅为兼容既有调用方保留, 鉴权值以
-  // loadAccessAuth() 为准(构造期缓存一次, 避免每请求读盘)。
-  void serverToken;
+export function tokenAuth(adminSessions?: AdminSessionStore) {
+  // X-038: 鉴权值唯一来源 loadAccessAuth()(构造期缓存一次, 避免每请求读盘)。
   const hasAdminFallback = adminSessions !== undefined;
   const auth = loadAccessAuth();  // 构造期快照: 变更需重启 worker, 与旧语义一致
 

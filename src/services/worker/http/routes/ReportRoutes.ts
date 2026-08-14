@@ -41,12 +41,9 @@ export class ReportRoutes extends BaseRouteHandler {
   constructor(
     private dbManager: DatabaseManager,
     private requireAuth: boolean,
-    /** @deprecated X-037: 仅为兼容调用方保留, 鉴权值以 loadAccessAuth() 为准。 */
-    private serverAccessToken: string,
     private adminSessions?: AdminSessionStore,
   ) {
     super();
-    void this.serverAccessToken;
   }
 
   setupRoutes(app: express.Application): void {
