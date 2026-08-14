@@ -1,3 +1,23 @@
+### X-022 install.ts 交互安装流程更新（大模型配置统一化 T-08）
+
+现状调查：install.ts 的 ProviderId 仅 claude/gemini/openrouter（:642），provider 选择交互无 qwen/deepseek；非 claude 分支的 key 提示逻辑（:928-960）只覆盖 gemini/openrouter 两厂商；周报 AI 由独立的 promptDashscopeKey（X-021 已改新键）询问 Qwen key，无 REPORT_PROVIDER 概念。设计（TODO T-08）要求：provider 交互加 qwen/deepseek；按所选 provider 提示对应 _API_KEY（qwen/deepseek 另可提示 _URL，可选）；新增 REPORT_PROVIDER 询问（默认空 = 禁用）。因 REPORT_PROVIDER 复用厂商组 key，原独立 promptDashscopeKey 与 provider 流程的 qwen 提示重复，一并移除（qwen key 由 provider/report 两处共用同一组提示逻辑）。
+
+- 编号：X-022
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-08（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-08（独立 fix，无 A-F/M 体系）
+- 任务描述：ProviderId 联合加 qwen/deepseek；provider 选择选项加 Qwen/DeepSeek；非 claude 分支泛化为 4 厂商映射（label/key 变量），qwen/deepseek 在 key 后追加可选 URL 提示（空跳过）；新增 promptReportProvider()：select off（默认，写空串）+ 5 厂商，选厂商时 key 缺失则提示补 key，mergeSettings 写 REPORT_PROVIDER；删除 promptDashscopeKey 及其调用（:1156）。
+- 验收标准：(1) ProviderId 含 5 厂商；(2) 选择交互含 Qwen/DeepSeek 选项；(3) 选 qwen/deepseek 提示 key 与可选 URL；(4) 安装流程询问 REPORT_PROVIDER（默认 off）；(5) 非交互路径（--provider=qwen/deepseek）不崩溃；(6) typecheck 与既有 install 测试通过。
+- 涉及文件与行号：`src/npx-cli/commands/install.ts:642,731-961,963-996,1146-1160`。
+- 关联需求：`doc/B-系统设计文档.md` 安装流程章节（需 ree 刷新）
+- 实际修改位置：`src/npx-cli/commands/install.ts`（ProviderId 加 qwen/deepseek；选择选项加两项；非 claude 分支改 vendorMeta 四厂商映射并加 qwen/deepseek 可选 URL 提示；promptDashscopeKey 删除、替换为 promptReportProvider——select off+5 厂商、key 复用厂商组缺失时补录、mergeSettings 落盘）、`src/npx-cli/index.ts:26,86-90`（--provider 校验与帮助文案加 qwen/deepseek）、`tests/install-provider-options.test.ts`（新增 4 条源码断言）。
+- 阶段验证结果：RED——新源码断言 4 fail（ProviderId/选项/REPORT_PROVIDER/URL 特征不存在，输出为整文件 Received 转储）；GREEN——4 pass；`npm run typecheck` 0 错误；install 相关测试 118 pass/1 fail，唯一失败为预存问题（install-non-tty.test.ts:127 的 sync-marketplace.cjs gitignore 断言，git stash 基线对比确认与本次无关）。
+- 涉及文档刷新：需 ree 刷新 `doc/B-系统设计文档.md` 安装流程章节；本次按 fix 规则只在 X 标注。
+- 测试方法：(1) `bun test tests/install-provider-options.test.ts` 全绿；(2) `bun test tests/install-*.test.ts` 无新增失败；(3) `npm run typecheck` 通过。
+- 代码修复提交：`e5cf772c`
+
 ### X-027 报表 Gemini 密钥改请求头 + 自定义端点 SSRF 告警（rev 委托）
 
 后台安全审查（X-019 提交 448b7d7d）发现 2 项：①secret-in-url-query——callGemini 把 API key 拼在 URL query（?key=），密钥会泄漏到代理/访问日志；Gemini 官方支持 `x-goog-api-key` 请求头，改头即修；②SSRF/credential-exfiltration——CLAUDE_MEM_QWEN_URL/CLAUDE_MEM_DEEPSEEK_URL 为可配置端点，若被改为恶意地址则 Bearer 密钥随之发出。该项属设计固有取舍（用户自担责保证 OpenAI 兼容，与 ANTHROPIC_BASE_URL 同类；禁用自定义端点会破坏 vLLM/Ollama 本地部署的合理场景），处置为：端点非内置默认值时 WARN 告警（明确提示 key 将发往该主机），不引入白名单/黑名单限制。
