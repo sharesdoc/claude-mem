@@ -1,3 +1,22 @@
+### X-036 令牌哈希版本化校验（双轨迁移）
+
+用户方案（2026-08-15 定稿）：服务端新增 `CLAUDE_MEM_SYNC_SHASUM_VALUE`（共享令牌的 sha1 十六进制），客户端新增 `CLAUDE_MEM_SYNC_AUTH_VERSION`（'2' = 请求带 `X-Claude-Mem-Auth-Version: 2` 头走新路径）。服务端校验按版本头路由：有头=2 → `sha1(presented)` 恒时比对哈希键；无头 → 明文恒时比对 `CLAUDE_MEM_SERVER_ACCESS_TOKEN`（老逻辑）。双轨期间服务端两键并存（攻击面不变），收敛点在新 client 全覆盖后服务端删明文键。设计事实：本机 ADMIN_PASSWORD（42b07b…）恰为同步令牌的 sha1——用户"shasum 口令"规范的既有实践。
+
+- 编号：X-036
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：用户指令（2026-08-15 对话定稿，键名由用户指定 CLAUDE_MEM_SYNC_SHASUM_VALUE）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：SettingsDefaultsManager 新增 CLAUDE_MEM_SYNC_SHASUM_VALUE 与 CLAUDE_MEM_SYNC_AUTH_VERSION（默认空）；tokenAuth.ts 导出 sha1Hex/loadAccessAuth/verifyAccessToken 并重构中间件比对为双轨；ReportRoutes/DailyReportRoutes 的 authorized() 改用 verifyAccessToken；SyncAgent 配置加 authVersion（'2' 时带版本头）；worker-service 透传 CLAUDE_MEM_SYNC_AUTH_VERSION；settings-demo.json 加哈希键示例；测试覆盖双路径/空直通/大小写归一/版本头空白。
+- 验收标准：(1) 无版本头+明文键 → 老路径通过；(2) 版本头 2+哈希键 → sha1 路径通过；(3) 版本头 2 但服务端无哈希键 → 拒绝；(4) 两键皆空 → false（调用方直通语义不变）；(5) 恒时比对保持；(6) typecheck 与相关测试全绿。
+- 涉及文件与行号：`src/shared/SettingsDefaultsManager.ts`（2 新键）、`src/services/worker/http/middleware/tokenAuth.ts`（helper+中间件重构）、`src/services/worker/http/routes/ReportRoutes.ts:59-71`、`src/services/worker/http/routes/DailyReportRoutes.ts:55-67`、`src/services/sync/SyncAgent.ts`（config+header）、`src/services/worker-service.ts:935-947`、`tests/worker/middleware/token-auth-version.test.ts`（新增 7 用例）、`settings-demo.json`。
+- 关联需求：N/A
+- 实际修改位置：同上。
+- 阶段验证结果：RED——测试 0 pass/1 error（导出不存在）；GREEN——7 pass/0 fail（含模块加载期 DATA_DIR 隔离：env 先行+动态 import，否则 USER_SETTINGS_PATH 冻结为真实路径）；`bun test tests/worker/middleware/` 37 pass/0 fail；`npm run typecheck` 0 错误。
+- 测试方法：(1) `bun test tests/worker/middleware/token-auth-version.test.ts` 全绿；(2) `bun test tests/worker/middleware/` 无新增失败；(3) `npm run typecheck` 通过。
+- 代码修复提交：`7db2c436`
+
 ### X-035 自定义端点 SSRF 加固：scheme 校验 + redirect manual（rev 委托）
 
 后台安全审查再次点名 QwenProvider/DeepSeekProvider 的可配置端点（SSRF/Credential-Exfiltration），建议三档：URL 形状校验、封锁 loopback/内网地址、凭据仅发给白名单主机。处置：采纳①③中与设计兼容的部分——新增 provider-endpoint.ts 做 http(s) scheme 校验（非 http(s) 启动期快速失败/报表层禁 AI 段），所有凭据承载 fetch 加 `redirect: 'manual'`（防 302 弹跳带凭据请求到任意目标）；**不采纳** loopback/内网封锁与凭据白名单——本地 vLLM/Ollama 部署是自定义端点的核心设计用例，封锁即杀死该场景，且配置源是本地 settings 而非远程输入（与 X-027/X-028 同取舍），已有自定义端点 WARN 兜底。
