@@ -1,3 +1,23 @@
+### X-020 server-beta 生成 provider 合并到 CLAUDE_MEM_PROVIDER（大模型配置统一化 T-06）
+
+现状调查：server-beta 的 `buildServerGenerationProviderFromEnv()`（create-server-beta-service.ts:232-261）读独立配置 CLAUDE_MEM_SERVER_PROVIDER/_MODEL，仅支持 claude/gemini/openrouter 三厂商；claude 分支仅认 ANTHROPIC_API_KEY（无 OAuth，符合"服务器不碰个人登录态"边界）。合并方案（设计定稿第 5 条）：改读 CLAUDE_MEM_PROVIDER（未配置默认 claude）+ 厂商配置组；新增 qwen/deepseek 分支（OpenAI 兼容，复用 OpenRouterObservationProvider 泛化出 baseUrl/providerLabel 构造参数）；claude 分支保持仅认 key，缺 key → null + WARN（生成禁用）。SERVER_PROVIDER/SERVER_MODEL 消费清零后由 X-021 从 SettingsDefaultsManager 删除。经典 worker 的 claude OAuth 认证链不引入 server-beta。
+
+- 编号：X-020
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-06（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-06（独立 fix，无 A-F/M 体系）
+- 任务描述：buildServerGenerationProviderFromEnv 改为接受可选 settings（默认 loadFromFile，供测试注入），读 CLAUDE_MEM_PROVIDER（默认 claude）；五厂商分支：claude（ANTHROPIC_API_KEY/CLAUDE_MEM_ANTHROPIC_API_KEY + CLAUDE_MEM_MODEL，缺 key → WARN + null）、gemini、openrouter、qwen（resolveQwen* 纯函数）、deepseek（resolveDeepSeek*）；OpenRouterObservationProvider 增加 baseUrl/providerLabel 可选构造参数（默认值保持原行为）供 qwen/deepseek 复用；shared/types.ts 的 providerLabel 联合加 qwen/deepseek。
+- 验收标准：(1) 未配置 provider → claude 默认，有 ANTHROPIC_API_KEY 可用；(2) claude 无 key → null（生成禁用 + WARN）；(3) qwen/deepseek 走各自厂商组 key/model/endpoint 且请求 URL/模型正确（fetch 捕获验证）；(4) gemini/openrouter 行为不变；(5) CLAUDE_MEM_SERVER_PROVIDER 不再被读取（回归护栏：设置旧变量不影响选择）；(6) typecheck 通过且无新增测试失败。
+- 涉及文件与行号：`src/server/runtime/create-server-beta-service.ts:210-261`、`src/server/generation/providers/OpenRouterObservationProvider.ts:15-60`、`src/server/generation/providers/shared/types.ts`。
+- 关联需求：`doc/B-系统设计文档.md` server-beta 章节（需 ree 刷新）
+- 实际修改位置：`src/server/runtime/create-server-beta-service.ts:3-8,214-222,236-288`（新增 settings 注入签名与 5 厂商分支，导出供测试；Disabled 提示文案改 CLAUDE_MEM_PROVIDER）、`src/server/generation/providers/OpenRouterObservationProvider.ts`（baseUrl/providerLabel 泛化，缺省保持原行为）、`src/server/generation/providers/shared/types.ts`（providerLabel 联合加 qwen/deepseek）、`tests/server/generation/server-provider-env.test.ts`（新增 9 用例：8 路由断言 + 1 协议级 fetch 捕获）。
+- 阶段验证结果：RED——0 pass/1 fail/1 error（buildServerGenerationProviderFromEnv 未导出）；GREEN——9 pass/0 fail；`npm run typecheck` 0 错误；`bun test tests/server/` 311 用例 0 fail（18 skip，含既有跳过）。跨层引用说明：create-server-beta-service 引用 worker 层 resolveQwen*/resolveDeepSeek* 纯函数，模块顶层无副作用，统一 bundle 下无循环依赖（typecheck 验证）。
+- 涉及文档刷新：需 ree 刷新 `doc/B-系统设计文档.md` server-beta 章节；本次按 fix 规则只在 X 标注。
+- 测试方法：(1) `bun test tests/server/generation/server-provider-env.test.ts` 全绿；(2) `bun test tests/server/` 无新增失败；(3) `npm run typecheck` 通过。
+- 代码修复提交：`9ddb59d1`
+
 ### X-026 SettingsRoutes provider 校验的 type-confusion 与校验-消费差异（rev 委托）
 
 后台安全审查（X-018 提交 f25e6825）发现 3 个问题，其中 2 个为本次引入缺陷、1 个为预存模式观察：①sensitive-data-exfiltration——GET /api/settings 返回含 API key 的完整配置，经核对属预存模式（GEMINI/OPENROUTER key 历来如此，worker 默认 127.0.0.1 绑定），本次仅新增同类键、未引入新暴露类，记观察不修；②type-confusion-crash——isValidProviderValue 对非字符串输入（如 `{"CLAUDE_MEM_PROVIDER":123}`）执行 `.trim()` 抛 TypeError，请求处理器崩溃，旧实现 `Array.includes` 无此问题，系 X-018 回归；③validator-consumer-differential——校验用 trim+toLowerCase 归一化，但写入路径存原始值，Gemini/OpenRouter 的 is*Selected 用精确相等比较，导致 `" GEMINI "` 这类值校验通过却静默回落 claude。
