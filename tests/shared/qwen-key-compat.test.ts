@@ -18,11 +18,13 @@ const TEST_DIR = fs.mkdtempSync(join(tmpdir(), 'claude-mem-qwen-key-compat-'));
 const TEST_ENV_FILE = join(TEST_DIR, '.env');
 const ORIGINAL_ENV_FILE = process.env.CLAUDE_MEM_ENV_FILE;
 const ORIGINAL_ENV_KEY = process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY;
+const ORIGINAL_NEW_KEY = process.env.CLAUDE_MEM_QWEN_API_KEY;
 
 describe('X-008 Qwen key rename backward compat', () => {
   beforeEach(() => {
     process.env.CLAUDE_MEM_ENV_FILE = TEST_ENV_FILE;
     delete process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY;
+    delete process.env.CLAUDE_MEM_QWEN_API_KEY;
     if (fs.existsSync(TEST_ENV_FILE)) fs.unlinkSync(TEST_ENV_FILE);
   });
 
@@ -31,6 +33,8 @@ describe('X-008 Qwen key rename backward compat', () => {
     else process.env.CLAUDE_MEM_ENV_FILE = ORIGINAL_ENV_FILE;
     if (ORIGINAL_ENV_KEY === undefined) delete process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY;
     else process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY = ORIGINAL_ENV_KEY;
+    if (ORIGINAL_NEW_KEY === undefined) delete process.env.CLAUDE_MEM_QWEN_API_KEY;
+    else process.env.CLAUDE_MEM_QWEN_API_KEY = ORIGINAL_NEW_KEY;
   });
 
   describe('loadClaudeMemEnv — legacy .env key', () => {
@@ -59,12 +63,12 @@ describe('X-008 Qwen key rename backward compat', () => {
     });
   });
 
-  describe('isQwenAvailable — getCredential fallback (R-005)', () => {
-    it('should return true when key is only in .env (env + settings empty)', () => {
+  describe('isQwenAvailable — getCredential fallback (R-005, X-015 新键)', () => {
+    it('should return true when CLAUDE_MEM_QWEN_API_KEY is only in .env (env + settings empty)', () => {
       // settings.json 不参与（mock 成全空默认），env 未设，仅 .env 有 key
       const emptyDefaults = SettingsDefaultsManager.getAllDefaults();
       const spy = spyOnSettings(emptyDefaults);
-      fs.writeFileSync(TEST_ENV_FILE, 'DASHSCOPE_API_KEY=sk-only-dotenv\n');
+      fs.writeFileSync(TEST_ENV_FILE, 'CLAUDE_MEM_QWEN_API_KEY=sk-only-dotenv\n');
 
       try {
         expect(isQwenAvailable()).toBe(true);

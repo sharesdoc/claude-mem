@@ -2,7 +2,7 @@ import { DatabaseManager } from './DatabaseManager.js';
 import { SessionManager } from './SessionManager.js';
 import { logger } from '../../utils/logger.js';
 import { buildInitPrompt, buildObservationPrompt, buildSummaryPrompt, buildContinuationPrompt } from '../../sdk/prompts.js';
-import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
+import { SettingsDefaultsManager, type SettingsDefaults } from '../../shared/SettingsDefaultsManager.js';
 import { getCredential } from '../../shared/EnvManager.js';
 import { USER_SETTINGS_PATH, paths } from '../../shared/paths.js';
 import type { ActiveSession, ConversationMessage } from '../worker-types.js';
@@ -23,7 +23,11 @@ const AI_TIMEOUT_MS = 90000;
 // ---------------------------------------------------------------------------
 // QwenProvider — 用 DashScope (Qwen) 驱动 observation / summary 生成。
 // 遵循与 GeminiProvider 相同的 REST 模式,复用已有的 prompt 构建、XML 解析、
-// 结果存储管线。凭证: env CLAUDE_MEM_REPORT_QWEN_API_KEY 优先, settings.json 兜底。
+// 结果存储管线。协议仅支持 OpenAI 兼容 (chat/completions)：
+//   凭证  CLAUDE_MEM_QWEN_API_KEY    (env > settings.json > ~/.claude-mem/.env)
+//   端点  CLAUDE_MEM_QWEN_URL        (空 = DASHSCOPE_URL 兼容端点；非空由调用方
+//                                   自担责保证 OpenAI 兼容)
+//   模型  CLAUDE_MEM_QWEN_MODEL      (空 = DEFAULT_MODEL)
 // ---------------------------------------------------------------------------
 
 /** DashScope chat/completions 请求体 */
@@ -101,7 +105,9 @@ export function classifyQwenError(input: {
   );
 }
 
-export type QwenModel = 'qwen3-max' | 'qwen3-235b-a22b' | 'qwen-plus' | 'qwen-turbo';
+// 模型 id 不再做白名单限制：CLAUDE_MEM_QWEN_URL 允许指向任意 OpenAI 兼容端点，
+// 模型名由该端点定义，配置值直接采用（空 = DEFAULT_MODEL）。
+export type QwenModel = string;
 
 export class QwenProvider {
   private dbManager: DatabaseManager;
@@ -115,10 +121,10 @@ export class QwenProvider {
   // ── 公开入口 ──────────────────────────────────────────────────────────
 
   async startSession(session: ActiveSession, worker?: WorkerRef): Promise<void> {
-    const { apiKey, model } = this.getQwenConfig();
+    const { apiKey, model, endpoint } = this.getQwenConfig();
 
     if (!apiKey) {
-      throw new Error('Qwen API key not configured. Set CLAUDE_MEM_REPORT_QWEN_API_KEY in settings or environment.');
+      throw new Error('Qwen API key not configured. Set CLAUDE_MEM_QWEN_API_KEY in settings or environment.');
     }
 
     // 合成 memorySessionId (与 Gemini 模式一致)
@@ -137,7 +143,7 @@ export class QwenProvider {
     session.conversationHistory.push({ role: 'user', content: initPrompt });
     let initResponse: { content: string; tokensUsed?: number };
     try {
-      initResponse = await this.queryQwen(session.conversationHistory, apiKey, model);
+      initResponse = await this.queryQwen(session.conversationHistory, apiKey, model, endpoint);
     } catch (error: unknown) {
       logger.error('SDK', 'Qwen init query failed', { sessionId: session.sessionDbId, model }, error instanceof Error ? error : new Error(String(error)));
       return this.handleQwenError(error, session, worker);
@@ -154,7 +160,7 @@ export class QwenProvider {
     }
 
     try {
-      await this.processMessageLoop(session, worker, apiKey, model, mode);
+      await this.processMessageLoop(session, worker, apiKey, model, endpoint, mode);
     } catch (error: unknown) {
       logger.error('SDK', 'Qwen message loop failed', { sessionId: session.sessionDbId, model }, error instanceof Error ? error : new Error(String(error)));
       return this.handleQwenError(error, session, worker);
@@ -175,6 +181,7 @@ export class QwenProvider {
     worker: WorkerRef | undefined,
     apiKey: string,
     model: QwenModel,
+    endpoint: string,
     mode: ModeConfig
   ): Promise<void> {
     let lastCwd: string | undefined;
@@ -189,9 +196,9 @@ export class QwenProvider {
       const originalTimestamp = session.earliestPendingTimestamp;
 
       if (message.type === 'observation') {
-        await this.processObservationMessage(session, message, worker, apiKey, model, originalTimestamp, lastCwd);
+        await this.processObservationMessage(session, message, worker, apiKey, model, endpoint, originalTimestamp, lastCwd);
       } else if (message.type === 'summarize') {
-        await this.processSummaryMessage(session, message, worker, apiKey, model, mode, originalTimestamp, lastCwd);
+        await this.processSummaryMessage(session, message, worker, apiKey, model, endpoint, mode, originalTimestamp, lastCwd);
       }
     }
   }
@@ -202,6 +209,7 @@ export class QwenProvider {
     worker: WorkerRef | undefined,
     apiKey: string,
     model: QwenModel,
+    endpoint: string,
     originalTimestamp: number | null,
     lastCwd: string | undefined
   ): Promise<void> {
@@ -223,7 +231,7 @@ export class QwenProvider {
     });
 
     session.conversationHistory.push({ role: 'user', content: obsPrompt });
-    const obsResponse = await this.queryQwen(session.conversationHistory, apiKey, model);
+    const obsResponse = await this.queryQwen(session.conversationHistory, apiKey, model, endpoint);
 
     let tokensUsed = 0;
     if (obsResponse.content) {
@@ -248,6 +256,7 @@ export class QwenProvider {
     worker: WorkerRef | undefined,
     apiKey: string,
     model: QwenModel,
+    endpoint: string,
     mode: ModeConfig,
     originalTimestamp: number | null,
     lastCwd: string | undefined
@@ -265,7 +274,7 @@ export class QwenProvider {
     }, mode);
 
     session.conversationHistory.push({ role: 'user', content: summaryPrompt });
-    const summaryResponse = await this.queryQwen(session.conversationHistory, apiKey, model);
+    const summaryResponse = await this.queryQwen(session.conversationHistory, apiKey, model, endpoint);
 
     let tokensUsed = 0;
     if (summaryResponse.content) {
@@ -289,14 +298,16 @@ export class QwenProvider {
   private async queryQwen(
     history: ConversationMessage[],
     apiKey: string,
-    model: QwenModel
+    model: QwenModel,
+    endpoint: string
   ): Promise<{ content: string; tokensUsed?: number }> {
     const messages = toOpenAiMessages(history);
     const totalChars = history.reduce((sum, m) => sum + m.content.length, 0);
 
     logger.debug('SDK', `Querying Qwen (${model})`, {
       turns: history.length,
-      totalChars
+      totalChars,
+      endpoint
     });
 
     const data = await withRetry<QwenResponse>(async (attemptSignal) => {
@@ -306,7 +317,7 @@ export class QwenProvider {
 
       let response: Response;
       try {
-        response = await fetch(DASHSCOPE_URL, {
+        response = await fetch(endpoint, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -345,26 +356,13 @@ export class QwenProvider {
 
   // ── 配置 ──────────────────────────────────────────────────────────────
 
-  private getQwenConfig(): { apiKey: string; model: QwenModel } {
+  private getQwenConfig(): { apiKey: string; model: QwenModel; endpoint: string } {
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-
-    const apiKey = (process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim()
-      || (settings.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim()
-      || getCredential('CLAUDE_MEM_REPORT_QWEN_API_KEY')
-      || '';
-
-    const configuredModel = (settings.CLAUDE_MEM_QWEN_MODEL ?? '').trim() || DEFAULT_MODEL;
-    const validModels: QwenModel[] = ['qwen3-max', 'qwen3-235b-a22b', 'qwen-plus', 'qwen-turbo'];
-
-    let model: QwenModel;
-    if ((validModels as string[]).includes(configuredModel)) {
-      model = configuredModel as QwenModel;
-    } else {
-      logger.warn('SDK', `Unknown Qwen model "${configuredModel}", falling back to ${DEFAULT_MODEL}`);
-      model = DEFAULT_MODEL;
-    }
-
-    return { apiKey, model };
+    return {
+      apiKey: resolveQwenApiKey(settings),
+      model: resolveQwenModel(settings),
+      endpoint: resolveQwenEndpoint(settings),
+    };
   }
 
   // ── 错误处理 ──────────────────────────────────────────────────────────
@@ -380,21 +378,42 @@ export class QwenProvider {
   }
 }
 
+/** Qwen 凭证解析 (X-015)：CLAUDE_MEM_QWEN_API_KEY 三级回脱
+ *  env > settings.json > ~/.claude-mem/.env（经 getCredential）。 */
+export function resolveQwenApiKey(settings: SettingsDefaults): string {
+  return (process.env.CLAUDE_MEM_QWEN_API_KEY ?? '').trim()
+    || (settings.CLAUDE_MEM_QWEN_API_KEY ?? '').trim()
+    || getCredential('CLAUDE_MEM_QWEN_API_KEY')
+    || '';
+}
+
+/** Qwen 端点解析 (X-015)：CLAUDE_MEM_QWEN_URL 非空采用（调用方自担责保证
+ *  OpenAI 兼容），空回落 DASHSCOPE 兼容端点。 */
+export function resolveQwenEndpoint(settings: SettingsDefaults): string {
+  return (settings.CLAUDE_MEM_QWEN_URL ?? '').trim() || DASHSCOPE_URL;
+}
+
+/** Qwen 模型解析 (X-015)：任意模型名直接采用（自定义端点下模型名由端点定义），
+ *  空回落 DEFAULT_MODEL。 */
+export function resolveQwenModel(settings: SettingsDefaults): string {
+  return (settings.CLAUDE_MEM_QWEN_MODEL ?? '').trim() || DEFAULT_MODEL;
+}
+
 /** 检查 Qwen / DashScope 是否可用 (有 key 即可)。 */
 export function isQwenAvailable(): boolean {
   // env 优先
-  if ((process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim()) return true;
+  if ((process.env.CLAUDE_MEM_QWEN_API_KEY ?? '').trim()) return true;
 
   try {
     const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
-    if ((settings.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim()) return true;
+    if ((settings.CLAUDE_MEM_QWEN_API_KEY ?? '').trim()) return true;
   } catch {
     // settings 文件不可读时回退到凭据存储，而非直接判不可用
   }
 
-  // X-005/R-005: 与 getQwenConfig() 三级回脱对齐——key 可能只存在 ~/.claude-mem/.env
-  // （经 getCredential 读取），缺失此级会导致仅 .env 配置时 Qwen 不被自动选中。
-  return !!getCredential('CLAUDE_MEM_REPORT_QWEN_API_KEY');
+  // X-005/R-005: 与 resolveQwenApiKey() 三级回脱对齐——key 可能只存在 ~/.claude-mem/.env
+  // （经 getCredential 读取），缺失此级会导致仅 .env 配置时 Qwen 不被选中。
+  return !!getCredential('CLAUDE_MEM_QWEN_API_KEY');
 }
 
 /** 检查 Qwen 是否被选为 Provider。 */
