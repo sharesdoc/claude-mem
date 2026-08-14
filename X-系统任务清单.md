@@ -1,3 +1,23 @@
+### X-040 X-038 审查缺陷修复（rev 委托，子代理+OCR）
+
+rev 审查 X-038 发现 2 项 important + 5 项 nit/suggestion，全部处置：①timingSafeCompare 的 256 字节零填充比较破坏了旧 tokenMatches 的"长度相等才比对"语义——已实证 `cmp('abc\0','abc')===true`（尾随 NUL 与零填充不可区分），且 ascii 编码使高位字符低位截断（'Ł' 与 'A' 同字节），恢复 UTF-8 + 长度相等的恒时比较；②预存测试 tests/token-auth.test.ts 因 tokenAuth 删参被击穿（token 字符串被当 adminSessions → 运行时 .verify TypeError），重写为 verifyAccessTokenAgainst 注入式用例并补 NUL/Unicode 边界；③statsSettings 死变量清理（worker-service:288）；④sync-routes.test.ts 删除已废弃的 SERVER_ACCESS_TOKEN 字段；⑤版本头值 WARN 日志白名单过滤（防刷日志+控制字符注入）；⑥超长配置令牌（>256）启动期 WARN + 文档标注 256 上限；⑦configuration.mdx 收敛步骤补 query-token 路径限制说明（浏览器新标签页/EventSource 无法携带版本头，收敛态需 admin session 或保留明文键）。
+
+- 编号：X-040
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：rev-委托（2026-08-15，子代理+OCR）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：见上 ①-⑦。
+- 根因分析：Why-1——零填充可比对因为 timingSafeCompare 用定长 256 缓冲 padding 且无长度检查；Why-2——测试击穿因为 X-037/X-038 删参后未盘点既有测试文件；Why-3——死变量因为 X-038 删唯一消费者时未连带清理。
+- 影响评估：P1（鉴权原语严格性退化；tokenAuth 层测试失效失去回归保护）。
+- 涉及文件与行号：`src/services/worker/http/middleware/tokenAuth.ts`（timingSafeCompare/日志过滤/超长 WARN）、`src/services/worker-service.ts:288`、`tests/token-auth.test.ts`（重写）、`tests/sync-routes.test.ts`、`docs/public/configuration.mdx`。
+- 关联需求：N/A
+- 实际修改位置：tokenAuth.ts（timingSafeCompare 改 UTF-8+长度相等；版本头日志白名单；超长令牌启动 WARN）、worker-service.ts:288（statsSettings 死变量）、tests/token-auth.test.ts（重写为注入式 6 用例含 NUL/Unicode 边界）、tests/sync-routes.test.ts（删废弃字段）、configuration.mdx（收敛后浏览器路径限制 + 256 上限说明）
+- 阶段验证结果：RED——重写用例先跑(旧 padding 实现下 NUL 用例误真/Ł 用例误真, 先证伪后修复)；GREEN——token-auth 6/6、token-auth-version 9/9；受影响 14 文件 85 用例 0 fail；typecheck 0 错误
+- 测试方法：(1) bun test tests/token-auth.test.ts tests/worker/middleware/token-auth-version.test.ts 全绿；(2) bun test tests/token-auth.test.ts tests/worker/middleware/ tests/services/sync/ tests/sync-routes.test.ts 无新增失败；(3) npm run typecheck 通过
+- 代码修复提交：`4825cbec`
+
 ### X-039 同步令牌鉴权文档与测试覆盖评估（review-report N-02/N-03/N-04）
 
 处置 review-report-20260815022400.md 剩余 3 项：N-04 部署顺序约束文档化（configuration.mdx 新增「Sync Token Authentication」章节 + CLAUDE.md 一句）；N-02（SyncAgent 端到端版本头发射测试）经评估由 buildSyncAuthHeaders 纯函数 4 用例等效覆盖（端到端需双机环境，留档不补）；N-03（tokenAuth 中间件级 HTTP 集成测试）受 bun 全量跑 DATA_DIR 冻结限制会 flaky，由 token-auth-version 纯函数 9 用例 + admin-role 既有 HTTP 级路由测试等效覆盖，留档不补。
