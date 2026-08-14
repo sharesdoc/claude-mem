@@ -1,3 +1,23 @@
+### X-023 Viewer UI 设置面板更新（大模型配置统一化 T-09）
+
+现状调查：Viewer 的 Advanced 设置区（ContextSettingsModal.tsx:334-449）provider 选择仅 claude/gemini/openrouter 三选项，无 qwen/deepseek 分组字段与 REPORT_PROVIDER；types.ts Settings 与 constants/settings.ts DEFAULT_SETTINGS 均缺新 7 键。服务端白名单（X-018）已支持新键写入，本任务补齐前端。注意 constants/settings.ts:2 的 CLAUDE_MEM_MODEL 默认值（claude-sonnet-4-6）与 SettingsDefaultsManager 不一致（预存漂移，仅离线兜底使用，不在本任务范围）。
+
+- 编号：X-023
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-09（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-09（独立 fix，无 A-F/M 体系）
+- 任务描述：types.ts Settings 加 CLAUDE_MEM_QWEN_MODEL/_API_KEY/_URL、CLAUDE_MEM_DEEPSEEK_API_KEY/_MODEL/_URL、CLAUDE_MEM_REPORT_PROVIDER（可选字段）；constants/settings.ts DEFAULT_SETTINGS 同步；ContextSettingsModal provider 选择加 Qwen/DeepSeek 选项与条件字段组（key=password、model=text、URL=text 可选）；新增 Report AI Provider 选择（off + 5 厂商，默认 off）。
+- 验收标准：(1) 新 7 键可通过 UI 编辑并经白名单落盘；(2) 选择 qwen/deepseek 显示对应字段组；(3) REPORT_PROVIDER 有 off 默认项；(4) viewer typecheck（tsconfig）与 build 通过。
+- 涉及文件与行号：`src/ui/viewer/types.ts:94-121`、`src/ui/viewer/constants/settings.ts`、`src/ui/viewer/components/ContextSettingsModal.tsx:334-449`。
+- 关联需求：`doc/B-系统设计文档.md` Viewer 章节（需 ree 刷新）
+- 实际修改位置：`types.ts:100-113`（Settings 加 7 可选键）、`constants/settings.ts:14-20`（DEFAULT_SETTINGS 同步）、`hooks/useSettings.ts`（formState 初始化映射加 7 键，服务器值优先）、`ContextSettingsModal.tsx`（provider 选项加 qwen/deepseek；qwen/deepseek 条件字段组：key password + model text + URL text 可选；新增 Report AI Provider select：off+5 厂商）。
+- 阶段验证结果：`npm run typecheck` 0 错误（含 viewer tsconfig）；`bun test tests/viewer/` 7 pass/1 fail 与干净 HEAD 基线一致（welcome-card-storage 预存失败，localStorage 相关，与本次无关）；UI 产物构建由 X-025 build-and-sync 统一执行。
+- 涉及文档刷新：需 ree 刷新 `doc/B-系统设计文档.md` Viewer 章节；本次按 fix 规则只在 X 标注。
+- 测试方法：(1) `npm run typecheck` 通过；(2) `bun test tests/viewer/` 与基线对比零新增失败；(3) X-025 build-and-sync 产物验证。
+- 代码修复提交：`6fe41b97`
+
 ### X-028 server-beta 自定义端点 SSRF 告警（rev 委托）
 
 后台安全审查（X-020 提交 9ddb59d1）发现 SSRF/Credential-Exfiltration——server-beta 的 qwen/deepseek 分支复用可配置端点（CLAUDE_MEM_QWEN_URL/CLAUDE_MEM_DEEPSEEK_URL），与 X-027 已处置的报表路径同属一类设计取舍（可配置端点为本地 vLLM/Ollama 场景设计，无法地址白名单化）。处置与 X-027 一致：端点非内置默认值时 WARN（仅主机名，不含 key）；为让比较基准不散落，将 QwenProvider.DASHSCOPE_URL 与 DeepSeekProvider.DEEPSEEK_COMPLETIONS_URL 导出为契约常量并加测试锁定。
