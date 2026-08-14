@@ -71,6 +71,15 @@ export function classifyQwenError(input: {
   const status = input.status;
   const body = input.bodyText ?? '';
 
+  // X-034: fetch 中止(cause=AbortError)标 unrecoverable——不重试已中止的请求,
+  // 避免会话中止时连发 3 次注定失败的 fetch。
+  if (input.cause instanceof Error && input.cause.name === 'AbortError') {
+    return new ClassifiedProviderError(
+      'Qwen request aborted',
+      { kind: 'unrecoverable', cause: input.cause },
+    );
+  }
+
   if (status === 401 || status === 403) {
     return new ClassifiedProviderError(
       `Qwen auth error (status ${status}): ${parseQwenError(body)}`,

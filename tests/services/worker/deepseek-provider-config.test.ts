@@ -34,9 +34,6 @@ describe('DeepSeekProvider config resolvers (X-016)', () => {
     else process.env.CLAUDE_MEM_DEEPSEEK_API_KEY = ORIGINAL_KEY;
     if (ORIGINAL_ENV_FILE === undefined) delete process.env.CLAUDE_MEM_ENV_FILE;
     else process.env.CLAUDE_MEM_ENV_FILE = ORIGINAL_ENV_FILE;
-    if (process.env.CLAUDE_MEM_ENV_FILE !== ORIGINAL_ENV_FILE) {
-      process.env.CLAUDE_MEM_ENV_FILE = '/tmp/claude-mem-deepseek-test-nonexistent.env';
-    }
   });
 
   describe('resolveDeepSeekApiKey', () => {
@@ -146,6 +143,14 @@ describe('DeepSeekProvider config resolvers (X-016)', () => {
     it('should classify network errors as transient', () => {
       const err = classifyDeepSeekError({ cause: new Error('ECONNREFUSED') });
       expect(err.kind).toBe('transient');
+    });
+
+    // X-034: abort 不得被当作 transient 重试。
+    it('should classify fetch aborts as unrecoverable (no retry)', () => {
+      const abort = new Error('The operation was aborted');
+      abort.name = 'AbortError';
+      const err = classifyDeepSeekError({ cause: abort });
+      expect(err.kind).toBe('unrecoverable');
     });
   });
 

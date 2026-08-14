@@ -41,5 +41,11 @@ export function isAbortError(error: unknown): boolean {
     return (error as { name: unknown }).name === 'AbortError';
   }
 
+  // X-034: 包装型错误(如 ClassifiedProviderError)的 cause 可能是 AbortError,
+  // 递归识别以便会话层正确记录"已中止"而非"失败"。
+  if (error instanceof Error && 'cause' in error) {
+    return isAbortError(error.cause);
+  }
+
   return false;
 }

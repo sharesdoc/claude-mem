@@ -6,6 +6,7 @@ import {
   resolveQwenEndpoint,
   resolveQwenModel,
   isQwenAvailable,
+  classifyQwenError,
 } from '../../../src/services/worker/QwenProvider.js';
 
 // X-015: QwenProvider 切换到 CLAUDE_MEM_QWEN_* 配置组。
@@ -34,9 +35,6 @@ describe('QwenProvider config resolvers (X-015)', () => {
     else process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY = ORIGINAL_OLD_KEY;
     if (ORIGINAL_ENV_FILE === undefined) delete process.env.CLAUDE_MEM_ENV_FILE;
     else process.env.CLAUDE_MEM_ENV_FILE = ORIGINAL_ENV_FILE;
-    if (process.env.CLAUDE_MEM_ENV_FILE !== ORIGINAL_ENV_FILE) {
-      process.env.CLAUDE_MEM_ENV_FILE = '/tmp/claude-mem-qwen-test-nonexistent.env';
-    }
   });
 
   describe('resolveQwenApiKey', () => {
@@ -141,6 +139,14 @@ describe('QwenProvider config resolvers (X-015)', () => {
       const settings = {} as unknown as SettingsDefaults;
       settings.CLAUDE_MEM_QWEN_MODEL = 'my-custom-qwen-72b';
       expect(resolveQwenModel(settings)).toBe('my-custom-qwen-72b');
+    });
+  });
+
+  describe('classifyQwenError (X-034)', () => {
+    it('should classify fetch aborts as unrecoverable (no retry)', () => {
+      const abort = new Error('The operation was aborted');
+      abort.name = 'AbortError';
+      expect(classifyQwenError({ cause: abort }).kind).toBe('unrecoverable');
     });
   });
 
