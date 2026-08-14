@@ -1,21 +1,18 @@
 import { Database } from 'bun:sqlite';
 import { logger } from '../../../utils/logger.js';
-import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager.js';
-import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
+import { resolveReportProviderConfig, callReportProvider, type ReportProviderConfig } from './report-provider.js';
 
 /**
  * ReportGenerator — 用户工作周报生成器 (B-周报设计文档 §5.4)。
  *
  * 混合生成:先用数据库数据聚合出本周 user×project 的工时与工作内容,再用
- * Qwen(阿里云 DashScope,OpenAI 兼容接口)把原始数据**提炼**成一份有重点、
- * 限篇幅的中文周报正文(总体概述 → 按工时罗列任务 → 项目详述 → 下周建议 →
- * 经验教训)。Qwen 凭证直接读环境变量 CLAUDE_MEM_REPORT_QWEN_API_KEY;未配置或调用失败则
+ * 报表 AI provider(CLAUDE_MEM_REPORT_PROVIDER 指定厂商,复用厂商组 key/model)
+ * 把原始数据**提炼**成一份有重点、限篇幅的中文周报正文(总体概述 → 按工时
+ * 罗列任务 → 项目详述 → 下周建议 → 经验教训)。未配置 provider/调用失败则
  * 退回确定性简版(只汇总,不臆造)。本生成器只读源表,不改采集链路。
  */
 
 const DAY_MS = 86400000;
-const DASHSCOPE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
-const AI_TIMEOUT_MS = 90000;
 const MAX_PROJECTS_IN_PROMPT = 8;
 // 工作任务里只体现"值得一提"的项目:本周耗时 > 1 小时,且有具体工作内容。
 const MIN_PROJECT_MS = 60 * 60 * 1000;
@@ -132,7 +129,7 @@ export function upsertWeeklyReport(db: Database, report: GeneratedReport): void 
 export class ReportGenerator {
   constructor(private db: Database) {}
 
-  async generate(userLabel: string, weekStart: string, tzOffsetMs: number, model: string): Promise<GeneratedReport> {
+  async generate(userLabel: string, weekStart: string, tzOffsetMs: number): Promise<GeneratedReport> {
     const [y, m, d] = weekStart.split('-').map(Number);
     const wallStart = Date.UTC(y, m - 1, d);
     const start = wallStart - tzOffsetMs; // 真实 epoch 区间 [start, end)
@@ -196,13 +193,15 @@ export class ReportGenerator {
     //   ① 用 obs/summaries 提炼(信息最完整,有重点、有结论)
     //   ② 当本周无 obs/summaries 可炼、但有 prompt 时:降级用 prompt 原文让 AI
     //      归纳任务清单(过去的 prompt 不会回溯生成 observation,此路保证有内容)
-    //   ③ 仍失败(无 Key / 无可用数据)→ 确定性简版(只汇总,不臆造)
-    let aiBody = await this.synthesize(user, weekStart, weekEnd, stats, digests, model, excludedMs, excludedPct);
+    //   ③ 仍失败(无 provider 配置 / 无可用数据)→ 确定性简版(只汇总,不臆造)
+    const config = resolveReportProviderConfig();
+    const model = config?.model ?? '';
+    let aiBody = await this.synthesize(user, weekStart, weekEnd, stats, digests, config, excludedMs, excludedPct);
     if (aiBody === null && digests.length === 0 && stats.prompts > 0) {
       const timeOf = new Map(projAgg.map(p => [p.project, p.total_ms]));
       const promptDigests = this.digestPromptsByProject(start, end, user, timeOf);
       if (promptDigests.length > 0) {
-        aiBody = await this.synthesizeFromPrompts(user, weekStart, weekEnd, stats, promptDigests, model, excludedMs, excludedPct);
+        aiBody = await this.synthesizeFromPrompts(user, weekStart, weekEnd, stats, promptDigests, config, excludedMs, excludedPct);
       }
     }
     const body = aiBody ?? this.fallbackBody(stats, digests, excludedMs, excludedPct);
@@ -285,26 +284,12 @@ export class ReportGenerator {
   }
 
   /**
-   * DashScope Key 解析:env `CLAUDE_MEM_REPORT_QWEN_API_KEY` 优先;缺失(或为空)则回退读
-   * settings.json 的 `CLAUDE_MEM_REPORT_QWEN_API_KEY`。两者皆空 → 返回 ''(AI 段禁用)。
-   * worker 多由 GUI 启动、不 source shell rc,故 settings.json 兜底很关键。
-   */
-  private resolveApiKey(): string {
-    const envKey = (process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim();
-    if (envKey) return envKey;
-    try {
-      return (SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim();
-    } catch { return ''; }
-  }
-
-  /**
-   * 用 Qwen 把原始数据提炼成结构化、限篇幅的周报正文(一~五)。
-   * Key 经 resolveApiKey() 解析(env 优先,settings.json 兜底);缺失或任何
+   * 用报表 AI provider 把原始数据提炼成结构化、限篇幅的周报正文(一~五)。
+   * config 由 resolveReportProviderConfig() 解析(未配置 = AI 段禁用);缺失或任何
    * 失败/超时 → 返回 null(降级)。
    */
-  private async synthesize(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: ProjectDigest[], model: string, excludedMs: number, excludedPct: number): Promise<string | null> {
-    const apiKey = this.resolveApiKey();
-    if (!apiKey) return null;
+  private async synthesize(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: ProjectDigest[], config: ReportProviderConfig | null, excludedMs: number, excludedPct: number): Promise<string | null> {
+    if (!config) return null;
     if (digests.length === 0) return null; // 过滤后无值得一提的项目
     if (stats.prompts === 0 && stats.obs === 0 && stats.summaries === 0) return null;
 
@@ -347,30 +332,30 @@ export class ReportGenerator {
 
     const sys = '你是严谨的技术主管,只依据给定数据撰写工作周报。全文必须使用简体中文,把英文工作记录转述为中文(仅保留专有名词/名称/路径/代码标识/命令/commit);语言精炼、重点突出、严格控制篇幅,绝不臆造。';
 
-    let body = await this.callQwen(apiKey, model, [
-      { role: 'system', content: sys },
-      { role: 'user', content: instruction },
-    ]);
+    let body = await callReportProvider(config, {
+      system: sys,
+      messages: [{ role: 'user', content: instruction }],
+    });
     if (!body) return null;
 
     // ── 生成后由 AI 质检:合格直接采用;不合格则按质检意见优化一次(优化后不再二次审查) ──
-    const verdict = await this.callQwen(apiKey, model, [
-      { role: 'system', content: '你是严格的周报质检员。只依据给定的《周报要求》审核周报正文,只输出审核结论,不要复述周报内容。' },
-      { role: 'user', content:
+    const verdict = await callReportProvider(config, {
+      system: '你是严格的周报质检员。只依据给定的《周报要求》审核周报正文,只输出审核结论,不要复述周报内容。',
+      messages: [{ role: 'user', content:
         `《周报要求》:\n${REQUIREMENTS}\n\n《待审核周报正文》:\n${body}\n\n` +
         '请判断该周报是否完全符合《周报要求》。\n' +
         '- 若完全合格,只输出四个字:周报合格\n' +
-        '- 若不合格,第一行输出"周报不合格",从第二行起逐条列出存在的问题与具体修改意见(简明扼要)。' },
-    ]);
+        '- 若不合格,第一行输出"周报不合格",从第二行起逐条列出存在的问题与具体修改意见(简明扼要)。' }],
+    });
     if (verdict && verdict.includes('不合格')) {
       logger.info('WORKER', 'Weekly report review: 不合格, optimizing once', {});
-      const optimized = await this.callQwen(apiKey, model, [
-        { role: 'system', content: sys },
-        { role: 'user', content:
+      const optimized = await callReportProvider(config, {
+        system: sys,
+        messages: [{ role: 'user', content:
           '请根据质检意见修改下面的周报正文,在保持内容真实、不新增未提供信息的前提下,' +
           '严格按《周报要求》重新输出**完整正文**(从"## 一、"开始,不要任何解释,不要用代码块包裹)。\n\n' +
-          `《周报要求》:\n${REQUIREMENTS}\n\n质检意见:\n${verdict}\n\n待修改的周报正文:\n${body}` },
-      ]);
+          `《周报要求》:\n${REQUIREMENTS}\n\n质检意见:\n${verdict}\n\n待修改的周报正文:\n${body}` }],
+      });
       if (optimized) body = optimized;
     } else {
       logger.info('WORKER', 'Weekly report review: 合格', {});
@@ -418,9 +403,8 @@ export class ReportGenerator {
    * 真实指令**客观归纳**工作任务清单(强调"任务请求、未必全部完成",不臆造成果)。
    * 沿用与 synthesize 相同的四章结构,便于前端与下载格式一致。失败/无 Key → null。
    */
-  private async synthesizeFromPrompts(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: PromptDigest[], model: string, _excludedMs: number, _excludedPct: number): Promise<string | null> {
-    const apiKey = this.resolveApiKey();
-    if (!apiKey || digests.length === 0) return null;
+  private async synthesizeFromPrompts(user: string, weekStart: string, weekEnd: string, stats: ReportStats, digests: PromptDigest[], config: ReportProviderConfig | null, _excludedMs: number, _excludedPct: number): Promise<string | null> {
+    if (!config || digests.length === 0) return null;
 
     const projectBlocks = digests.map(d => {
       const lines = [`【${d.project}】 耗时 ${fmtDuration(d.totalMs)};本周指令 ${d.prompts.length} 条:`];
@@ -449,35 +433,11 @@ export class ReportGenerator {
 
     const sys = '你是严谨的技术主管。你只能依据用户的 AI 指令(prompt)记录客观归纳工作内容,用简体中文,精炼、重点突出,绝不臆造指令中未出现的成果。';
 
-    const body = await this.callQwen(apiKey, model, [
-      { role: 'system', content: sys },
-      { role: 'user', content: instruction },
-    ]);
+    const body = await callReportProvider(config, {
+      system: sys,
+      messages: [{ role: 'user', content: instruction }],
+    });
     if (body) logger.info('WORKER', 'Weekly report synthesized from prompts (no obs/summaries)', { user, projects: digests.length });
     return body;
-  }
-
-  /** 调用 Qwen/DashScope chat/completions;失败/超时返回 null。 */
-  private async callQwen(apiKey: string, model: string, messages: Array<{ role: string; content: string }>): Promise<string | null> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-    try {
-      const resp = await fetch(DASHSCOPE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        // qwen3-max 输出上限为 65536(DashScope 限制 max_tokens ≤ 65536),取最大值放开。
-        body: JSON.stringify({ model, messages, stream: false, temperature: 0.4, max_tokens: 65536 }),
-        signal: controller.signal,
-      });
-      if (!resp.ok) { logger.warn('WORKER', 'DashScope non-2xx', { status: resp.status }); return null; }
-      const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
-      const content = data.choices?.[0]?.message?.content?.trim();
-      return content && content.length > 0 ? content : null;
-    } catch (err) {
-      logger.warn('WORKER', 'DashScope call failed', { error: err instanceof Error ? err.message : String(err) });
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
   }
 }

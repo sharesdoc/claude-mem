@@ -1,21 +1,18 @@
 import { Database } from 'bun:sqlite';
 import { logger } from '../../../utils/logger.js';
-import { SettingsDefaultsManager } from '../../../shared/SettingsDefaultsManager.js';
-import { USER_SETTINGS_PATH } from '../../../shared/paths.js';
+import { resolveReportProviderConfig, callReportProvider, type ReportProviderConfig } from './report-provider.js';
 
 /**
  * DailyReportGenerator — 用户工作日报生成器(日报)。
  *
  * 与周报(ReportGenerator)同源、但**刻意做简**:只取某一天 user×project 的
- * 工时与工作内容,用 Qwen(阿里云 DashScope,OpenAI 兼容接口)提炼出一份
- * **简短**的中文日报(今日工作概述 → 今日重点工作),要点罗列、说明从简。
- * Qwen 凭证读 env CLAUDE_MEM_REPORT_QWEN_API_KEY,settings.json 兜底;未配置或失败则退回
- * 确定性简版(只汇总、不臆造)。只读源表,不改采集链路。
+ * 工时与工作内容,用报表 AI provider(CLAUDE_MEM_REPORT_PROVIDER 指定厂商,
+ * 复用厂商组 key/model)提炼出一份**简短**的中文日报(今日工作概述 → 今日
+ * 重点工作),要点罗列、说明从简。未配置或失败则退回确定性简版(只汇总、
+ * 不臆造)。只读源表,不改采集链路。
  */
 
 const DAY_MS = 86400000;
-const DASHSCOPE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
-const AI_TIMEOUT_MS = 90000;
 // 日报送入 AI 的项目数上限(单日通常项目不多,留足余量)。
 const MAX_PROJECTS_IN_PROMPT = 10;
 // AI 工作时间不足该阈值的项目(连同其任务)在日报里直接忽略,滤掉琐碎噪音。
@@ -116,7 +113,7 @@ export function upsertDailyReport(db: Database, report: GeneratedDailyReport): v
 export class DailyReportGenerator {
   constructor(private db: Database) {}
 
-  async generate(userLabel: string, reportDate: string, tzOffsetMs: number, model: string): Promise<GeneratedDailyReport> {
+  async generate(userLabel: string, reportDate: string, tzOffsetMs: number): Promise<GeneratedDailyReport> {
     const [y, m, d] = reportDate.split('-').map(Number);
     const wallStart = Date.UTC(y, m - 1, d);
     const start = wallStart - tzOffsetMs; // 真实 epoch 区间 [start, end)
@@ -178,12 +175,14 @@ export class DailyReportGenerator {
 
     // 正文:① 有内容 → AI 提炼简短日报;② 无 summaries/observations 但
     // 有 prompt → 降级用 prompt 原文归纳;③ 仍失败 → 确定性简版。
-    let aiBody = await this.synthesize(user, reportDate, stats, digests, model, excludedMs, excludedPct);
+    const config = resolveReportProviderConfig();
+    const model = config?.model ?? '';
+    let aiBody = await this.synthesize(user, reportDate, stats, digests, config, excludedMs, excludedPct);
     if (aiBody === null && stats.prompts > 0 && stats.obs === 0 && stats.summaries === 0) {
       const timeOf = new Map(projAgg.map(p => [p.project, p.total_ms]));
       const promptDigests = this.digestPromptsByProject(start, end, user, timeOf);
       if (promptDigests.length > 0) {
-        aiBody = await this.synthesizeFromPrompts(user, reportDate, stats, promptDigests, model, excludedMs, excludedPct);
+        aiBody = await this.synthesizeFromPrompts(user, reportDate, stats, promptDigests, config, excludedMs, excludedPct);
       }
     }
     const body = aiBody ?? this.fallbackBody(stats, digests, excludedMs, excludedPct);
@@ -263,24 +262,11 @@ export class DailyReportGenerator {
   }
 
   /**
-   * DashScope Key 解析:env `CLAUDE_MEM_REPORT_QWEN_API_KEY` 优先;缺失则回退 settings.json。
-   * 两者皆空 → 返回 ''(AI 段禁用)。
+   * 用报表 AI provider 把当日数据提炼成**简短**的日报正文(两章:概述 + 重点工作)。
+   * 缺 provider 配置 / 无内容 / 失败超时 → 返回 null(降级)。
    */
-  private resolveApiKey(): string {
-    const envKey = (process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim();
-    if (envKey) return envKey;
-    try {
-      return (SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_REPORT_QWEN_API_KEY ?? '').trim();
-    } catch { return ''; }
-  }
-
-  /**
-   * 用 Qwen 把当日数据提炼成**简短**的日报正文(两章:概述 + 重点工作)。
-   * 缺 Key / 无内容 / 失败超时 → 返回 null(降级)。
-   */
-  private async synthesize(user: string, reportDate: string, stats: DailyReportStats, digests: ProjectDigest[], model: string, excludedMs: number, excludedPct: number): Promise<string | null> {
-    const apiKey = this.resolveApiKey();
-    if (!apiKey) return null;
+  private async synthesize(user: string, reportDate: string, stats: DailyReportStats, digests: ProjectDigest[], config: ReportProviderConfig | null, excludedMs: number, excludedPct: number): Promise<string | null> {
+    if (!config) return null;
     if (digests.length === 0) return null;
     if (stats.obs === 0 && stats.summaries === 0) return null;
 
@@ -315,10 +301,10 @@ export class DailyReportGenerator {
 
     const sys = '你是严谨的技术主管,只依据给定数据撰写**简短**的工作日报。全文简体中文,把英文工作记录转述为中文(仅保留专有名词/路径/代码/命令/commit);要点罗列、说明从简,绝不臆造。';
 
-    const body = await this.callQwen(apiKey, model, [
-      { role: 'system', content: sys },
-      { role: 'user', content: instruction },
-    ]);
+    const body = await callReportProvider(config, {
+      system: sys,
+      messages: [{ role: 'user', content: instruction }],
+    });
     if (body) logger.info('WORKER', 'Daily report synthesized', { user, date: reportDate, projects: digests.length });
     return body;
   }
@@ -363,9 +349,8 @@ export class DailyReportGenerator {
    * 真实指令**客观归纳**工作任务清单。结构与 synthesize 一致(两章),但特别注明
    * "依据 AI 指令记录归纳,供参考"。
    */
-  private async synthesizeFromPrompts(user: string, reportDate: string, stats: DailyReportStats, digests: PromptDigest[], model: string, _excludedMs: number, _excludedPct: number): Promise<string | null> {
-    const apiKey = this.resolveApiKey();
-    if (!apiKey || digests.length === 0) return null;
+  private async synthesizeFromPrompts(user: string, reportDate: string, stats: DailyReportStats, digests: PromptDigest[], config: ReportProviderConfig | null, _excludedMs: number, _excludedPct: number): Promise<string | null> {
+    if (!config || digests.length === 0) return null;
 
     const projectBlocks = digests.map(d => {
       const lines = [`【${d.project}】 耗时 ${fmtDuration(d.totalMs)};今日指令 ${d.prompts.length} 条:`];
@@ -392,34 +377,11 @@ export class DailyReportGenerator {
 
     const sys = '你是严谨的技术主管。你只能依据用户的 AI 指令(prompt)记录客观归纳工作内容,用简体中文,精炼、重点突出,绝不臆造指令中未出现的成果。';
 
-    const body = await this.callQwen(apiKey, model, [
-      { role: 'system', content: sys },
-      { role: 'user', content: instruction },
-    ]);
+    const body = await callReportProvider(config, {
+      system: sys,
+      messages: [{ role: 'user', content: instruction }],
+    });
     if (body) logger.info('WORKER', 'Daily report synthesized from prompts (no obs/summaries)', { user, date: reportDate, projects: digests.length });
     return body;
-  }
-
-  /** 调用 Qwen/DashScope chat/completions;失败/超时返回 null。 */
-  private async callQwen(apiKey: string, model: string, messages: Array<{ role: string; content: string }>): Promise<string | null> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-    try {
-      const resp = await fetch(DASHSCOPE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ model, messages, stream: false, temperature: 0.4, max_tokens: 8192 }),
-        signal: controller.signal,
-      });
-      if (!resp.ok) { logger.warn('WORKER', 'DashScope non-2xx (daily)', { status: resp.status }); return null; }
-      const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
-      const content = data.choices?.[0]?.message?.content?.trim();
-      return content && content.length > 0 ? content : null;
-    } catch (err) {
-      logger.warn('WORKER', 'DashScope call failed (daily)', { error: err instanceof Error ? err.message : String(err) });
-      return null;
-    } finally {
-      clearTimeout(timer);
-    }
   }
 }

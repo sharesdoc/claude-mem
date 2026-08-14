@@ -386,10 +386,15 @@ export function resolveDeepSeekApiKey(settings: SettingsDefaults): string {
     || '';
 }
 
-/** DeepSeek 端点解析 (X-016)：CLAUDE_MEM_DEEPSEEK_URL 非空原样采用（调用方
- *  自担责保证 OpenAI 兼容），空回落官方 completions 端点。 */
+/** DeepSeek 端点解析 (X-016/X-019)：CLAUDE_MEM_DEEPSEEK_URL 支持两种形态——
+ *  完整 completions 路径原样采用；base URL（官方默认值 https://api.deepseek.com
+ *  即此形态）自动补全 /chat/completions。空回落官方 completions 端点。
+ *  调用方自担责保证端点 OpenAI 兼容。 */
 export function resolveDeepSeekEndpoint(settings: SettingsDefaults): string {
-  return (settings.CLAUDE_MEM_DEEPSEEK_URL ?? '').trim() || DEEPSEEK_COMPLETIONS_URL;
+  const configured = (settings.CLAUDE_MEM_DEEPSEEK_URL ?? '').trim();
+  if (!configured) return DEEPSEEK_COMPLETIONS_URL;
+  if (/\/chat\/completions$/.test(configured)) return configured;
+  return `${configured.replace(/\/+$/, '')}/chat/completions`;
 }
 
 /** DeepSeek 模型解析 (X-016)：任意模型名直接采用，空回落 DEFAULT_MODEL。 */

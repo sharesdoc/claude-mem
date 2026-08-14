@@ -387,10 +387,15 @@ export function resolveQwenApiKey(settings: SettingsDefaults): string {
     || '';
 }
 
-/** Qwen 端点解析 (X-015)：CLAUDE_MEM_QWEN_URL 非空采用（调用方自担责保证
- *  OpenAI 兼容），空回落 DASHSCOPE 兼容端点。 */
+/** Qwen 端点解析 (X-015/X-019)：CLAUDE_MEM_QWEN_URL 支持两种形态——
+ *  完整 completions 路径原样采用；base URL（如 .../compatible-mode/v1）
+ *  自动补全 /chat/completions。空回落 DASHSCOPE 兼容端点。
+ *  调用方自担责保证端点 OpenAI 兼容。 */
 export function resolveQwenEndpoint(settings: SettingsDefaults): string {
-  return (settings.CLAUDE_MEM_QWEN_URL ?? '').trim() || DASHSCOPE_URL;
+  const configured = (settings.CLAUDE_MEM_QWEN_URL ?? '').trim();
+  if (!configured) return DASHSCOPE_URL;
+  if (/\/chat\/completions$/.test(configured)) return configured;
+  return `${configured.replace(/\/+$/, '')}/chat/completions`;
 }
 
 /** Qwen 模型解析 (X-015)：任意模型名直接采用（自定义端点下模型名由端点定义），

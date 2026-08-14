@@ -4,8 +4,6 @@ import { logger } from '../../../../utils/logger.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { DatabaseManager } from '../../DatabaseManager.js';
 import { AdminSessionStore, extractBearerToken } from '../AdminSessionStore.js';
-import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
-import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { DailyReportGenerator, upsertDailyReport, dayOf } from '../../reports/DailyReportGenerator.js';
 import { mdToHtml } from '../../reports/mdToHtml.js';
 import { loopbackBypassAllowed } from '../middleware/tokenAuth.js';
@@ -77,12 +75,6 @@ export class DailyReportRoutes extends BaseRouteHandler {
     const tz = req.query.tz;
     const n = tz != null && tz !== '' && !Number.isNaN(Number(tz)) ? Number(tz) : -new Date().getTimezoneOffset();
     return n * 60000;
-  }
-
-  private model(): string {
-    try {
-      return SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_WEEKLY_REPORT_MODEL || 'qwen-plus';
-    } catch { return 'qwen-plus'; }
   }
 
   private getReport(user: string, date: string): DailyRow | undefined {
@@ -160,7 +152,7 @@ export class DailyReportRoutes extends BaseRouteHandler {
       if (existing && isPeriodComplete(existing.generated_at_epoch, dayEndEpoch(date, tzOffsetMs))) return 'skipped';
     }
     const report = await new DailyReportGenerator(this.dbManager.getConnection())
-      .generate(user, date, tzOffsetMs, this.model());
+      .generate(user, date, tzOffsetMs);
     upsertDailyReport(this.dbManager.getConnection(), report);
     return 'generated';
   }

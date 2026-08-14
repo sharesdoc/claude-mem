@@ -4,8 +4,6 @@ import { logger } from '../../../../utils/logger.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { DatabaseManager } from '../../DatabaseManager.js';
 import { AdminSessionStore, extractBearerToken } from '../AdminSessionStore.js';
-import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
-import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 import { ReportGenerator, upsertWeeklyReport, weekMondayOf } from '../../reports/ReportGenerator.js';
 import { mdToHtml } from '../../reports/mdToHtml.js';
 import { loopbackBypassAllowed } from '../middleware/tokenAuth.js';
@@ -81,12 +79,6 @@ export class ReportRoutes extends BaseRouteHandler {
     const tz = req.query.tz;
     const n = tz != null && tz !== '' && !Number.isNaN(Number(tz)) ? Number(tz) : -new Date().getTimezoneOffset();
     return n * 60000;
-  }
-
-  private model(): string {
-    try {
-      return SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH).CLAUDE_MEM_WEEKLY_REPORT_MODEL || 'qwen-plus';
-    } catch { return 'qwen-plus'; }
   }
 
   private getReport(user: string, week: string): ReportRow | undefined {
@@ -194,7 +186,7 @@ export class ReportRoutes extends BaseRouteHandler {
       if (existing && isPeriodComplete(existing.generated_at_epoch, weekEndEpoch(week, tzOffsetMs))) return 'skipped';
     }
     const report = await new ReportGenerator(this.dbManager.getConnection())
-      .generate(user, week, tzOffsetMs, this.model());
+      .generate(user, week, tzOffsetMs);
     upsertWeeklyReport(this.dbManager.getConnection(), report);
     return 'generated';
   }

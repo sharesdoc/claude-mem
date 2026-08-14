@@ -49,7 +49,7 @@ export class ReportScheduler {
 
       this.lastRunDate = today;
       this.running = true;
-      await this.runForAllActiveUsers(s.CLAUDE_MEM_WEEKLY_REPORT_MODEL || 'qwen-plus');
+      await this.runForAllActiveUsers();
     } catch (error) {
       logger.error('WORKER', 'ReportScheduler tick failed', {}, error as Error);
     } finally {
@@ -57,8 +57,9 @@ export class ReportScheduler {
     }
   }
 
-  /** 立即为本周所有活跃用户生成周报(供定时触发与手动测试)。 */
-  async runForAllActiveUsers(model: string): Promise<void> {
+  /** 立即为本周所有活跃用户生成周报(供定时触发与手动测试)。
+   *  报表 AI provider 由 CLAUDE_MEM_REPORT_PROVIDER 决定, 生成器内部自解析。 */
+  async runForAllActiveUsers(): Promise<void> {
     const db: Database = this.dbManager.getConnection();
     const tzOffsetMs = -new Date().getTimezoneOffset() * 60000;
     const week = weekMondayOf(Date.now(), tzOffsetMs);
@@ -81,7 +82,7 @@ export class ReportScheduler {
     let ok = 0;
     for (const { u } of users) {
       try {
-        const report = await generator.generate(u, week, tzOffsetMs, model);
+        const report = await generator.generate(u, week, tzOffsetMs);
         upsertWeeklyReport(db, report);
         ok++;
       } catch (error) {
