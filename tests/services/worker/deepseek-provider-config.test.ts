@@ -83,6 +83,25 @@ describe('DeepSeekProvider config resolvers (X-016)', () => {
       settings.CLAUDE_MEM_DEEPSEEK_URL = 'https://deepseek.local/v1/chat/completions';
       expect(resolveDeepSeekEndpoint(settings)).toBe('https://deepseek.local/v1/chat/completions');
     });
+
+    // X-030: 端点解析边界——base 补全 / 尾斜杠归一 / 完整路径不重复补全。
+    it('should append /chat/completions to a base URL', () => {
+      const settings = {} as unknown as SettingsDefaults;
+      settings.CLAUDE_MEM_DEEPSEEK_URL = 'https://deepseek.local/v1';
+      expect(resolveDeepSeekEndpoint(settings)).toBe('https://deepseek.local/v1/chat/completions');
+    });
+
+    it('should strip trailing slashes from a base URL before appending', () => {
+      const settings = {} as unknown as SettingsDefaults;
+      settings.CLAUDE_MEM_DEEPSEEK_URL = 'https://deepseek.local/v1/';
+      expect(resolveDeepSeekEndpoint(settings)).toBe('https://deepseek.local/v1/chat/completions');
+    });
+
+    it('should NOT double-append when the full path already has a trailing slash', () => {
+      const settings = {} as unknown as SettingsDefaults;
+      settings.CLAUDE_MEM_DEEPSEEK_URL = 'https://deepseek.local/v1/chat/completions/';
+      expect(resolveDeepSeekEndpoint(settings)).toBe('https://deepseek.local/v1/chat/completions');
+    });
   });
 
   describe('resolveDeepSeekModel', () => {

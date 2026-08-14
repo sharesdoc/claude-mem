@@ -310,11 +310,10 @@ export class QwenProvider {
       endpoint
     });
 
+    // X-030: withRetry 每次尝试都传非空 attemptSignal 并自带 perAttemptTimeoutMs
+    // 超时; 原本地 AbortController + 90s 定时器因 `attemptSignal ?? controller.signal`
+    // 恒取前者而成为死代码(实际超时是 withRetry 默认 30s), 与 AI_TIMEOUT_MS 意图不符。
     const data = await withRetry<QwenResponse>(async (attemptSignal) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-      const signal = attemptSignal ?? controller.signal;
-
       let response: Response;
       try {
         response = await fetch(endpoint, {
@@ -329,13 +328,11 @@ export class QwenProvider {
             temperature: 0.3,
             max_tokens: 4096,
           } satisfies QwenRequest),
-          signal,
+          signal: attemptSignal,
         });
       } catch (networkError: unknown) {
-        clearTimeout(timer);
         throw classifyQwenError({ cause: networkError });
       }
-      clearTimeout(timer);
 
       if (!response.ok) {
         const errorBody = await response.text();
@@ -343,7 +340,7 @@ export class QwenProvider {
       }
 
       return await response.json() as QwenResponse;
-    }, { label: `Qwen ${model}` });
+    }, { label: `Qwen ${model}`, perAttemptTimeoutMs: AI_TIMEOUT_MS });
 
     const content = data.choices?.[0]?.message?.content?.trim();
     if (!content) {
@@ -394,8 +391,10 @@ export function resolveQwenApiKey(settings: SettingsDefaults): string {
 export function resolveQwenEndpoint(settings: SettingsDefaults): string {
   const configured = (settings.CLAUDE_MEM_QWEN_URL ?? '').trim();
   if (!configured) return DASHSCOPE_URL;
-  if (/\/chat\/completions$/.test(configured)) return configured;
-  return `${configured.replace(/\/+$/, '')}/chat/completions`;
+  // X-030: 先归一化尾斜杠再判断, 避免 ".../chat/completions/" 被重复补全。
+  const normalized = configured.replace(/\/+$/, '');
+  if (/\/chat\/completions$/.test(normalized)) return normalized;
+  return `${normalized}/chat/completions`;
 }
 
 /** Qwen 模型解析 (X-015)：任意模型名直接采用（自定义端点下模型名由端点定义），

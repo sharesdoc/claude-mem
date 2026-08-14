@@ -544,5 +544,5 @@ export function isGeminiAvailable(): boolean {
 export function isGeminiSelected(): boolean {
   const settingsPath = paths.settings();
   const settings = SettingsDefaultsManager.loadFromFile(settingsPath);
-  return settings.CLAUDE_MEM_PROVIDER === 'gemini';
+  return (settings.CLAUDE_MEM_PROVIDER ?? '').trim().toLowerCase() === 'gemini';
 }

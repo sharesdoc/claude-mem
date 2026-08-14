@@ -105,6 +105,25 @@ describe('QwenProvider config resolvers (X-015)', () => {
         'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions',
       );
     });
+
+    // X-030: 端点解析边界——base 补全 / 尾斜杠归一 / 完整路径不重复补全。
+    it('should append /chat/completions to a base URL', () => {
+      const settings = {} as unknown as SettingsDefaults;
+      settings.CLAUDE_MEM_QWEN_URL = 'https://qwen.local/compatible-mode/v1';
+      expect(resolveQwenEndpoint(settings)).toBe('https://qwen.local/compatible-mode/v1/chat/completions');
+    });
+
+    it('should strip trailing slashes from a base URL before appending', () => {
+      const settings = {} as unknown as SettingsDefaults;
+      settings.CLAUDE_MEM_QWEN_URL = 'https://qwen.local/compatible-mode/v1/';
+      expect(resolveQwenEndpoint(settings)).toBe('https://qwen.local/compatible-mode/v1/chat/completions');
+    });
+
+    it('should NOT double-append when the full path already has a trailing slash', () => {
+      const settings = {} as unknown as SettingsDefaults;
+      settings.CLAUDE_MEM_QWEN_URL = 'https://qwen.local/v1/chat/completions/';
+      expect(resolveQwenEndpoint(settings)).toBe('https://qwen.local/v1/chat/completions');
+    });
   });
 
   describe('resolveQwenModel', () => {

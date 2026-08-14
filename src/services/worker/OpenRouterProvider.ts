@@ -545,5 +545,5 @@ export function isOpenRouterAvailable(): boolean {
 export function isOpenRouterSelected(): boolean {
   const settingsPath = USER_SETTINGS_PATH;
   const settings = SettingsDefaultsManager.loadFromFile(settingsPath);
-  return settings.CLAUDE_MEM_PROVIDER === 'openrouter';
+  return (settings.CLAUDE_MEM_PROVIDER ?? '').trim().toLowerCase() === 'openrouter';
 }

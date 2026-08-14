@@ -309,11 +309,10 @@ export class DeepSeekProvider {
       endpoint
     });
 
+    // X-030: withRetry 每次尝试都传非空 attemptSignal 并自带 perAttemptTimeoutMs
+    // 超时; 原本地 AbortController + 90s 定时器因 `attemptSignal ?? controller.signal`
+    // 恒取前者而成为死代码(实际超时是 withRetry 默认 30s), 与 AI_TIMEOUT_MS 意图不符。
     const data = await withRetry<DeepSeekResponse>(async (attemptSignal) => {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
-      const signal = attemptSignal ?? controller.signal;
-
       let response: Response;
       try {
         response = await fetch(endpoint, {
@@ -328,13 +327,11 @@ export class DeepSeekProvider {
             temperature: 0.3,
             max_tokens: 4096,
           } satisfies DeepSeekRequest),
-          signal,
+          signal: attemptSignal,
         });
       } catch (networkError: unknown) {
-        clearTimeout(timer);
         throw classifyDeepSeekError({ cause: networkError });
       }
-      clearTimeout(timer);
 
       if (!response.ok) {
         const errorBody = await response.text();
@@ -342,7 +339,7 @@ export class DeepSeekProvider {
       }
 
       return await response.json() as DeepSeekResponse;
-    }, { label: `DeepSeek ${model}` });
+    }, { label: `DeepSeek ${model}`, perAttemptTimeoutMs: AI_TIMEOUT_MS });
 
     const content = data.choices?.[0]?.message?.content?.trim();
     if (!content) {
@@ -393,8 +390,10 @@ export function resolveDeepSeekApiKey(settings: SettingsDefaults): string {
 export function resolveDeepSeekEndpoint(settings: SettingsDefaults): string {
   const configured = (settings.CLAUDE_MEM_DEEPSEEK_URL ?? '').trim();
   if (!configured) return DEEPSEEK_COMPLETIONS_URL;
-  if (/\/chat\/completions$/.test(configured)) return configured;
-  return `${configured.replace(/\/+$/, '')}/chat/completions`;
+  // X-030: 先归一化尾斜杠再判断, 避免 ".../chat/completions/" 被重复补全。
+  const normalized = configured.replace(/\/+$/, '');
+  if (/\/chat\/completions$/.test(normalized)) return normalized;
+  return `${normalized}/chat/completions`;
 }
 
 /** DeepSeek 模型解析 (X-016)：任意模型名直接采用，空回落 DEFAULT_MODEL。 */
