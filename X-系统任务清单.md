@@ -1,3 +1,22 @@
+### X-039 同步令牌鉴权文档与测试覆盖评估（review-report N-02/N-03/N-04）
+
+处置 review-report-20260815022400.md 剩余 3 项：N-04 部署顺序约束文档化（configuration.mdx 新增「Sync Token Authentication」章节 + CLAUDE.md 一句）；N-02（SyncAgent 端到端版本头发射测试）经评估由 buildSyncAuthHeaders 纯函数 4 用例等效覆盖（端到端需双机环境，留档不补）；N-03（tokenAuth 中间件级 HTTP 集成测试）受 bun 全量跑 DATA_DIR 冻结限制会 flaky，由 token-auth-version 纯函数 9 用例 + admin-role 既有 HTTP 级路由测试等效覆盖，留档不补。
+
+- 编号：X-039
+- 任务类型：其他（文档）
+- 严重程度：P3
+- 状态：已完成-待验证
+- 来源：review-report-20260815022400.md §6/§9（2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：见上。
+- 验收标准：(1) 文档含双键角色说明、版本头协议、三步升级顺序、≥128bit 熵约束；(2) N-02/N-03 评估结论记录在案。
+- 涉及文件与行号：`docs/public/configuration.mdx`（新增章节）、`CLAUDE.md`（配置段一句）。
+- 关联需求：N/A
+- 实际修改位置：同上。
+- 阶段验证结果：文档 grep 无语法风险（纯表格 + Note 组件）；docs 站点构建由 CI 执行。
+- 测试方法：(1) 目检文档；(2) 既有测试套件无涉及。
+- 代码修复提交：`d947cdea`
+
 ### X-038 鉴权取值源统一与死参数清理（review-report-20260815022400 N-01）
 
 现状调查（rev 报告 N-01 展开）：除已知的 tokenAuth.serverToken 与两路由 serverAccessToken 死参数外，发现**更深一层缺陷**——`serverApiGate.ts:55` 从未纳入 X-036 双轨：它用自有的 `tokenMatches` 明文长度敏感比对，且只接收 worker-service:289 传入的 `CLAUDE_MEM_SERVER_ACCESS_TOKEN` 明文。收敛态（服务端只留 `CLAUDE_MEM_SYNC_SHASUM_VALUE`）下，server 模式默认拒绝门会把**所有** v2 请求（含 /api/sync/ingest）在到达 tokenAuth 之前拦下——X-036 的收敛路径实际不可达。修复：serverApiGate 统一改用 `loadAccessAuth()` 构造期缓存 + `verifyAccessTokenAgainst`（自动获得明文/哈希双轨），顺带清除 5 处死参数（tokenAuth/DataRoutes/SyncRoutes/两报表路由/worker-service 传参）。
