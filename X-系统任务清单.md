@@ -1,3 +1,23 @@
+### X-021 移除废弃配置键与遗留迁移逻辑（大模型配置统一化 T-01 删键阶段）
+
+现状调查：4 个废弃键中 CLAUDE_MEM_SERVER_PROVIDER/_MODEL 本就只存在于 env 层（不在 SettingsDefaults 接口），已随 X-020 消费清零、无需删定义；需删的是 CLAUDE_MEM_WEEKLY_REPORT_MODEL、CLAUDE_MEM_REPORT_QWEN_API_KEY 两键 + 两处遗留兼容逻辑：SettingsDefaultsManager.loadFromFile 的 X-008 DASHSCOPE_API_KEY 迁移块（:313-336）、EnvManager 的 DASHSCOPE_API_KEY 映射与 REPORT_QWEN 键解析/写回（:45,109-115,181-187）。设计明确不做旧版兼容。install.ts 的 REPORT_QWEN_API_KEY 引用（:964-975）属 X-022 范围，本任务完成后剩余消费点唯一。
+
+- 编号：X-021
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-01 删键阶段（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-01（独立 fix，无 A-F/M 体系）
+- 任务描述：SettingsDefaultsManager 接口与 DEFAULTS 删除 WEEKLY_REPORT_MODEL/REPORT_QWEN_API_KEY，删除 loadFromFile 内 X-008 迁移块；EnvManager.ClaudeMemEnv 删除 CLAUDE_MEM_REPORT_QWEN_API_KEY（类型/解析/DASHSCOPE 映射/写回块），写回块改 CLAUDE_MEM_QWEN_API_KEY；更新依赖旧键语义的测试（settings-defaults-manager X-008 迁移组删除、qwen-key-compat 遗留映射用例删除，保留 isQwenAvailable 新键回脱用例）；llm-provider-settings.test.ts 加废弃键不存在断言（RED→GREEN）。
+- 验收标准：(1) getAllDefaults() 不含两个废弃键；(2) 全 src grep 旧键零残留；(3) 旧 X-008 迁移测试与遗留映射测试移除后相关测试全绿；(4) typecheck 通过且无新增测试失败。
+- 涉及文件与行号：`src/shared/SettingsDefaultsManager.ts:112-121,224-227,309-336`、`src/shared/EnvManager.ts:39-46,103-115,176-187`、`src/npx-cli/commands/install.ts:963-996`、`tests/shared/settings-defaults-manager.test.ts:226-270`、`tests/shared/qwen-key-compat.test.ts:36-60`、`tests/shared/llm-provider-settings.test.ts`。
+- 关联需求：`doc/B-系统设计文档.md` 环境变量清单（需 ree 刷新）
+- 实际修改位置：`SettingsDefaultsManager.ts`（接口/DEFAULTS 删两键、loadFromFile 删 X-008 迁移块）、`EnvManager.ts`（ClaudeMemEnv 删 REPORT_QWEN 键；解析删 REPORT_QWEN+DASHSCOPE 映射；写回块改 CLAUDE_MEM_QWEN_API_KEY）、`install.ts:963-996`（promptDashscopeKey 改用新键 CLAUDE_MEM_QWEN_API_KEY——getSetting 参数带类型约束，删键后必须同步改否则 typecheck 失败，属删旧键的必然连带；深seek 交互扩展仍归 X-022）、`tests/shared/llm-provider-settings.test.ts`（废弃键不存在断言）、`tests/shared/settings-defaults-manager.test.ts`（X-008 迁移组 4 用例删除）、`tests/shared/qwen-key-compat.test.ts`（遗留映射用例替换为新键解析用例，保留 isQwenAvailable 回脱）。
+- 阶段验证结果：RED——新断言 1 fail（废弃键仍存在）；GREEN——全绿；`npm run typecheck` 0 错误（修 install.ts 连带类型错误后）；`bun test tests/shared/` 184 pass/1 fail，唯一失败为预存问题（settings-defaults-manager.test.ts:288 断言默认模型 claude-sonnet-4-6，9e297305 引入）；全 src grep 四个旧键零残留（仅 SettingsDefaultsManager 内一行说明性注释提及历史键名）。
+- 涉及文档刷新：需 ree 刷新 `doc/B-系统设计文档.md` 环境变量清单；本次按 fix 规则只在 X 标注。
+- 测试方法：(1) `bun test tests/shared/llm-provider-settings.test.ts tests/shared/qwen-key-compat.test.ts` 全绿；(2) `bun test tests/shared/` 无新增失败；(3) `npm run typecheck` 通过；(4) grep 旧键零残留。
+- 代码修复提交：`77e169cf`
+
 ### X-020 server-beta 生成 provider 合并到 CLAUDE_MEM_PROVIDER（大模型配置统一化 T-06）
 
 现状调查：server-beta 的 `buildServerGenerationProviderFromEnv()`（create-server-beta-service.ts:232-261）读独立配置 CLAUDE_MEM_SERVER_PROVIDER/_MODEL，仅支持 claude/gemini/openrouter 三厂商；claude 分支仅认 ANTHROPIC_API_KEY（无 OAuth，符合"服务器不碰个人登录态"边界）。合并方案（设计定稿第 5 条）：改读 CLAUDE_MEM_PROVIDER（未配置默认 claude）+ 厂商配置组；新增 qwen/deepseek 分支（OpenAI 兼容，复用 OpenRouterObservationProvider 泛化出 baseUrl/providerLabel 构造参数）；claude 分支保持仅认 key，缺 key → null + WARN（生成禁用）。SERVER_PROVIDER/SERVER_MODEL 消费清零后由 X-021 从 SettingsDefaultsManager 删除。经典 worker 的 claude OAuth 认证链不引入 server-beta。
