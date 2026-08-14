@@ -1,3 +1,23 @@
+### X-016 新增 DeepSeekProvider（大模型配置统一化 T-03）
+
+现状调查：DeepSeek API 为原生 OpenAI 兼容协议（base_url https://api.deepseek.com），与 OpenRouterProvider/QwenProvider 同构；无 site-url 类头部要求。参照 QwenProvider 结构新建独立 provider 类，配置组 CLAUDE_MEM_DEEPSEEK_API_KEY/_MODEL/_URL 已在 X-014 落键。本任务仅新增 provider 与配置解析，SessionRoutes 接线在 X-017 统一处理。
+
+- 编号：X-016
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-03（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-03（独立 fix，无 A-F/M 体系）
+- 任务描述：新增 DeepSeekProvider，OpenAI 兼容 chat/completions；凭证 CLAUDE_MEM_DEEPSEEK_API_KEY（env > settings > ~/.claude-mem/.env）；模型 CLAUDE_MEM_DEEPSEEK_MODEL（空=回落 deepseek-v4-flash，deepseek-chat 别名 2026-07-24 已停用）；端点 CLAUDE_MEM_DEEPSEEK_URL（空=回落 https://api.deepseek.com）。暴露 isDeepSeekSelected/isDeepSeekAvailable 与 classifyDeepSeekError，模式与 Gemini/OpenRouter/Qwen 一致。EnvManager.ClaudeMemEnv 同步支持 DEEPSEEK key 解析。
+- 验收标准：(1) 导出 resolveDeepSeekApiKey/resolveDeepSeekEndpoint/resolveDeepSeekModel 且默认值语义正确；(2) classifyDeepSeekError 覆盖 401/403/429/400/5xx/网络错误六类；(3) isDeepSeekAvailable 认 CLAUDE_MEM_DEEPSEEK_API_KEY，isDeepSeekSelected 认 CLAUDE_MEM_PROVIDER=deepseek；(4) EnvManager 解析 .env 中的新键；(5) typecheck 通过且无新增测试失败。
+- 涉及文件与行号：`src/services/worker/OpenRouterProvider.ts:20,524-549`（模板参照）、`src/services/worker/QwenProvider.ts`（结构参照）、`src/shared/EnvManager.ts:39-46,112`（新增键解析）。
+- 关联需求：`doc/B-系统设计文档.md` 环境变量/凭证链章节（需 ree 刷新）
+- 实际修改位置：`src/services/worker/DeepSeekProvider.ts`（新增，结构与 QwenProvider 一致：startSession/processMessageLoop/processObservation/SummaryMessage/queryDeepSeek/配置解析/错误分类；导出 resolveDeepSeekApiKey/Endpoint/Model、classifyDeepSeekError、isDeepSeekAvailable/isDeepSeekSelected）、`src/shared/EnvManager.ts:45,113`（ClaudeMemEnv 新增 CLAUDE_MEM_DEEPSEEK_API_KEY 并解析）、`tests/services/worker/deepseek-provider-config.test.ts`（新增 14 用例）。
+- 阶段验证结果：RED——新测试 0 pass/1 fail（模块不存在）；GREEN——14 pass/0 fail；`npm run typecheck` 通过。DeepSeekProvider 尚未接入 SessionRoutes（X-017 统一接线），本提交不改变运行时行为。
+- 涉及文档刷新：需 ree 刷新 `doc/B-系统设计文档.md` 环境变量/凭证链章节；本次按 fix 规则只在 X 标注。
+- 测试方法：(1) `bun test tests/services/worker/deepseek-provider-config.test.ts` 全绿；(2) `npm run typecheck` 通过。
+- 代码修复提交：`197d3939`
+
 ### X-015 QwenProvider 切换新配置组与可配置端点（大模型配置统一化 T-02）
 
 现状调查结论与 TODO 原估的"协议重写"不同：现 QwenProvider（`src/services/worker/QwenProvider.ts:19`）已使用 OpenAI 兼容端点 `https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions` 与 OpenAI 结构解析（`choices[0].message.content`），无需协议层重写。本任务收敛为三点：凭证换新键 `CLAUDE_MEM_QWEN_API_KEY`、端点改由 `CLAUDE_MEM_QWEN_URL` 配置（空=回落默认端点）、模型白名单放开（自定义 OpenAI 兼容端点下模型名任意，配置值直接采用）。旧键 `CLAUDE_MEM_REPORT_QWEN_API_KEY` 保留至 X-021（EnvManager 类型与解析仍引用，保证每步编译绿），其 X-008 遗留 DASHSCOPE_API_KEY 映射同样暂留。
