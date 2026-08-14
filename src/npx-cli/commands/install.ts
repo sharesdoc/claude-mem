@@ -639,7 +639,7 @@ function mergeSettings(updates: Record<string, string>): boolean {
   }
 }
 
-type ProviderId = 'claude' | 'gemini' | 'openrouter';
+type ProviderId = 'claude' | 'gemini' | 'openrouter' | 'qwen' | 'deepseek';
 type ClaudeAccessMode = 'subscription' | 'api-key';
 type ClaudeApiMode = 'direct' | 'gateway';
 type RuntimeId = 'worker' | 'server-beta';
@@ -910,6 +910,8 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
         { value: 'claude', label: 'Claude Agent SDK (recommended)' },
         { value: 'gemini', label: 'Gemini' },
         { value: 'openrouter', label: 'OpenRouter' },
+        { value: 'qwen', label: 'Qwen (DashScope, OpenAI-compatible)' },
+        { value: 'deepseek', label: 'DeepSeek (OpenAI-compatible)' },
       ],
       initialValue: initialProvider,
     });
@@ -925,12 +927,31 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
     return 'claude';
   }
 
-  const providerLabel = selectedProvider === 'gemini' ? 'Gemini' : 'OpenRouter';
-  const keyEnvName = selectedProvider === 'gemini'
-    ? 'CLAUDE_MEM_GEMINI_API_KEY'
-    : 'CLAUDE_MEM_OPENROUTER_API_KEY';
+  // X-022: 非 claude 厂商统一映射——key 必填, qwen/deepseek 另可配可选 URL。
+  const vendorMeta: Record<Exclude<ProviderId, 'claude'>, {
+    label: string;
+    keyName: keyof SettingsDefaults;
+    urlName?: keyof SettingsDefaults;
+    urlHint: string;
+  }> = {
+    gemini: { label: 'Gemini', keyName: 'CLAUDE_MEM_GEMINI_API_KEY', urlHint: '' },
+    openrouter: { label: 'OpenRouter', keyName: 'CLAUDE_MEM_OPENROUTER_API_KEY', urlHint: '' },
+    qwen: {
+      label: 'Qwen (DashScope)',
+      keyName: 'CLAUDE_MEM_QWEN_API_KEY',
+      urlName: 'CLAUDE_MEM_QWEN_URL',
+      urlHint: 'blank = DashScope compatible-mode endpoint',
+    },
+    deepseek: {
+      label: 'DeepSeek',
+      keyName: 'CLAUDE_MEM_DEEPSEEK_API_KEY',
+      urlName: 'CLAUDE_MEM_DEEPSEEK_URL',
+      urlHint: 'blank = https://api.deepseek.com',
+    },
+  };
+  const meta = vendorMeta[selectedProvider];
 
-  const existingKey = getSetting(keyEnvName as keyof SettingsDefaults) as string | undefined;
+  const existingKey = getSetting(meta.keyName) as string | undefined;
   if (existingKey && existingKey.trim().length > 0) {
     const wrote = mergeSettings({ CLAUDE_MEM_PROVIDER: selectedProvider });
     if (wrote) log.info(`Saved provider=${selectedProvider} to ~/.claude-mem/settings.json`);
@@ -938,7 +959,7 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
   }
 
   const apiKeyResult = await p.password({
-    message: `Paste your ${providerLabel} API key:`,
+    message: `Paste your ${meta.label} API key:`,
     mask: '*',
     validate: (v?: string) => (!v || v.trim().length === 0) ? 'API key required' : undefined,
   });
@@ -950,9 +971,25 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
   }
 
   const apiKey = String(apiKeyResult).trim();
+
+  // OpenAI 兼容厂商的可选端点配置(空白 = 内置默认)。
+  let customUrl: string | undefined;
+  if (meta.urlName) {
+    const existingUrl = (getSetting(meta.urlName) as string | undefined) ?? '';
+    const urlResult = await p.text({
+      message: `${meta.label} OpenAI-compatible endpoint URL (${meta.urlHint}):`,
+      placeholder: existingUrl || 'blank = default',
+      initialValue: existingUrl,
+    });
+    if (!p.isCancel(urlResult)) {
+      customUrl = String(urlResult ?? '').trim();
+    }
+  }
+
   const wrote = mergeSettings({
     CLAUDE_MEM_PROVIDER: selectedProvider,
-    [keyEnvName]: apiKey,
+    [meta.keyName]: apiKey,
+    ...(customUrl !== undefined ? { [meta.urlName!]: customUrl } : {}),
   });
   if (wrote) {
     log.info(`Saved provider=${selectedProvider} to ~/.claude-mem/settings.json`);
@@ -961,38 +998,66 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
 }
 
 /**
- * Qwen(阿里云 DashScope)凭证配置。提示输入 CLAUDE_MEM_QWEN_API_KEY,默认值
- * 取当前有效值 getSetting('CLAUDE_MEM_QWEN_API_KEY')(env 优先、settings.json 兜底):
- * 回车即沿用、留空则跳过。写入 settings.json 后,即便 worker 由 GUI(不读 shell
- * rc,拿不到 env)启动也能用上 key。与记忆 provider 无关,故始终询问。
+ * X-022: 报表 AI provider(日报/周报)配置。询问 CLAUDE_MEM_REPORT_PROVIDER,
+ * 默认 off(空 = AI 段禁用);选厂商时若该厂商 key 缺失则提示补 key(复用厂商组,
+ * 与记忆 provider 共用)。非交互(CI/脚本)仅持久化已有配置,不询问。
  */
-async function promptDashscopeKey(): Promise<void> {
-  const current = String(getSetting('CLAUDE_MEM_QWEN_API_KEY') ?? '').trim();
+async function promptReportProvider(): Promise<void> {
+  const current = String(getSetting('CLAUDE_MEM_REPORT_PROVIDER') ?? '').trim();
 
   if (!isInteractive) {
-    // 非交互(CI/脚本):env 或现有配置里有就持久化到 settings.json,供 GUI 启动的 worker 使用。
     if (current) {
-      const wrote = mergeSettings({ CLAUDE_MEM_QWEN_API_KEY: current });
-      if (wrote) log.info('Saved CLAUDE_MEM_QWEN_API_KEY to ~/.claude-mem/settings.json (from env).');
+      const wrote = mergeSettings({ CLAUDE_MEM_REPORT_PROVIDER: current });
+      if (wrote) log.info('Saved CLAUDE_MEM_REPORT_PROVIDER to ~/.claude-mem/settings.json (from env).');
     }
     return;
   }
 
-  const result = await p.text({
-    message: 'DashScope (Qwen) API key — Enter to keep, blank to skip:',
-    placeholder: current ? '' : 'sk-... (optional)',
-    initialValue: current, // env / 现有值作默认,直接回车即沿用
+  const reportVendors: Array<{ value: ProviderId | ''; label: string; keyName?: keyof SettingsDefaults }> = [
+    { value: '', label: 'Off — data summary only (no AI section)' },
+    { value: 'claude', label: 'Claude (needs ANTHROPIC_API_KEY in ~/.claude-mem/.env)' },
+    { value: 'qwen', label: 'Qwen (DashScope)', keyName: 'CLAUDE_MEM_QWEN_API_KEY' },
+    { value: 'gemini', label: 'Gemini', keyName: 'CLAUDE_MEM_GEMINI_API_KEY' },
+    { value: 'openrouter', label: 'OpenRouter', keyName: 'CLAUDE_MEM_OPENROUTER_API_KEY' },
+    { value: 'deepseek', label: 'DeepSeek', keyName: 'CLAUDE_MEM_DEEPSEEK_API_KEY' },
+  ];
+
+  const result = await p.select<ProviderId | ''>({
+    message: 'Which provider should write the daily/weekly report AI section?',
+    options: reportVendors.map(v => ({ value: v.value, label: v.label })),
+    initialValue: (reportVendors.some(v => v.value === current) ? current : '') as ProviderId | '',
   });
 
-  if (p.isCancel(result)) return; // 取消不阻断安装;Qwen 可日后再配
+  if (p.isCancel(result)) return; // 取消不阻断安装;报表 AI 可日后再配
 
-  const key = String(result ?? '').trim();
-  if (!key) {
-    log.info('CLAUDE_MEM_QWEN_API_KEY left blank — Qwen stays off until configured.');
+  const selected = String(result ?? '').trim() as ProviderId | '';
+  if (!selected) {
+    const wrote = mergeSettings({ CLAUDE_MEM_REPORT_PROVIDER: '' });
+    if (wrote) log.info('Report AI section disabled (CLAUDE_MEM_REPORT_PROVIDER empty).');
     return;
   }
-  const wrote = mergeSettings({ CLAUDE_MEM_QWEN_API_KEY: key });
-  if (wrote) log.success('Saved CLAUDE_MEM_QWEN_API_KEY to ~/.claude-mem/settings.json.');
+
+  // 复用厂商组 key: 缺失则提示补录(claude 无 settings 键, 用 env 凭证库, 不做交互补录)。
+  const vendor = reportVendors.find(v => v.value === selected);
+  let keyPatch: Record<string, string> = {};
+  if (vendor?.keyName) {
+    const existing = String(getSetting(vendor.keyName) ?? '').trim();
+    if (!existing) {
+      const keyResult = await p.password({
+        message: `${vendor.label} API key (needed for report AI, reused from the provider group):`,
+        mask: '*',
+      });
+      if (!p.isCancel(keyResult) && String(keyResult ?? '').trim()) {
+        keyPatch = { [vendor.keyName]: String(keyResult).trim() };
+      } else {
+        log.warn(`No key provided — report AI stays off until ${vendor.keyName} is configured.`);
+        return;
+      }
+    }
+  }
+
+  const wrote = mergeSettings({ CLAUDE_MEM_REPORT_PROVIDER: selected, ...keyPatch });
+  if (wrote) log.success(`Saved CLAUDE_MEM_REPORT_PROVIDER=${selected} to ~/.claude-mem/settings.json.`);
 }
 
 async function promptClaudeModel(options: InstallOptions): Promise<void> {
@@ -1153,7 +1218,7 @@ export async function runInstallCommand(options: InstallOptions = {}): Promise<v
   if (selectedProvider === 'claude') {
     await promptClaudeModel(options);
   }
-  await promptDashscopeKey();
+  await promptReportProvider();
 
   let workerStartResult: WorkerStartResult = 'dead';
   // Claude Code consumes the marketplace plugin system directly, so any selection
