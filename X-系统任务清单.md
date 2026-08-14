@@ -1,3 +1,23 @@
+### X-028 server-beta 自定义端点 SSRF 告警（rev 委托）
+
+后台安全审查（X-020 提交 9ddb59d1）发现 SSRF/Credential-Exfiltration——server-beta 的 qwen/deepseek 分支复用可配置端点（CLAUDE_MEM_QWEN_URL/CLAUDE_MEM_DEEPSEEK_URL），与 X-027 已处置的报表路径同属一类设计取舍（可配置端点为本地 vLLM/Ollama 场景设计，无法地址白名单化）。处置与 X-027 一致：端点非内置默认值时 WARN（仅主机名，不含 key）；为让比较基准不散落，将 QwenProvider.DASHSCOPE_URL 与 DeepSeekProvider.DEEPSEEK_COMPLETIONS_URL 导出为契约常量并加测试锁定。
+
+- 编号：X-028
+- 任务类型：缺陷
+- 严重程度：P2
+- 状态：已完成-待验证
+- 来源：rev-委托（后台安全审查，2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：buildServerGenerationProviderFromEnv 的 qwen/deepseek 分支增加 warnServerCustomEndpoint 告警（端点 ≠ 内置默认时 WARN 主机名）；DASHSCOPE_URL/DEEPSEEK_COMPLETIONS_URL 导出；测试锁定默认端点契约。
+- 根因分析：与 X-027 Why-2 同——可配置端点属设计取舍，只能以可观测告警降低误配风险；server-beta 分支在 X-020 未同步 X-027 的告警处置。
+- 影响评估：P2。需用户配置被篡改才成立；告警为可观测性兜底。
+- 涉及文件与行号：`src/server/runtime/create-server-beta-service.ts`（imports + warnServerCustomEndpoint + qwen/deepseek 分支）、`src/services/worker/QwenProvider.ts:19`、`src/services/worker/DeepSeekProvider.ts:24`、`tests/server/generation/server-provider-env.test.ts`。
+- 关联需求：N/A
+- 实际修改位置：`create-server-beta-service.ts`（warnServerCustomEndpoint 新增；qwen/deepseek 分支告警调用）、`QwenProvider.ts:19`/`DeepSeekProvider.ts:24`（默认端点常量改导出）、`server-provider-env.test.ts`（默认端点契约用例 1 条）。
+- 阶段验证结果：10 pass/0 fail（新增契约用例）；`npm run typecheck` 0 错误。
+- 测试方法：(1) `bun test tests/server/generation/server-provider-env.test.ts` 全绿；(2) `npm run typecheck` 通过。
+- 代码修复提交：`23e7b356`
+
 ### X-022 install.ts 交互安装流程更新（大模型配置统一化 T-08）
 
 现状调查：install.ts 的 ProviderId 仅 claude/gemini/openrouter（:642），provider 选择交互无 qwen/deepseek；非 claude 分支的 key 提示逻辑（:928-960）只覆盖 gemini/openrouter 两厂商；周报 AI 由独立的 promptDashscopeKey（X-021 已改新键）询问 Qwen key，无 REPORT_PROVIDER 概念。设计（TODO T-08）要求：provider 交互加 qwen/deepseek；按所选 provider 提示对应 _API_KEY（qwen/deepseek 另可提示 _URL，可选）；新增 REPORT_PROVIDER 询问（默认空 = 禁用）。因 REPORT_PROVIDER 复用厂商组 key，原独立 promptDashscopeKey 与 provider 流程的 qwen 提示重复，一并移除（qwen key 由 provider/report 两处共用同一组提示逻辑）。
