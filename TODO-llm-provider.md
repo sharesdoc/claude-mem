@@ -2,7 +2,7 @@
 
 > 基于：2026-08-14 对话设计定稿（摘要/报表/server-beta 三处 provider 配置入口统一）
 > 目标：消灭「Qwen 有 key 就自动抢跑」「周报写死 Qwen」「server-beta 独立 provider」三个特例
-> 状态：方案已确认，待实施
+> 状态：✅ 已实施完毕（X-014~X-035，2026-08-15；rev 审查 approve，报告 review-report-20260815012100.md）
 
 ---
 
@@ -68,10 +68,10 @@
 
 | 优先 | ID | 任务 | Phase | N | F | C | 分 | 估时 | 依赖 | 状态 |
 |---:|---|---|---|---:|---:|---:|---:|---|---|---|
-| 1 | T-01 | `SettingsDefaultsManager` 配置键增删 | 1 | 5 | 5 | 1 | **14** | 1h | — | ☐ |
-| 1 | T-02 | `QwenProvider` 重写为 OpenAI 兼容客户端 | 1 | 5 | 3 | 4 | **9** | 1d | T-01 | ☐ |
+| 1 | T-01 | `SettingsDefaultsManager` 配置键增删 | 1 | 5 | 5 | 1 | **14** | 1h | — | ☑ |
+| 1 | T-02 | `QwenProvider` 重写为 OpenAI 兼容客户端 | 1 | 5 | 3 | 4 | **9** | 1d | T-01 | ☑ |
 | 2 | T-03 | 新增 `DeepSeekProvider` | 1 | 4 | 5 | 2 | **11** | 3h | T-01 T-02 | ☐ |
-| 1 | T-04 | `SessionRoutes` 删除 Qwen 自动兜底，严格按 `CLAUDE_MEM_PROVIDER` 选择 | 1 | 5 | 5 | 2 | **13** | 3h | T-02 T-03 | ☐ |
+| 1 | T-04 | `SessionRoutes` 删除 Qwen 自动兜底，严格按 `CLAUDE_MEM_PROVIDER` 选择 | 1 | 5 | 5 | 2 | **13** | 3h | T-02 T-03 | ☑ |
 | 2 | T-05 | 报表 provider 工厂化（`ReportGenerator`/`DailyReportGenerator`） | 2 | 5 | 3 | 3 | **10** | 5h | T-03 | ☐ |
 | 2 | T-06 | server-beta 合并：`buildServerGenerationProviderFromEnv` 改读 `CLAUDE_MEM_PROVIDER` | 2 | 4 | 4 | 2 | **10** | 3h | T-01 | ☐ |
 | 3 | T-07 | `SettingsRoutes` 校验更新（合法 provider 加 qwen/deepseek，报表 provider 校验） | 1 | 4 | 5 | 1 | **12** | 1h | T-01 | ☐ |
