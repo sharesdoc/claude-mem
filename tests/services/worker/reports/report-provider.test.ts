@@ -188,7 +188,7 @@ describe('callReportProvider protocol dispatch (X-019)', () => {
     expect(headers['anthropic-version']).toBe('2023-06-01');
   });
 
-  it('should send Gemini generateContent requests with systemInstruction', async () => {
+  it('should send Gemini generateContent requests with systemInstruction and header auth', async () => {
     installFetch({ candidates: [{ content: { parts: [{ text: 'g-ok' }] } }] });
     const config: ReportProviderConfig = {
       provider: 'gemini',
@@ -198,7 +198,11 @@ describe('callReportProvider protocol dispatch (X-019)', () => {
     };
     const result = await callReportProvider(config, input);
     expect(result).toBe('g-ok');
-    expect(fetchCalls[0].url).toContain(':generateContent?key=sk-g');
+    // X-027: key 不得出现在 URL query 中(避免日志/代理泄漏), 走 x-goog-api-key 头。
+    expect(fetchCalls[0].url).toBe('https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent');
+    expect(fetchCalls[0].url).not.toContain('sk-g');
+    const headers = fetchCalls[0].init.headers as Record<string, string>;
+    expect(headers['x-goog-api-key']).toBe('sk-g');
     const body = JSON.parse(String(fetchCalls[0].init.body));
     expect(body.systemInstruction).toEqual({ parts: [{ text: 'sys-prompt' }] });
     expect(body.contents).toEqual([{ role: 'user', parts: [{ text: 'user-prompt' }] }]);

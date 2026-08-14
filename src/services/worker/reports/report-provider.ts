@@ -34,6 +34,18 @@ const ANTHROPIC_MESSAGES_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
 const OPENROUTER_COMPLETIONS_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const GEMINI_GENERATE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+const DASHSCOPE_COMPLETIONS_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
+const DEEPSEEK_COMPLETIONS_URL = 'https://api.deepseek.com/chat/completions';
+
+/** X-027: 自定义端点告警——可配置端点属设计取舍(本地 vLLM/Ollama 场景),
+ *  无法用地址白名单解决 SSRF 类风险, 改为端点非内置默认值时显式 WARN,
+ *  提醒 key 将发往该主机(不打印 key)。 */
+function warnOnCustomEndpoint(provider: 'qwen' | 'deepseek', endpoint: string, defaultEndpoint: string): void {
+  if (endpoint === defaultEndpoint) return;
+  let host = endpoint;
+  try { host = new URL(endpoint).host; } catch { /* 保持原样打印 */ }
+  logger.warn('WORKER', `custom ${provider} report endpoint configured — API key will be sent to ${host}`, {});
+}
 const AI_TIMEOUT_MS = 90000;
 // OpenAI 兼容厂商与 Gemini 的输出上限(周报正文长,放开到 64K)。
 const MAX_OUTPUT_TOKENS = 65536;
@@ -52,12 +64,16 @@ export function resolveReportProviderConfig(settings?: SettingsDefaults): Report
     case 'qwen': {
       const apiKey = resolveQwenApiKey(s);
       if (!apiKey) return null;
-      return { provider: 'qwen', apiKey, model: resolveQwenModel(s), endpoint: resolveQwenEndpoint(s) };
+      const endpoint = resolveQwenEndpoint(s);
+      warnOnCustomEndpoint('qwen', endpoint, DASHSCOPE_COMPLETIONS_URL);
+      return { provider: 'qwen', apiKey, model: resolveQwenModel(s), endpoint };
     }
     case 'deepseek': {
       const apiKey = resolveDeepSeekApiKey(s);
       if (!apiKey) return null;
-      return { provider: 'deepseek', apiKey, model: resolveDeepSeekModel(s), endpoint: resolveDeepSeekEndpoint(s) };
+      const endpoint = resolveDeepSeekEndpoint(s);
+      warnOnCustomEndpoint('deepseek', endpoint, DEEPSEEK_COMPLETIONS_URL);
+      return { provider: 'deepseek', apiKey, model: resolveDeepSeekModel(s), endpoint };
     }
     case 'openrouter': {
       const apiKey = (process.env.OPENROUTER_API_KEY ?? '').trim()
@@ -193,7 +209,8 @@ async function callAnthropic(
   }
 }
 
-/** Gemini generateContent 协议。 */
+/** Gemini generateContent 协议。X-027: key 走 x-goog-api-key 请求头,
+ *  不拼 URL query(避免密钥进入代理/访问日志)。 */
 async function callGemini(
   config: ReportProviderConfig,
   input: ReportPromptInput,
@@ -201,10 +218,10 @@ async function callGemini(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), AI_TIMEOUT_MS);
   try {
-    const url = `${config.endpoint}/${config.model}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
+    const url = `${config.endpoint}/${config.model}:generateContent`;
     const resp = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.apiKey },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: input.system }] },
         contents: input.messages.map(m => ({
