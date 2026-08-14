@@ -1,3 +1,23 @@
+### X-018 SettingsRoutes 校验与可写白名单更新（大模型配置统一化 T-07）
+
+现状调查：`SettingsRoutes.ts:192-194` validProviders 仅 claude/gemini/openrouter（缺 qwen，且未校验 CLAUDE_MEM_PROVIDER 为空的情况语义上允许默认）；可写白名单 settingKeys（:84-118）未包含新增 7 键，UI 写入会被静默丢弃；无 REPORT_PROVIDER 校验。任务按 TODO T-07 补齐，并把 provider 值校验抽取为可测纯函数（原 validateSettings 为私有、无测试覆盖）。
+
+- 编号：X-018
+- 任务类型：需求
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-07（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-07（独立 fix，无 A-F/M 体系）
+- 任务描述：settingKeys 白名单加 CLAUDE_MEM_QWEN_MODEL/_API_KEY/_URL、CLAUDE_MEM_DEEPSEEK_API_KEY/_MODEL/_URL、CLAUDE_MEM_REPORT_PROVIDER；validProviders 扩展为 claude/qwen/gemini/openrouter/deepseek；新增 REPORT_PROVIDER 校验（同 5 取值，允许空）；抽取导出 isValidProviderValue 纯函数供校验与测试复用。
+- 验收标准：(1) qwen/deepseek 通过校验，非法值（如 ollama）被拒；(2) REPORT_PROVIDER 合法 5 值通过、空值通过、非法值被拒；(3) 7 个新键可通过 POST /api/settings 白名单落盘；(4) typecheck 通过且无新增测试失败。
+- 涉及文件与行号：`src/services/worker/http/routes/SettingsRoutes.ts:84-118,190-196`。
+- 关联需求：`doc/B-系统设计文档.md` 配置校验章节（需 ree 刷新）
+- 实际修改位置：`src/services/worker/http/routes/SettingsRoutes.ts:29-37`（导出 VALID_PROVIDERS 与 isValidProviderValue——trim+toLowerCase 匹配，与 is*Selected 惯例一致）、`src/services/worker/http/routes/SettingsRoutes.ts:100-107`（白名单加 7 键）、`src/services/worker/http/routes/SettingsRoutes.ts:198-205`（provider 校验改用纯函数 + 新增 REPORT_PROVIDER 校验）、`tests/services/worker/settings-provider-validation.test.ts`（新增 5 用例）。
+- 阶段验证结果：RED——5 用例中 1 fail（原断言 'Claude' 应被拒，与实现 toLowerCase 语义冲突；经核对代码库惯例 isQwenSelected/isDeepSeekSelected 均为 trim+toLowerCase 大小写不敏感，修正测试断言为大小写不敏感、非法值用例改为 ollama/qwen3/deepseekx）；GREEN——5 pass/0 fail；`bun test tests/services/worker/` 53 pass/0 fail；`npm run typecheck` 0 错误。
+- 涉及文档刷新：需 ree 刷新 `doc/B-系统设计文档.md` 配置校验章节；本次按 fix 规则只在 X 标注。
+- 测试方法：(1) `bun test tests/services/worker/settings-provider-validation.test.ts` 全绿；(2) `bun test tests/services/worker/` 无新增失败；(3) `npm run typecheck` 通过。
+- 代码修复提交：`f25e6825`
+
 ### X-017 SessionRoutes/worker-service 统一 provider 选择（大模型配置统一化 T-04）
 
 现状调查发现与 TODO 文本的偏差：(1) 真正的"Qwen 有 key 就自动抢跑"兜底在 `worker-service.ts:654-668` 的 getActiveAgent（startSessionProcessor 调用），SessionRoutes 内的 getActiveAgent 是死代码（无调用点）；(2) TODO 文本"显式配置 provider 但 key 缺失→抛错"与活路径现状不符——抛错只存在于死代码，活路径（getSelectedProvider/worker-service.getActiveAgent）的实际语义是回落 claude SDK。按"最小修改 + 保持活路径现状"实现：选中但不可用 → 回落 claude，并把选择逻辑抽取为单一纯函数供两处复用（消灭双份重复的分支逻辑）。worker-service 的 runFallbackForTerminatedSession 备用链（gemini→openrouter）属错误恢复机制，不在本任务范围。
