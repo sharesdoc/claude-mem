@@ -70,15 +70,15 @@
 |---:|---|---|---|---:|---:|---:|---:|---|---|---|
 | 1 | T-01 | `SettingsDefaultsManager` 配置键增删 | 1 | 5 | 5 | 1 | **14** | 1h | — | ☑ |
 | 1 | T-02 | `QwenProvider` 重写为 OpenAI 兼容客户端 | 1 | 5 | 3 | 4 | **9** | 1d | T-01 | ☑ |
-| 2 | T-03 | 新增 `DeepSeekProvider` | 1 | 4 | 5 | 2 | **11** | 3h | T-01 T-02 | ☐ |
+| 2 | T-03 | 新增 `DeepSeekProvider` | 1 | 4 | 5 | 2 | **11** | 3h | T-01 T-02 | ☑ |
 | 1 | T-04 | `SessionRoutes` 删除 Qwen 自动兜底，严格按 `CLAUDE_MEM_PROVIDER` 选择 | 1 | 5 | 5 | 2 | **13** | 3h | T-02 T-03 | ☑ |
-| 2 | T-05 | 报表 provider 工厂化（`ReportGenerator`/`DailyReportGenerator`） | 2 | 5 | 3 | 3 | **10** | 5h | T-03 | ☐ |
-| 2 | T-06 | server-beta 合并：`buildServerGenerationProviderFromEnv` 改读 `CLAUDE_MEM_PROVIDER` | 2 | 4 | 4 | 2 | **10** | 3h | T-01 | ☐ |
-| 3 | T-07 | `SettingsRoutes` 校验更新（合法 provider 加 qwen/deepseek，报表 provider 校验） | 1 | 4 | 5 | 1 | **12** | 1h | T-01 | ☐ |
-| 3 | T-08 | `install.ts` 交互安装流程加 qwen/deepseek | 2 | 3 | 4 | 2 | **8** | 2h | T-01 | ☐ |
-| 3 | T-09 | Viewer UI 设置面板字段更新 | 2 | 3 | 3 | 2 | **7** | 2h | T-01 | ☐ |
-| 3 | T-10 | 文档同步（CLAUDE.md / README / docs 配置说明） | 3 | 4 | 5 | 1 | **12** | 1h | 全部 | ☐ |
-| 3 | T-11 | 构建 + 全量测试 + 验证 worker 启动 | 3 | 5 | 5 | 2 | **13** | 2h | 全部 | ☐ |
+| 2 | T-05 | 报表 provider 工厂化（`ReportGenerator`/`DailyReportGenerator`） | 2 | 5 | 3 | 3 | **10** | 5h | T-03 | ☑ |
+| 2 | T-06 | server-beta 合并：`buildServerGenerationProviderFromEnv` 改读 `CLAUDE_MEM_PROVIDER` | 2 | 4 | 4 | 2 | **10** | 3h | T-01 | ☑ |
+| 3 | T-07 | `SettingsRoutes` 校验更新（合法 provider 加 qwen/deepseek，报表 provider 校验） | 1 | 4 | 5 | 1 | **12** | 1h | T-01 | ☑ |
+| 3 | T-08 | `install.ts` 交互安装流程加 qwen/deepseek | 2 | 3 | 4 | 2 | **8** | 2h | T-01 | ☑ |
+| 3 | T-09 | Viewer UI 设置面板字段更新 | 2 | 3 | 3 | 2 | **7** | 2h | T-01 | ☑ |
+| 3 | T-10 | 文档同步（CLAUDE.md / README / docs 配置说明） | 3 | 4 | 5 | 1 | **12** | 1h | 全部 | ☑ |
+| 3 | T-11 | 构建 + 全量测试 + 验证 worker 启动 | 3 | 5 | 5 | 2 | **13** | 2h | 全部 | ☑ |
 
 ---
 
