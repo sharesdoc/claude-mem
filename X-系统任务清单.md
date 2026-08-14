@@ -1,3 +1,19 @@
+### X-030 摘要 provider 层审查缺陷修复（rev 委托）
+
+rev 审查（摘要 provider 层审查员）证实 4 项代码缺陷：①端点解析尾斜杠 bug——`/\/chat\/completions$/` 不匹配 `.../chat/completions/`（尾斜杠），会被拼成 `.../chat/completions/chat/completions`，已实测复现（Qwen/DeepSeek resolver 同缺陷）；②withRetry 超时死代码——attemptSignal 恒非空使本地 AbortController 与 90s 定时器永不生效，实际超时为 withRetry 默认 30s，与作者 90s 意图不符（Qwen 既有、DeepSeek 复制）；③isGeminiSelected/isOpenRouterSelected 精确比较与 Qwen/DeepSeek 的 toLowerCase 不一致，`"GEMINI"` 不选中而 `"QWEN"` 会选中；④afterEach 残留死代码块（X-029 清理未净）。另补端点测试三用例（base 补全/尾斜杠去重/完整路径原样）。
+
+- 编号：X-030
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：rev-委托（2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：resolveQwenEndpoint/resolveDeepSeekEndpoint 先 strip 尾斜杠再测 completions 后缀；queryQwen/queryDeepSeek 删死 controller/timer 并传 perAttemptTimeoutMs=AI_TIMEOUT_MS；Gemini/OpenRouter is*Selected 补 trim+toLowerCase；清理测试文件死代码块；补端点解析测试用例（base→补全、`.../v1/`→去尾补全、`.../chat/completions/`→不重复）。
+- 根因分析：Why-1——尾斜杠不匹配因为正则未先归一化；Why-2——超时死代码因为 withRetry 恒传 attemptSignal 而本地 signal 只在 attemptSignal 为空时才生效；Why-3——精确比较遗留自 Gemini/OpenRouter 的历史实现，X-015/X-016 新写的 Qwen/DeepSeek 用了 toLowerCase。
+- 影响评估：P1。尾斜杠配置 404 难排查；30s 超时提前中止长摘要；大小写变体静默回落 claude。
+- 涉及文件与行号：`src/services/worker/QwenProvider.ts`（resolver/queryQwen）、`src/services/worker/DeepSeekProvider.ts`（resolver/queryDeepSeek）、`src/services/worker/GeminiProvider.ts:547`、`src/services/worker/OpenRouterProvider.ts:548`、`tests/services/worker/deepseek-provider-config.test.ts`、`tests/services/worker/qwen-provider-config.test.ts`。
+- 关联需求：N/A
+
 ### X-029 测试基础设施修复：mock 泄漏与 stale mock（X-025 验证发现）
 
 全量测试验证（X-025）发现本批次新测试在整跑中 33 例失败，根因两级：①预存缺陷——tests/cli/handlers/ 三个文件的 mock.module(SettingsDefaultsManager/worker-utils/transcript-parser) 缺少被测链路的命名导出（fetchWithTimeout、isWorkerFallback、extractLastAssistantEntry 等），该套件本就 32/34 预存失败；且 bun 并发执行时 mock.module 跨文件泄漏到同进程其它测试文件，使 SettingsDefaultsManager.getAllDefaults 变为 undefined，波及本批次新测试与既有 settings-defaults-manager 测试；②本批次新测试对共享模块与真实凭证库（~/.claude-mem/.env）的隐式依赖，在并发污染下不稳定。修复分两层：补全 stale mock 导出 + mock.restore；新测试改为纯对象构造（不 import SettingsDefaultsManager 值导入）+ CLAUDE_MEM_ENV_FILE 指向不存在路径的凭证库隔离 + 真实 defaults 断言加未 mock 守卫（skipIf）。修复后整跑 120 fail（基线 a57fa387 为 133 fail），本批次新测试整跑 0 失败；CORS 用例整跑失败经单独运行 15/15 全绿确认为预存顺序/端口抖动，与本批次无关。
