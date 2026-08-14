@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
+// X-029: mock 注册持有句柄并在 afterAll restore(防跨文件泄漏);
+// worker-utils mock 补 fetchWithTimeout 导出(被测代码传递依赖)。
 const dataDir = join(tmpdir(), 'claude-mem-file-edit-observer-test');
 const workerCallLog: Array<{ path: string; method: string; body: unknown }> = [];
 
@@ -21,12 +23,19 @@ mock.module('../../../src/shared/hook-settings.js', () => ({
 }));
 
 mock.module('../../../src/shared/worker-utils.js', () => ({
+  fetchWithTimeout: async () => new Response('{}', { status: 200 }),
   executeWithWorkerFallback: (apiPath: string, method: string, body: unknown) => {
     workerCallLog.push({ path: apiPath, method, body });
     throw new Error(`worker must not be called for internal observer sessions: ${apiPath}`);
   },
   isWorkerFallback: () => false,
 }));
+
+afterAll(() => {
+  mock.restore();
+  
+  
+});
 
 import { OBSERVER_SESSIONS_DIR } from '../../../src/shared/paths.js';
 import { logger } from '../../../src/utils/logger.js';

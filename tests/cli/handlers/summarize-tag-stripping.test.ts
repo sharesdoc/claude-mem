@@ -1,7 +1,11 @@
-import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, afterAll, spyOn, mock } from 'bun:test';
 import { homedir } from 'os';
 import { join } from 'path';
 
+// X-029: mock 注册持有句柄并在 afterAll restore——mock.module 在 bun 多文件
+// 共进程运行时会泄漏到其它测试文件, 破坏真实 SettingsDefaultsManager 的消费者
+// (如 getAllDefaults 缺失)。同时 worker-utils mock 需含 fetchWithTimeout 导出
+// (被测代码传递依赖该命名导出, 缺失导致模块加载 SyntaxError)。
 mock.module('../../../src/shared/SettingsDefaultsManager.js', () => ({
   SettingsDefaultsManager: {
     get: (key: string) => {
@@ -19,17 +23,24 @@ mock.module('../../../src/shared/hook-settings.js', () => ({
 
 let mockExtractedMessage: string = '';
 let extractCallCount = 0;
+// X-029: 补齐被测链路的全部命名导出(summarize.ts 导入 extractLastMessage /
+// extractLastAssistantEntry / computePerTurnActivity), 缺失导出会导致模块加载
+// SyntaxError, 这也是本套件预存失败的直接原因。
 mock.module('../../../src/shared/transcript-parser.js', () => ({
   extractLastMessage: () => {
     extractCallCount += 1;
     return mockExtractedMessage;
   },
+  extractLastMessageFromJsonl: () => '',
+  extractLastAssistantEntry: () => null,
+  computePerTurnActivity: () => [],
 }));
 
 const workerCallLog: Array<{ path: string; method: string; body: any }> = [];
 mock.module('../../../src/shared/worker-utils.js', () => ({
   ensureWorkerRunning: () => Promise.resolve(true),
   getWorkerPort: () => 37777,
+  fetchWithTimeout: async () => new Response('{"status":"queued"}', { status: 200 }),
   workerHttpRequest: (apiPath: string, options?: any) => {
     workerCallLog.push({ path: apiPath, method: options?.method ?? 'GET', body: options?.body });
     return Promise.resolve(new Response('{"status":"queued"}', { status: 200 }));
@@ -40,6 +51,13 @@ mock.module('../../../src/shared/worker-utils.js', () => ({
   },
   isWorkerFallback: (_result: unknown) => false,
 }));
+
+afterAll(() => {
+  mock.restore();
+  
+  
+  
+});
 
 import { logger } from '../../../src/utils/logger.js';
 

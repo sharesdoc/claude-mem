@@ -2,7 +2,7 @@
 
 import { describe, expect, it, afterEach } from 'bun:test';
 import { buildServerGenerationProviderFromEnv } from '../../../src/server/runtime/create-server-beta-service.js';
-import { SettingsDefaultsManager } from '../../../src/shared/SettingsDefaultsManager.js';
+import type { SettingsDefaults } from '../../../src/shared/SettingsDefaultsManager.js';
 import { OpenRouterObservationProvider } from '../../../src/server/generation/providers/OpenRouterObservationProvider.js';
 import type { ServerGenerationContext } from '../../../src/server/generation/providers/shared/types.js';
 import { DASHSCOPE_URL } from '../../../src/services/worker/QwenProvider.js';
@@ -32,14 +32,11 @@ afterEach(() => {
   }
 });
 
-function freshSettings() {
-  const s = SettingsDefaultsManager.getAllDefaults();
-  s.CLAUDE_MEM_PROVIDER = 'claude';
-  s.CLAUDE_MEM_QWEN_API_KEY = '';
-  s.CLAUDE_MEM_DEEPSEEK_API_KEY = '';
-  s.CLAUDE_MEM_GEMINI_API_KEY = '';
-  s.CLAUDE_MEM_OPENROUTER_API_KEY = '';
-  return s;
+// X-029: 不用 getAllDefaults()——bun 并发执行时其它测试文件的
+// mock.module(SettingsDefaultsManager) 会泄漏到本文件; 空对象即可满足
+// buildServerGenerationProviderFromEnv 的按需读取语义(未配置键回落默认)。
+function freshSettings(): SettingsDefaults {
+  return {} as unknown as SettingsDefaults;
 }
 
 describe('buildServerGenerationProviderFromEnv (X-020)', () => {

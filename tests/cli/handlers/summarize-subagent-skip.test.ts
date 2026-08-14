@@ -1,7 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, afterAll, spyOn, mock } from 'bun:test';
 import { homedir } from 'os';
 import { join } from 'path';
 
+// X-029: mock 注册持有句柄并在 afterAll restore(防跨文件泄漏);
+// worker-utils mock 补 fetchWithTimeout 导出(被测代码传递依赖)。
 mock.module('../../../src/shared/SettingsDefaultsManager.js', () => ({
   SettingsDefaultsManager: {
     get: (key: string) => {
@@ -17,13 +19,20 @@ const workerCallLog: Array<{ path: string; options: any }> = [];
 mock.module('../../../src/shared/worker-utils.js', () => ({
   ensureWorkerRunning: () => Promise.resolve(true),
   getWorkerPort: () => 37777,
+  fetchWithTimeout: async () => new Response('{}', { status: 200 }),
   workerHttpRequest: (apiPath: string, options?: any) => {
     workerCallLog.push({ path: apiPath, options });
     throw new Error(
       `workerHttpRequest MUST NOT be called in subagent context (called with ${apiPath})`
     );
   },
+  isWorkerFallback: () => false,
 }));
+
+afterAll(() => {
+  mock.restore();
+  
+});
 
 import { logger } from '../../../src/utils/logger.js';
 

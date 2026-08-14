@@ -1,6 +1,6 @@
 
-import { describe, it, expect, afterEach } from 'bun:test';
-import { SettingsDefaultsManager } from '../../../src/shared/SettingsDefaultsManager.js';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import type { SettingsDefaults } from '../../../src/shared/SettingsDefaultsManager.js';
 import {
   resolveDeepSeekApiKey,
   resolveDeepSeekEndpoint,
@@ -18,30 +18,50 @@ import {
 //   4) isDeepSeekAvailable 认新键，isDeepSeekSelected 认 provider=deepseek
 
 const ORIGINAL_KEY = process.env.CLAUDE_MEM_DEEPSEEK_API_KEY;
+// X-029: 凭证库隔离——resolveDeepSeekApiKey 三级回脱的最后一级读
+// CLAUDE_MEM_ENV_FILE, 全量跑时其它测试可能污染该环境变量; 指向不存在路径
+// 保证"空 key"断言不受真实 ~/.claude-mem/.env 影响。
+const ORIGINAL_ENV_FILE = process.env.CLAUDE_MEM_ENV_FILE;
+
+beforeEach(() => {
+  // X-029: 指向不存在路径, 保证三级回脱的凭证库一级读不到真实 .env
+  process.env.CLAUDE_MEM_ENV_FILE = '/tmp/claude-mem-deepseek-test-nonexistent.env';
+});
 
 describe('DeepSeekProvider config resolvers (X-016)', () => {
   afterEach(() => {
     if (ORIGINAL_KEY === undefined) delete process.env.CLAUDE_MEM_DEEPSEEK_API_KEY;
     else process.env.CLAUDE_MEM_DEEPSEEK_API_KEY = ORIGINAL_KEY;
+    if (ORIGINAL_ENV_FILE === undefined) delete process.env.CLAUDE_MEM_ENV_FILE;
+    else process.env.CLAUDE_MEM_ENV_FILE = ORIGINAL_ENV_FILE;
+    if (process.env.CLAUDE_MEM_ENV_FILE !== ORIGINAL_ENV_FILE) {
+      process.env.CLAUDE_MEM_ENV_FILE = '/tmp/claude-mem-deepseek-test-nonexistent.env';
+    }
   });
 
   describe('resolveDeepSeekApiKey', () => {
     it('should return empty when nothing configured', () => {
       delete process.env.CLAUDE_MEM_DEEPSEEK_API_KEY;
-      const settings = SettingsDefaultsManager.getAllDefaults();
+      // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
+      // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 空对象即可。
+      const settings = {} as unknown as SettingsDefaults;
       expect(resolveDeepSeekApiKey(settings)).toBe('');
     });
 
     it('should read key from settings', () => {
       delete process.env.CLAUDE_MEM_DEEPSEEK_API_KEY;
-      const settings = SettingsDefaultsManager.getAllDefaults();
+      // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
+      // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 空对象即可。
+      const settings = {} as unknown as SettingsDefaults;
       settings.CLAUDE_MEM_DEEPSEEK_API_KEY = 'sk-ds-settings';
       expect(resolveDeepSeekApiKey(settings)).toBe('sk-ds-settings');
     });
 
     it('should prefer env over settings', () => {
       process.env.CLAUDE_MEM_DEEPSEEK_API_KEY = 'sk-ds-env';
-      const settings = SettingsDefaultsManager.getAllDefaults();
+      // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
+      // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 空对象即可。
+      const settings = {} as unknown as SettingsDefaults;
       settings.CLAUDE_MEM_DEEPSEEK_API_KEY = 'sk-ds-settings';
       expect(resolveDeepSeekApiKey(settings)).toBe('sk-ds-env');
     });
@@ -49,13 +69,17 @@ describe('DeepSeekProvider config resolvers (X-016)', () => {
 
   describe('resolveDeepSeekEndpoint', () => {
     it('should fall back to api.deepseek.com when empty', () => {
-      const settings = SettingsDefaultsManager.getAllDefaults();
+      // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
+      // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 空对象即可。
+      const settings = {} as unknown as SettingsDefaults;
       settings.CLAUDE_MEM_DEEPSEEK_URL = '';
       expect(resolveDeepSeekEndpoint(settings)).toBe('https://api.deepseek.com/chat/completions');
     });
 
     it('should use custom endpoint when configured', () => {
-      const settings = SettingsDefaultsManager.getAllDefaults();
+      // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
+      // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 空对象即可。
+      const settings = {} as unknown as SettingsDefaults;
       settings.CLAUDE_MEM_DEEPSEEK_URL = 'https://deepseek.local/v1/chat/completions';
       expect(resolveDeepSeekEndpoint(settings)).toBe('https://deepseek.local/v1/chat/completions');
     });
@@ -63,13 +87,17 @@ describe('DeepSeekProvider config resolvers (X-016)', () => {
 
   describe('resolveDeepSeekModel', () => {
     it('should fall back to deepseek-v4-flash when empty', () => {
-      const settings = SettingsDefaultsManager.getAllDefaults();
+      // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
+      // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 空对象即可。
+      const settings = {} as unknown as SettingsDefaults;
       settings.CLAUDE_MEM_DEEPSEEK_MODEL = '';
       expect(resolveDeepSeekModel(settings)).toBe('deepseek-v4-flash');
     });
 
     it('should accept arbitrary model ids', () => {
-      const settings = SettingsDefaultsManager.getAllDefaults();
+      // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
+      // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 空对象即可。
+      const settings = {} as unknown as SettingsDefaults;
       settings.CLAUDE_MEM_DEEPSEEK_MODEL = 'deepseek-v4-pro';
       expect(resolveDeepSeekModel(settings)).toBe('deepseek-v4-pro');
     });

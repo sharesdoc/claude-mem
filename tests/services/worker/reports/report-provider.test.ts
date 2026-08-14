@@ -1,6 +1,6 @@
 
-import { describe, it, expect, afterEach } from 'bun:test';
-import { SettingsDefaultsManager } from '../../../../src/shared/SettingsDefaultsManager.js';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import type { SettingsDefaults } from '../../../../src/shared/SettingsDefaultsManager.js';
 import {
   resolveReportProviderConfig,
   callReportProvider,
@@ -21,6 +21,10 @@ const ORIGINAL = {
   ANTHROPIC: process.env.ANTHROPIC_API_KEY,
 };
 
+// X-029: 凭证库隔离——key 三级回脱的最后一级读 CLAUDE_MEM_ENV_FILE,
+// 指向不存在路径保证"无 key"断言不受真实 ~/.claude-mem/.env 影响。
+const ORIGINAL_ENV_FILE = process.env.CLAUDE_MEM_ENV_FILE;
+
 afterEach(() => {
   for (const [k, v] of Object.entries(ORIGINAL)) {
     if (v === undefined) delete process.env[k === 'ANTHROPIC' ? 'ANTHROPIC_API_KEY' : k === 'GEMINI' ? 'GEMINI_API_KEY' : k === 'OPENROUTER' ? 'OPENROUTER_API_KEY' : k === 'QWEN' ? 'CLAUDE_MEM_QWEN_API_KEY' : 'CLAUDE_MEM_DEEPSEEK_API_KEY'];
@@ -30,17 +34,21 @@ afterEach(() => {
     else if (k === 'GEMINI') process.env.GEMINI_API_KEY = v;
     else process.env.ANTHROPIC_API_KEY = v;
   }
+  if (ORIGINAL_ENV_FILE === undefined) delete process.env.CLAUDE_MEM_ENV_FILE;
+  else process.env.CLAUDE_MEM_ENV_FILE = ORIGINAL_ENV_FILE;
 });
 
-function freshSettings() {
-  const s = SettingsDefaultsManager.getAllDefaults();
-  s.CLAUDE_MEM_REPORT_PROVIDER = '';
-  s.CLAUDE_MEM_QWEN_API_KEY = '';
-  s.CLAUDE_MEM_DEEPSEEK_API_KEY = '';
-  s.CLAUDE_MEM_OPENROUTER_API_KEY = '';
-  s.CLAUDE_MEM_GEMINI_API_KEY = '';
-  return s;
+// X-029: 不用 getAllDefaults()——bun 并发执行时其它测试文件的
+// mock.module(SettingsDefaultsManager) 会泄漏到本文件; 空对象即可满足
+// resolveReportProviderConfig 的按需读取语义。
+function freshSettings(): SettingsDefaults {
+  return {} as unknown as SettingsDefaults;
 }
+
+beforeEach(() => {
+  // X-029: 指向不存在路径, 保证三级回脱的凭证库一级读不到真实 .env
+  process.env.CLAUDE_MEM_ENV_FILE = '/tmp/claude-mem-report-test-nonexistent.env';
+});
 
 describe('resolveReportProviderConfig (X-019)', () => {
   it('should return null when REPORT_PROVIDER is empty (AI disabled)', () => {
