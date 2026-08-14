@@ -1,3 +1,23 @@
+### X-027 报表 Gemini 密钥改请求头 + 自定义端点 SSRF 告警（rev 委托）
+
+后台安全审查（X-019 提交 448b7d7d）发现 2 项：①secret-in-url-query——callGemini 把 API key 拼在 URL query（?key=），密钥会泄漏到代理/访问日志；Gemini 官方支持 `x-goog-api-key` 请求头，改头即修；②SSRF/credential-exfiltration——CLAUDE_MEM_QWEN_URL/CLAUDE_MEM_DEEPSEEK_URL 为可配置端点，若被改为恶意地址则 Bearer 密钥随之发出。该项属设计固有取舍（用户自担责保证 OpenAI 兼容，与 ANTHROPIC_BASE_URL 同类；禁用自定义端点会破坏 vLLM/Ollama 本地部署的合理场景），处置为：端点非内置默认值时 WARN 告警（明确提示 key 将发往该主机），不引入白名单/黑名单限制。
+
+- 编号：X-027
+- 任务类型：缺陷
+- 严重程度：P2
+- 状态：已完成-待验证
+- 来源：rev-委托（后台安全审查，2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：callGemini 改为 `x-goog-api-key` 请求头鉴权（URL 去掉 ?key=）；resolveReportProviderConfig 的 qwen/deepseek 分支在端点非默认时 WARN（含主机名，不含 key）；对应测试更新（Gemini URL 无 key 参数 + header 断言、自定义端点告警路径不改变行为）。
+- 根因分析：Why-1——密钥入 URL 因为沿用了 Gemini 官方 ?key= 示例写法，未采用官方同样支持的头鉴权；Why-2——SSRF 风险为设计取舍：可配置端点正是为本地 vLLM/Ollama 服务设计，无法用地址白名单解决，只能通过可观测告警降低误配风险。
+- 影响评估：P2。单机部署下 ?key= 仅泄漏于本机日志/代理；LAN server 模式下放大为日志级泄漏；SSRF 项需用户配置被篡改才成立。
+- 涉及文件与行号：`src/services/worker/reports/report-provider.ts`（callGemini + resolveReportProviderConfig qwen/deepseek 分支）、`tests/services/worker/reports/report-provider.test.ts`。
+- 关联需求：N/A
+- 实际修改位置：`src/services/worker/reports/report-provider.ts:36-47`（新增 warnOnCustomEndpoint 辅助 + DASHSCOPE/DEEPSEEK 默认端点常量）、qwen/deepseek 分支调用告警、callGemini 改 header 鉴权；`tests/services/worker/reports/report-provider.test.ts`（Gemini 用例改断言：URL 无 key、x-goog-api-key 头存在）。
+- 阶段验证结果：RED——Gemini 用例 1 fail（URL 仍含 ?key=）；GREEN——13 pass/0 fail；`npm run typecheck` 0 错误。
+- 测试方法：(1) `bun test tests/services/worker/reports/report-provider.test.ts` 全绿；(2) `npm run typecheck` 通过。
+- 代码修复提交：`06021d97`
+
 ### X-021 移除废弃配置键与遗留迁移逻辑（大模型配置统一化 T-01 删键阶段）
 
 现状调查：4 个废弃键中 CLAUDE_MEM_SERVER_PROVIDER/_MODEL 本就只存在于 env 层（不在 SettingsDefaults 接口），已随 X-020 消费清零、无需删定义；需删的是 CLAUDE_MEM_WEEKLY_REPORT_MODEL、CLAUDE_MEM_REPORT_QWEN_API_KEY 两键 + 两处遗留兼容逻辑：SettingsDefaultsManager.loadFromFile 的 X-008 DASHSCOPE_API_KEY 迁移块（:313-336）、EnvManager 的 DASHSCOPE_API_KEY 映射与 REPORT_QWEN 键解析/写回（:45,109-115,181-187）。设计明确不做旧版兼容。install.ts 的 REPORT_QWEN_API_KEY 引用（:964-975）属 X-022 范围，本任务完成后剩余消费点唯一。
