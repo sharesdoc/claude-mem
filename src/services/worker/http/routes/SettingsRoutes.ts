@@ -29,9 +29,19 @@ const updateBranchSchema = z.object({}).passthrough();
 // X-018: 摘要/报表 provider 的合法取值（claude 默认；deepseek/qwen 为统一化新增）。
 export const VALID_PROVIDERS = ['claude', 'qwen', 'gemini', 'openrouter', 'deepseek'] as const;
 
-/** provider 值校验：undefined/空 允许（默认或禁用语义），否则必须命中合法值。 */
-export function isValidProviderValue(value: string | undefined): boolean {
+/** provider 值归一化 (X-026)：trim+toLowerCase；空/非字符串 → undefined。
+ *  写入路径用它落盘，保证与 is*Selected 的精确比较消费者一致。 */
+export function normalizeProviderValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim().toLowerCase();
+  return trimmed === '' ? undefined : trimmed;
+}
+
+/** provider 值校验 (X-026)：undefined/空 允许（默认或禁用语义）；
+ *  非字符串拒绝（type-confusion 守卫）；其余必须命中合法值。 */
+export function isValidProviderValue(value: unknown): boolean {
   if (value === undefined) return true;
+  if (typeof value !== 'string') return false;
   const trimmed = value.trim().toLowerCase();
   if (trimmed === '') return true;
   return (VALID_PROVIDERS as readonly string[]).includes(trimmed);
@@ -138,6 +148,17 @@ export class SettingsRoutes extends BaseRouteHandler {
     for (const key of settingKeys) {
       if (req.body[key] !== undefined) {
         settings[key] = req.body[key];
+      }
+    }
+
+    // X-026: provider 字段归一化落盘——校验与消费端(is*Selected 精确比较)一致,
+    // 避免 " GEMINI " 这类值校验通过却静默回落 claude;归一化为空则删键回落默认。
+    for (const key of ['CLAUDE_MEM_PROVIDER', 'CLAUDE_MEM_REPORT_PROVIDER'] as const) {
+      const normalized = normalizeProviderValue(settings[key]);
+      if (normalized === undefined) {
+        delete settings[key];
+      } else {
+        settings[key] = normalized;
       }
     }
 
