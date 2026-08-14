@@ -8,9 +8,11 @@ import { stripMemoryTagsFromPrompt, isInternalProtocolPayload } from '../../../.
 import { SessionManager } from '../../SessionManager.js';
 import { DatabaseManager } from '../../DatabaseManager.js';
 import { ClaudeProvider } from '../../ClaudeProvider.js';
-import { GeminiProvider, isGeminiSelected, isGeminiAvailable } from '../../GeminiProvider.js';
-import { OpenRouterProvider, isOpenRouterSelected, isOpenRouterAvailable } from '../../OpenRouterProvider.js';
-import { QwenProvider, isQwenSelected, isQwenAvailable } from '../../QwenProvider.js';
+import { GeminiProvider } from '../../GeminiProvider.js';
+import { OpenRouterProvider } from '../../OpenRouterProvider.js';
+import { QwenProvider } from '../../QwenProvider.js';
+import { DeepSeekProvider } from '../../DeepSeekProvider.js';
+import { resolveProviderId, collectProviderFlags, type ProviderId } from '../../provider-selection.js';
 import type { WorkerService } from '../../../worker-service.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { SessionEventBroadcaster } from '../../events/SessionEventBroadcaster.js';
@@ -34,6 +36,7 @@ export class SessionRoutes extends BaseRouteHandler {
     private geminiAgent: GeminiProvider,
     private openRouterAgent: OpenRouterProvider,
     private qwenAgent: QwenProvider,
+    private deepSeekAgent: DeepSeekProvider,
     private eventBroadcaster: SessionEventBroadcaster,
     private workerService: WorkerService,
     private completionHandler: SessionCompletionHandler,
@@ -41,54 +44,11 @@ export class SessionRoutes extends BaseRouteHandler {
     super();
   }
 
-  private getActiveAgent(): ClaudeProvider | GeminiProvider | OpenRouterProvider | QwenProvider {
-    if (isQwenSelected()) {
-      if (isQwenAvailable()) {
-        logger.debug('SESSION', 'Using Qwen agent');
-        return this.qwenAgent;
-      } else {
-        throw new Error('Qwen provider selected but no CLAUDE_MEM_REPORT_QWEN_API_KEY configured.');
-      }
-    }
-    if (isOpenRouterSelected()) {
-      if (isOpenRouterAvailable()) {
-        logger.debug('SESSION', 'Using OpenRouter agent');
-        return this.openRouterAgent;
-      } else {
-        throw new Error('OpenRouter provider selected but no API key configured. Set CLAUDE_MEM_OPENROUTER_API_KEY in settings or OPENROUTER_API_KEY environment variable.');
-      }
-    }
-    if (isGeminiSelected()) {
-      if (isGeminiAvailable()) {
-        logger.debug('SESSION', 'Using Gemini agent');
-        return this.geminiAgent;
-      } else {
-        throw new Error('Gemini provider selected but no API key configured. Set CLAUDE_MEM_GEMINI_API_KEY in settings or GEMINI_API_KEY environment variable.');
-      }
-    }
-    // Qwen 有 key 就自动选,无需显式配置 CLAUDE_MEM_PROVIDER
-    if (isQwenAvailable()) {
-      logger.debug('SESSION', 'Auto-selecting Qwen agent (CLAUDE_MEM_REPORT_QWEN_API_KEY available)');
-      return this.qwenAgent;
-    }
-    return this.sdkAgent;
-  }
-
-  private getSelectedProvider(): 'claude' | 'gemini' | 'openrouter' | 'qwen' {
-    if (isQwenSelected() && isQwenAvailable()) {
-      return 'qwen';
-    }
-    if (isOpenRouterSelected() && isOpenRouterAvailable()) {
-      return 'openrouter';
-    }
-    if (isGeminiSelected() && isGeminiAvailable()) {
-      return 'gemini';
-    }
-    // Qwen 兜底: 有 key 就用 Qwen (无需设置 CLAUDE_MEM_PROVIDER)
-    if (isQwenAvailable()) {
-      return 'qwen';
-    }
-    return 'claude';
+  // X-017: provider 选择唯一权威在 provider-selection.ts——
+  // 严格按 CLAUDE_MEM_PROVIDER (selected && available), 无"有 key 自动抢跑"兜底,
+  // 选中但 key 缺失时回落 claude。原 getActiveAgent 为死代码, 一并移除。
+  private getSelectedProvider(): ProviderId {
+    return resolveProviderId(collectProviderFlags());
   }
 
   public async ensureGeneratorRunning(sessionDbId: number, source: string): Promise<void> {
@@ -117,7 +77,7 @@ export class SessionRoutes extends BaseRouteHandler {
 
   private async startGeneratorWithProvider(
     session: ReturnType<typeof this.sessionManager.getSession>,
-    provider: 'claude' | 'gemini' | 'openrouter' | 'qwen',
+    provider: ProviderId,
     source: string
   ): Promise<void> {
     if (!session) return;
@@ -130,10 +90,12 @@ export class SessionRoutes extends BaseRouteHandler {
     }
 
     const agent = provider === 'qwen' ? this.qwenAgent
+      : provider === 'deepseek' ? this.deepSeekAgent
       : provider === 'openrouter' ? this.openRouterAgent
       : provider === 'gemini' ? this.geminiAgent
       : this.sdkAgent;
     const agentName = provider === 'qwen' ? 'Qwen'
+      : provider === 'deepseek' ? 'DeepSeek'
       : provider === 'openrouter' ? 'OpenRouter'
       : provider === 'gemini' ? 'Gemini'
       : 'Claude SDK';

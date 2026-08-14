@@ -24,7 +24,7 @@ export interface ActiveSession {
   earliestPendingTimestamp: number | null;  
   claimedMessageIds: number[];
   conversationHistory: ConversationMessage[];  
-  currentProvider: 'claude' | 'gemini' | 'openrouter' | 'qwen' | null;
+  currentProvider: 'claude' | 'gemini' | 'openrouter' | 'qwen' | 'deepseek' | null;
   consecutiveRestarts: number;  
   restartGuard?: RestartGuard;
   forceInit?: boolean;  

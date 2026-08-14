@@ -75,6 +75,8 @@ import type { WorkerRef } from './worker/agents/types.js';
 import { GeminiProvider, classifyGeminiError, isGeminiSelected, isGeminiAvailable } from './worker/GeminiProvider.js';
 import { OpenRouterProvider, classifyOpenRouterError, isOpenRouterSelected, isOpenRouterAvailable } from './worker/OpenRouterProvider.js';
 import { QwenProvider, classifyQwenError, isQwenSelected, isQwenAvailable } from './worker/QwenProvider.js';
+import { DeepSeekProvider, classifyDeepSeekError } from './worker/DeepSeekProvider.js';
+import { resolveProviderId, collectProviderFlags, type ProviderId } from './worker/provider-selection.js';
 import { ClassifiedProviderError, isClassified, type ProviderErrorClass } from './worker/provider-errors.js';
 import { PaginationHelper } from './worker/PaginationHelper.js';
 import { SettingsManager } from './worker/SettingsManager.js';
@@ -172,6 +174,7 @@ export class WorkerService implements WorkerRef {
   private geminiAgent: GeminiProvider;
   private openRouterAgent: OpenRouterProvider;
   private qwenAgent: QwenProvider;
+  private deepSeekAgent: DeepSeekProvider;
   private paginationHelper: PaginationHelper;
   private settingsManager: SettingsManager;
   private sessionEventBroadcaster: SessionEventBroadcaster;
@@ -211,6 +214,7 @@ export class WorkerService implements WorkerRef {
     this.geminiAgent = new GeminiProvider(this.dbManager, this.sessionManager);
     this.openRouterAgent = new OpenRouterProvider(this.dbManager, this.sessionManager);
     this.qwenAgent = new QwenProvider(this.dbManager, this.sessionManager);
+    this.deepSeekAgent = new DeepSeekProvider(this.dbManager, this.sessionManager);
 
     this.paginationHelper = new PaginationHelper(this.dbManager);
     this.settingsManager = new SettingsManager(this.dbManager);
@@ -243,9 +247,7 @@ export class WorkerService implements WorkerRef {
       workerPath: __filename,
       role: resolveBindAddress().role,
       getAiStatus: () => {
-        let provider = 'claude';
-        if (isOpenRouterSelected() && isOpenRouterAvailable()) provider = 'openrouter';
-        else if (isGeminiSelected() && isGeminiAvailable()) provider = 'gemini';
+        const provider: string = resolveProviderId(collectProviderFlags());
         return {
           provider,
           authMethod: getAuthMethodDescription(),
@@ -330,7 +332,7 @@ export class WorkerService implements WorkerRef {
     });
 
     this.server.registerRoutes(new ViewerRoutes(this.sseBroadcaster, this.dbManager, this.sessionManager));
-    const sessionRoutes = new SessionRoutes(this.sessionManager, this.dbManager, this.sdkAgent, this.geminiAgent, this.openRouterAgent, this.qwenAgent, this.sessionEventBroadcaster, this, this.completionHandler);
+    const sessionRoutes = new SessionRoutes(this.sessionManager, this.dbManager, this.sdkAgent, this.geminiAgent, this.openRouterAgent, this.qwenAgent, this.deepSeekAgent, this.sessionEventBroadcaster, this, this.completionHandler);
     this.server.registerRoutes(sessionRoutes);
     attachIngestGeneratorStarter((sessionDbId, source) =>
       sessionRoutes.ensureGeneratorRunning(sessionDbId, source),
@@ -651,20 +653,19 @@ export class WorkerService implements WorkerRef {
     });
   }
 
-  private getActiveAgent(): ClaudeProvider | GeminiProvider | OpenRouterProvider | QwenProvider {
-    if (isQwenSelected() && isQwenAvailable()) {
-      return this.qwenAgent;
+  private getActiveAgent(): ClaudeProvider | GeminiProvider | OpenRouterProvider | QwenProvider | DeepSeekProvider {
+    // X-017: 严格按 CLAUDE_MEM_PROVIDER 选择, 无"有 key 自动抢跑"兜底。
+    // 选中但 key 缺失时回落 claude (保持活路径现状)。
+    const providerId: ProviderId = resolveProviderId(collectProviderFlags());
+    switch (providerId) {
+      case 'qwen': return this.qwenAgent;
+      case 'deepseek': return this.deepSeekAgent;
+      case 'openrouter': return this.openRouterAgent;
+      case 'gemini': return this.geminiAgent;
+      case 'claude':
+      default:
+        return this.sdkAgent;
     }
-    if (isOpenRouterSelected() && isOpenRouterAvailable()) {
-      return this.openRouterAgent;
-    }
-    if (isGeminiSelected() && isGeminiAvailable()) {
-      return this.geminiAgent;
-    }
-    if (isQwenAvailable()) {
-      return this.qwenAgent;
-    }
-    return this.sdkAgent;
   }
 
   /**
@@ -678,7 +679,7 @@ export class WorkerService implements WorkerRef {
    */
   private reclassifyAtDispatch(
     error: unknown,
-    agent: ClaudeProvider | GeminiProvider | OpenRouterProvider | QwenProvider
+    agent: ClaudeProvider | GeminiProvider | OpenRouterProvider | QwenProvider | DeepSeekProvider
   ): ClassifiedProviderError | null {
     try {
       if (agent instanceof ClaudeProvider) {
@@ -693,6 +694,9 @@ export class WorkerService implements WorkerRef {
       }
       if (agent instanceof QwenProvider) {
         return classifyQwenError({ cause: error });
+      }
+      if (agent instanceof DeepSeekProvider) {
+        return classifyDeepSeekError({ cause: error });
       }
     } catch {
       // If the classifier itself throws, fall back to unclassified.
