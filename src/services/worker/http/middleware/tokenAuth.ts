@@ -4,7 +4,7 @@ import { logger } from '../../../../utils/logger.js';
 import type { AdminSessionStore } from '../AdminSessionStore.js';
 import { extractBearerToken } from '../AdminSessionStore.js';
 import { isAutoLoginAllowed } from '../middleware.js';
-import { SettingsDefaultsManager } from '../../../../shared/SettingsDefaultsManager.js';
+import { SettingsDefaultsManager, type SettingsDefaults } from '../../../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../../../shared/paths.js';
 
 /**
@@ -58,10 +58,11 @@ export function sha1Hex(value: string): string {
   return createHash('sha1').update(value).digest('hex');
 }
 
-/** 服务端令牌鉴权配置(明文 + 哈希双键, trim 后小写归一化哈希)。 */
-export function loadAccessAuth(): { plain: string; shasum: string } {
+/** 服务端令牌鉴权配置(明文 + 哈希双键, trim 后小写归一化哈希)。
+ *  settings 可注入(测试); 缺省读 settings.json。 */
+export function loadAccessAuth(settings?: SettingsDefaults): { plain: string; shasum: string } {
   try {
-    const s = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const s = settings ?? SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
     return {
       plain: (s.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim(),
       shasum: (s.CLAUDE_MEM_SYNC_SHASUM_VALUE ?? '').trim().toLowerCase(),
@@ -84,10 +85,10 @@ function timingSafeCompare(a: string, b: string): boolean {
 /**
  * 校验携带令牌 (X-036)。两键皆未配置 → false(调用方决定直通语义);
  * 版本头=2 → sha1(presented) 对 CLAUDE_MEM_SYNC_SHASUM_VALUE;
- * 否则 → 明文对 CLAUDE_MEM_SERVER_ACCESS_TOKEN。
+ * 否则 → 明文对 CLAUDE_MEM_SERVER_ACCESS_TOKEN。settings 可注入(测试)。
  */
-export function verifyAccessToken(req: Request, presented: string): boolean {
-  const auth = loadAccessAuth();
+export function verifyAccessToken(req: Request, presented: string, settings?: SettingsDefaults): boolean {
+  const auth = loadAccessAuth(settings);
   if (!auth.plain && !auth.shasum) return false;
   const version = String(req.headers['x-claude-mem-auth-version'] ?? '').trim();
   if (version === '2') {
