@@ -1,3 +1,85 @@
+### X-034 摘要 provider abort 误分类修复（rev 委托）
+
+OCR + 摘要层审查员发现：classifyQwenError/classifyDeepSeekError 把 fetch 中止（cause=AbortError）包装为 ClassifiedProviderError(kind=transient)，withRetry 会重试已中止的请求（会话中止时连发 3 次注定失败的 fetch）；且 isAbortError 不识别 wrapped cause，会话层把"中止"误记"失败"。
+
+- 编号：X-034
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：rev-委托（OCR + 摘要 provider 层审查员，2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：两个 classifier 检测 cause=AbortError → kind 'unrecoverable'（不重试）；isAbortError 递归识别 error.cause；测试补 abort 分类用例（qwen/deepseek 各 1）。
+- 根因分析：Why-1——中止被重试，因为 classifier 只按 status/网络错误分类，AbortError 落入网络错误 transient 分支；Why-2——会话层误记，因为 isAbortError 只比对 name 不展开 cause。
+- 影响评估：P1。会话中止触发 2 次额外重试；日志误导排障。
+- 涉及文件与行号：`src/services/worker/QwenProvider.ts`（classifyQwenError）、`src/services/worker/DeepSeekProvider.ts`（classifyDeepSeekError）、`src/services/worker/agents/FallbackErrorHandler.ts:31-50`、`tests/services/worker/qwen-provider-config.test.ts`、`tests/services/worker/deepseek-provider-config.test.ts`。
+- 关联需求：N/A
+- 实际修改位置：同上涉及文件（abort 分支 + 递归识别 + 2 测试用例）。
+- 阶段验证结果：qwen/deepseek 配置测试全绿（各含新 abort 用例）；`npm run typecheck` 0 错误。
+- 测试方法：(1) `bun test tests/services/worker/qwen-provider-config.test.ts tests/services/worker/deepseek-provider-config.test.ts` 全绿；(2) `npm run typecheck` 通过。
+- 代码修复提交：`90dcac89`
+
+### X-033 install 类型缺口与 subagent-skip mock 修复（rev 委托）
+
+审查员证实：①InstallOptions.provider 仍为三厂商联合类型，index.ts 靠 `as` 断言掩盖类型缺口；②summarize-subagent-skip.test.ts 的 worker-utils mock 缺 executeWithWorkerFallback 导出（summarize.ts:3 直接 import）且 SettingsDefaultsManager mock 的 EXCLUDED_PROJECTS 返回数组（消费端 .trim() 崩溃），实测 4/4 失败。
+
+- 编号：X-033
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：rev-委托（install/UI 审查员，2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：InstallOptions.provider 引用 ProviderId；subagent-skip mock 补 executeWithWorkerFallback 导出、EXCLUDED_PROJECTS 改字符串。
+- 根因分析：Why-1——类型缺口因 ProviderId 扩展时 InstallOptions 未同步；Why-2——mock 缺导出/错类型因被测链路持续演进而 mock 未同步（同 X-029 模式）。
+- 影响评估：P1。类型缺口使 --provider qwen/deepseek 在编译期失去保护；测试假阴性掩盖回归。
+- 涉及文件与行号：`src/npx-cli/commands/install.ts:1140-1145`、`tests/cli/handlers/summarize-subagent-skip.test.ts`。
+- 关联需求：N/A
+- 实际修改位置：同上。
+- 阶段验证结果：subagent-skip 单独 8/0 全绿；typecheck 0 错误。
+- 测试方法：(1) `bun test tests/cli/handlers/summarize-subagent-skip.test.ts` 全绿；(2) `npm run typecheck` 通过。
+- 代码修复提交：`7c710a6d`
+
+### X-032 EnvManager deepseek 写回分支与报表 claude 对齐（rev 委托）
+
+审查员证实：①saveClaudeMemEnv 缺 CLAUDE_MEM_DEEPSEEK_API_KEY 写回分支（QWEN 有对称分支），经该函数持久化的 deepseek key 被静默丢弃；②报表 claude 分支不认 CLAUDE_MEM_ANTHROPIC_API_KEY 别名（server-beta 认）；③Anthropic 调用未设 temperature（默认 1.0，其它协议 0.4）。
+
+- 编号：X-032
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：rev-委托（配置键审查员 + 报表层审查员，2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：EnvManager 补 DEEPSEEK 对称写回分支；report-provider claude 分支认别名；Anthropic 请求显式 temperature: 0.4。
+- 根因分析：Why-1——X-021 改 QWEN 写回块时未发现 DeepSeek 键在 X-016 新增后从未有写回分支；Why-2——别名与温度差异因 report-provider 三协议各自独立实现未对齐。
+- 影响评估：P1（deepseek key 经 .env 管理接口丢失）；P3（别名/温度）。
+- 涉及文件与行号：`src/shared/EnvManager.ts:181-190`、`src/services/worker/reports/report-provider.ts`（claude 分支 + callAnthropic）。
+- 关联需求：N/A
+- 实际修改位置：同上。
+- 阶段验证结果：report-provider 测试全绿；typecheck 0 错误。
+- 测试方法：(1) `bun test tests/services/worker/reports/report-provider.test.ts` 全绿；(2) `npm run typecheck` 通过。
+- 代码修复提交：`35b6d372`
+
+### X-031 server-beta Gemini 密钥改请求头 + 空 provider 语义（rev 委托）
+
+审查员证实：①X-027 只修了报表层，GeminiObservationProvider（server-beta）仍把 API key 拼 URL query（?key=），密钥入日志；②CLAUDE_MEM_PROVIDER 空串落入 unknown 告警，与报表层"空=默认语义"不一致；③report-provider.ts:8 文件头注释仍写 ?key= 与实现矛盾。
+
+- 编号：X-031
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：rev-委托（报表与 server-beta 层审查员，2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：GeminiObservationProvider 改 x-goog-api-key 头鉴权；create-server-beta-service 空串按默认 claude 静默处理；report-provider 头注释修正。
+- 根因分析：Why-1——X-027 处置报表层时 server-beta 的 Gemini 调用路径未被盘点；Why-2——空串语义两处入口未对齐。
+- 影响评估：P1（密钥日志泄漏）；P3（语义/注释）。
+- 涉及文件与行号：`src/server/generation/providers/GeminiObservationProvider.ts:67-72`、`src/server/runtime/create-server-beta-service.ts:236-239`、`src/services/worker/reports/report-provider.ts:8`。
+- 关联需求：N/A
+- 实际修改位置：同上。
+- 阶段验证结果：server 测试全绿；typecheck 0 错误。
+- 测试方法：(1) `bun test tests/server/generation/server-provider-env.test.ts` 全绿；(2) `npm run typecheck` 通过。
+- 代码修复提交：`eb97085b`
+
+### X-030 摘要 provider 层审查缺陷修复（rev 委托）
+
 ### X-030 摘要 provider 层审查缺陷修复（rev 委托）
 
 rev 审查（摘要 provider 层审查员）证实 4 项代码缺陷：①端点解析尾斜杠 bug——`/\/chat\/completions$/` 不匹配 `.../chat/completions/`（尾斜杠），会被拼成 `.../chat/completions/chat/completions`，已实测复现（Qwen/DeepSeek resolver 同缺陷）；②withRetry 超时死代码——attemptSignal 恒非空使本地 AbortController 与 90s 定时器永不生效，实际超时为 withRetry 默认 30s，与作者 90s 意图不符（Qwen 既有、DeepSeek 复制）；③isGeminiSelected/isOpenRouterSelected 精确比较与 Qwen/DeepSeek 的 toLowerCase 不一致，`"GEMINI"` 不选中而 `"QWEN"` 会选中；④afterEach 残留死代码块（X-029 清理未净）。另补端点测试三用例（base 补全/尾斜杠去重/完整路径原样）。
