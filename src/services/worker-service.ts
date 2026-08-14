@@ -933,12 +933,14 @@ export class WorkerService implements WorkerRef {
       ? (authModeRaw as 'none' | 'apikey' | 'jwt' | 'mtls')
       : 'none';
     const accessToken = (settings.CLAUDE_MEM_SYNC_ACCESS_TOKEN ?? '').trim();
+    const authVersion = (settings.CLAUDE_MEM_SYNC_AUTH_VERSION ?? '').trim();
     const agent = new SyncAgent(this.dbManager, {
       upstreamUrl: upstream,
       userLabel: resolveUserLabel(USER_SETTINGS_PATH),
       authMode,
       apiKey: settings.CLAUDE_MEM_SYNC_API_KEY || undefined,
       accessToken: accessToken || undefined,
+      authVersion: authVersion || undefined,
       intervalMs,
       batchSize,
       retryMax,

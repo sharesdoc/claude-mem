@@ -1,12 +1,11 @@
 import express, { Request, Response } from 'express';
-import { timingSafeEqual } from 'crypto';
 import { logger } from '../../../../utils/logger.js';
 import { BaseRouteHandler } from '../BaseRouteHandler.js';
 import { DatabaseManager } from '../../DatabaseManager.js';
 import { AdminSessionStore, extractBearerToken } from '../AdminSessionStore.js';
 import { ReportGenerator, upsertWeeklyReport, weekMondayOf } from '../../reports/ReportGenerator.js';
 import { mdToHtml } from '../../reports/mdToHtml.js';
-import { loopbackBypassAllowed } from '../middleware/tokenAuth.js';
+import { loopbackBypassAllowed, verifyAccessToken } from '../middleware/tokenAuth.js';
 import {
   runPool, batchConcurrency, createBatchJob, recordOutcome, finishBatchJob, getBatchJob,
   weekEndEpoch, isPeriodComplete, rosterAllUsers, activeUsersInRange, userHasActivity, type BatchOutcome,
@@ -61,12 +60,8 @@ export class ReportRoutes extends BaseRouteHandler {
   private authorized(req: Request): boolean {
     if (!this.requireAuth) return true;
     const presented = extractBearerToken(req) ?? (typeof req.query.token === 'string' ? req.query.token : '');
-    const expected = (this.serverAccessToken ?? '').trim();
-    if (expected && presented && presented.length <= 256) {
-      const a = Buffer.alloc(256, 0); Buffer.from(presented, 'ascii').copy(a);
-      const b = Buffer.alloc(256, 0); Buffer.from(expected, 'ascii').copy(b);
-      if (timingSafeEqual(a, b)) return true;
-    }
+    // X-036: 明文/哈希双轨校验统一走 tokenAuth.verifyAccessToken。
+    if (presented && verifyAccessToken(req, presented)) return true;
     if (this.adminSessions && presented && this.adminSessions.verify(presented)) return true;
     // X-005: loopback operator with local auto-login enabled needs no token —
     // mirrors the API gate and tokenAuth so the stats page's weekly-report

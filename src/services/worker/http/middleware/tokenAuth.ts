@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'crypto';
+import { timingSafeEqual, createHash } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 import { logger } from '../../../../utils/logger.js';
 import type { AdminSessionStore } from '../AdminSessionStore.js';
@@ -46,19 +46,66 @@ export function loopbackBypassAllowed(req: Request): boolean {
  *
  * Constant-time comparison prevents timing side-channel leakage of the
  * token length / prefix.
+ *
+ * X-036: 双轨迁移——服务端除明文键 CLAUDE_MEM_SERVER_ACCESS_TOKEN 外新增
+ * CLAUDE_MEM_SYNC_SHASUM_VALUE(共享令牌的 sha1 十六进制)。请求头
+ * X-Claude-Mem-Auth-Version: 2 走新路径 sha1(presented) 恒时比对哈希;
+ * 无该头走老路径明文恒时比对。两键皆空仍为"未配置直通"(调用方处理)。
  */
+
+/** 共享令牌的 sha1 十六进制(与 shasum 命令输出一致, 40 位小写)。 */
+export function sha1Hex(value: string): string {
+  return createHash('sha1').update(value).digest('hex');
+}
+
+/** 服务端令牌鉴权配置(明文 + 哈希双键, trim 后小写归一化哈希)。 */
+export function loadAccessAuth(): { plain: string; shasum: string } {
+  try {
+    const s = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    return {
+      plain: (s.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim(),
+      shasum: (s.CLAUDE_MEM_SYNC_SHASUM_VALUE ?? '').trim().toLowerCase(),
+    };
+  } catch {
+    return { plain: '', shasum: '' };
+  }
+}
+
+/** 恒时十六进制/ASCII 比对(补齐至 256 字节防长度侧信道)。 */
+function timingSafeCompare(a: string, b: string): boolean {
+  const MAX = 256;
+  const ab = Buffer.alloc(MAX, 0);
+  Buffer.from(a.slice(0, MAX), 'ascii').copy(ab);
+  const bb = Buffer.alloc(MAX, 0);
+  Buffer.from(b.slice(0, MAX), 'ascii').copy(bb);
+  return timingSafeEqual(ab, bb);
+}
+
+/**
+ * 校验携带令牌 (X-036)。两键皆未配置 → false(调用方决定直通语义);
+ * 版本头=2 → sha1(presented) 对 CLAUDE_MEM_SYNC_SHASUM_VALUE;
+ * 否则 → 明文对 CLAUDE_MEM_SERVER_ACCESS_TOKEN。
+ */
+export function verifyAccessToken(req: Request, presented: string): boolean {
+  const auth = loadAccessAuth();
+  if (!auth.plain && !auth.shasum) return false;
+  const version = String(req.headers['x-claude-mem-auth-version'] ?? '').trim();
+  if (version === '2') {
+    if (!auth.shasum) return false;
+    return timingSafeCompare(sha1Hex(presented), auth.shasum);
+  }
+  if (!auth.plain) return false;
+  return timingSafeCompare(presented, auth.plain);
+}
+
 export function tokenAuth(serverToken: string, adminSessions?: AdminSessionStore) {
-  const expected = (serverToken ?? '').trim();
   const hasAdminFallback = adminSessions !== undefined;
+  const auth = loadAccessAuth();
 
   // No authenticator configured at all → pass through (standalone / client).
-  if (!expected && !hasAdminFallback) {
+  if (!auth.plain && !auth.shasum && !hasAdminFallback) {
     return (_req: Request, _res: Response, next: NextFunction): void => next();
   }
-
-  const MAX = 256;
-  const expectedBuf = Buffer.alloc(MAX, 0);
-  Buffer.from(expected.slice(0, MAX), 'ascii').copy(expectedBuf);
 
   return (req: Request, res: Response, next: NextFunction): void => {
     const header = extractBearer(req);
@@ -78,14 +125,10 @@ export function tokenAuth(serverToken: string, adminSessions?: AdminSessionStore
       return;
     }
 
-    // 1) Try static access token (constant-time comparison).
-    if (expected) {
-      const userBuf = Buffer.alloc(MAX, 0);
-      Buffer.from(header.slice(0, MAX), 'ascii').copy(userBuf);
-      if (timingSafeEqual(userBuf, expectedBuf)) {
-        next();
-        return;
-      }
+    // 1) Try static access token (X-036: 明文/哈希双轨, 恒时比对).
+    if (verifyAccessToken(req, header)) {
+      next();
+      return;
     }
 
     // 2) Fall back to admin session token (viewer login).

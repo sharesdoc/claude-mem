@@ -108,6 +108,14 @@ export interface SettingsDefaults {
   CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: string;
   CLAUDE_MEM_SERVER_REQUIRE_TLS: string;
   CLAUDE_MEM_SYNC_ACCESS_TOKEN: string;        // client-side copy of the shared secret
+  /** Server-side sha1 hash of the shared token (X-036). v2 clients present the
+   *  plaintext + X-Claude-Mem-Auth-Version: 2; server compares sha1(presented)
+   *  against this value so the plaintext no longer needs to live on the server
+   *  once legacy clients are retired. */
+  CLAUDE_MEM_SYNC_SHASUM_VALUE: string;
+  /** Client-side auth version (X-036). '2' = send X-Claude-Mem-Auth-Version: 2
+   *  and authenticate against the server-side shasum value. Empty = legacy. */
+  CLAUDE_MEM_SYNC_AUTH_VERSION: string;
 
   // ── Weekly work report ──────────────────────────────────────────────
   CLAUDE_MEM_WEEKLY_REPORT_ENABLED: string;    // 'true' | 'false' — daily auto-generation switch
@@ -235,6 +243,8 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: '1000',
     CLAUDE_MEM_SERVER_REQUIRE_TLS: 'false',
     CLAUDE_MEM_SYNC_ACCESS_TOKEN: '',                        // client copy of the same shared secret
+    CLAUDE_MEM_SYNC_SHASUM_VALUE: '',                        // server-side sha1 of the token (X-036); empty = v2 disabled
+    CLAUDE_MEM_SYNC_AUTH_VERSION: '',                        // client auth version (X-036); '2' = shasum path, empty = legacy
 
     CLAUDE_MEM_WEEKLY_REPORT_ENABLED: 'true',               // daily auto-generation of weekly work reports
     CLAUDE_MEM_WEEKLY_REPORT_TIME: '13:00',                 // local HH:MM to refresh this week's report

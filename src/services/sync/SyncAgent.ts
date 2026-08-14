@@ -32,6 +32,9 @@ export interface SyncAgentConfig {
   apiKey?: string;
   /** Shared access token for LAN deployments (simpler than apiKey). */
   accessToken?: string;
+  /** X-036: '2' = 请求带 X-Claude-Mem-Auth-Version: 2, 服务端按 sha1(携带值)
+   *  对 CLAUDE_MEM_SYNC_SHASUM_VALUE 校验; 空 = 老明文逻辑。 */
+  authVersion?: string;
   intervalMs: number;
   batchSize: number;
   retryMax: number;
@@ -202,6 +205,10 @@ export class SyncAgent {
       headers['authorization'] = `Bearer ${this.config.accessToken}`;
     } else if (this.config.authMode === 'apikey' && this.config.apiKey) {
       headers['authorization'] = `Bearer ${this.config.apiKey}`;
+    }
+    // X-036: 版本化鉴权——'2' 声明走服务端哈希校验路径。
+    if (this.config.authVersion === '2') {
+      headers['x-claude-mem-auth-version'] = '2';
     }
 
     const response = await this.fetchImpl(url, {
