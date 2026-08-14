@@ -112,13 +112,31 @@ export interface SettingsDefaults {
   // ── Weekly work report ──────────────────────────────────────────────
   CLAUDE_MEM_WEEKLY_REPORT_ENABLED: string;    // 'true' | 'false' — daily auto-generation switch
   CLAUDE_MEM_WEEKLY_REPORT_TIME: string;        // local 'HH:MM' to refresh this week's report (default 13:00)
-  CLAUDE_MEM_WEEKLY_REPORT_MODEL: string;       // Qwen model for the AI "highlights" section
-  /** Aliyun DashScope API key for Qwen weekly-report synthesis. The env var
-   *  CLAUDE_MEM_REPORT_QWEN_API_KEY (if set) always takes precedence over this file value. */
+  CLAUDE_MEM_WEEKLY_REPORT_MODEL: string;       // [deprecated X-021] Qwen model for the AI "highlights" section
+  /** [deprecated X-021] Aliyun DashScope API key for Qwen weekly-report synthesis. */
   CLAUDE_MEM_REPORT_QWEN_API_KEY: string;
-  /** Qwen model id for the observation/summary provider (DashScope). Empty falls
+  /** Report AI provider selector: 'claude' | 'qwen' | 'gemini' | 'openrouter' | 'deepseek'.
+   *  Empty = AI section disabled (pure data summary). Model/key reuse the provider group below. */
+  CLAUDE_MEM_REPORT_PROVIDER: string;
+
+  // ── Qwen provider group (OpenAI-compatible protocol only) ───────────
+  /** Qwen model id for observation/summary + report synthesis. Empty falls
    *  back to QwenProvider's DEFAULT_MODEL. */
   CLAUDE_MEM_QWEN_MODEL: string;
+  /** DashScope API key for Qwen. Empty = provider unavailable. */
+  CLAUDE_MEM_QWEN_API_KEY: string;
+  /** OpenAI-compatible endpoint. Empty = DashScope compatible-mode URL
+   *  (https://dashscope.aliyuncs.com/compatible-mode/v1). Caller is responsible
+   *  for supplying an OpenAI-compatible endpoint when overridden. */
+  CLAUDE_MEM_QWEN_URL: string;
+
+  // ── DeepSeek provider group (OpenAI-compatible protocol) ────────────
+  /** DeepSeek API key. Empty = provider unavailable. */
+  CLAUDE_MEM_DEEPSEEK_API_KEY: string;
+  /** DeepSeek model id. deepseek-chat alias retired 2026-07-24; use the v4 series. */
+  CLAUDE_MEM_DEEPSEEK_MODEL: string;
+  /** OpenAI-compatible endpoint. Empty = https://api.deepseek.com */
+  CLAUDE_MEM_DEEPSEEK_URL: string;
 }
 
 export class SettingsDefaultsManager {
@@ -223,9 +241,15 @@ export class SettingsDefaultsManager {
 
     CLAUDE_MEM_WEEKLY_REPORT_ENABLED: 'true',               // daily auto-generation of weekly work reports
     CLAUDE_MEM_WEEKLY_REPORT_TIME: '13:00',                 // local HH:MM to refresh this week's report
-    CLAUDE_MEM_WEEKLY_REPORT_MODEL: 'qwen3-max',           // Qwen model for the AI report synthesis
-    CLAUDE_MEM_REPORT_QWEN_API_KEY: '',                     // Aliyun DashScope key; env CLAUDE_MEM_REPORT_QWEN_API_KEY overrides this. Empty = AI synthesis disabled.
+    CLAUDE_MEM_WEEKLY_REPORT_MODEL: 'qwen3-max',           // [deprecated X-021] Qwen model for the AI report synthesis
+    CLAUDE_MEM_REPORT_QWEN_API_KEY: '',                     // [deprecated X-021] Aliyun DashScope key for report synthesis.
+    CLAUDE_MEM_REPORT_PROVIDER: '',                         // Report AI provider; empty = AI section disabled.
     CLAUDE_MEM_QWEN_MODEL: '',                              // Qwen provider model id; empty falls back to QwenProvider DEFAULT_MODEL.
+    CLAUDE_MEM_QWEN_API_KEY: '',                            // DashScope key for Qwen; empty = provider unavailable.
+    CLAUDE_MEM_QWEN_URL: '',                                // OpenAI-compatible endpoint; empty = DashScope compatible-mode URL.
+    CLAUDE_MEM_DEEPSEEK_API_KEY: '',                        // DeepSeek key; empty = provider unavailable.
+    CLAUDE_MEM_DEEPSEEK_MODEL: 'deepseek-v4-flash',        // deepseek-chat alias retired 2026-07-24.
+    CLAUDE_MEM_DEEPSEEK_URL: 'https://api.deepseek.com',   // OpenAI-compatible endpoint.
   };
 
   static getAllDefaults(): SettingsDefaults {
