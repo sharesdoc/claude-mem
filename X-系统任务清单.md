@@ -1,3 +1,25 @@
+### X-026 SettingsRoutes provider 校验的 type-confusion 与校验-消费差异（rev 委托）
+
+后台安全审查（X-018 提交 f25e6825）发现 3 个问题，其中 2 个为本次引入缺陷、1 个为预存模式观察：①sensitive-data-exfiltration——GET /api/settings 返回含 API key 的完整配置，经核对属预存模式（GEMINI/OPENROUTER key 历来如此，worker 默认 127.0.0.1 绑定），本次仅新增同类键、未引入新暴露类，记观察不修；②type-confusion-crash——isValidProviderValue 对非字符串输入（如 `{"CLAUDE_MEM_PROVIDER":123}`）执行 `.trim()` 抛 TypeError，请求处理器崩溃，旧实现 `Array.includes` 无此问题，系 X-018 回归；③validator-consumer-differential——校验用 trim+toLowerCase 归一化，但写入路径存原始值，Gemini/OpenRouter 的 is*Selected 用精确相等比较，导致 `" GEMINI "` 这类值校验通过却静默回落 claude。
+
+- 编号：X-026
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已验证-关闭
+- 来源：rev-委托（后台安全审查，2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：isValidProviderValue 增加非字符串守卫（typeof 检查，非字符串→false 拒绝而非崩溃）；新增导出 normalizeProviderValue(value: unknown): string | undefined（trim+toLowerCase，空→undefined）；handleUpdateSettings 写入前对 CLAUDE_MEM_PROVIDER/CLAUDE_MEM_REPORT_PROVIDER 做归一化落盘（undefined→删键回落默认），消除校验-消费差异。
+- 根因分析：Why-1——非字符串输入导致崩溃，因为 isValidProviderValue 参数声明为 string|undefined 但对 req.body 任意值直接调用 .trim()；Why-2——旧实现用 Array.includes 天然容忍任意类型，X-018 重写时未加类型守卫；Why-3——校验-消费差异存在，因为校验归一化只在判定时生效、落盘值未归一化；Why-4——Gemini/OpenRouter 的 is*Selected 沿用历史精确比较，未随 X-018 统一为 toLowerCase。
+- 影响评估：P1。非法类型请求可致 /api/settings 处理器崩溃（500）；大小写/空白差异可致 provider 配置静默失效（回落 claude），用户难察觉。
+- 涉及文件与行号：`src/services/worker/http/routes/SettingsRoutes.ts:29-37,198-205`、`tests/services/worker/settings-provider-validation.test.ts`。
+- 关联需求：N/A
+- 实现/解决方案：isValidProviderValue 加 typeof 守卫（非字符串→false）；新增导出 normalizeProviderValue（trim+toLowerCase，空/非字符串→undefined）；handleUpdateSettings 写入前对两个 provider 键归一化落盘（undefined→删键回落默认）。
+- 实际修改位置：`src/services/worker/http/routes/SettingsRoutes.ts:31-53`（normalizeProviderValue 新增 + isValidProviderValue 类型守卫）、`src/services/worker/http/routes/SettingsRoutes.ts:128-137`（写入归一化）、`tests/services/worker/settings-provider-validation.test.ts`（新增 6 用例：非字符串拒绝 + normalizeProviderValue 3 组）。
+- 阶段验证结果：RED——模块加载失败（normalizeProviderValue 不存在，0 pass/1 fail/1 error）；GREEN——9 pass/0 fail；`npm run typecheck` 0 错误；`bun test tests/services/worker/` 70 pass/0 fail。
+- 测试方法：(1) `bun test tests/services/worker/settings-provider-validation.test.ts` 全绿；(2) `bun test tests/services/worker/` 无新增失败；(3) `npm run typecheck` 通过。
+- 代码修复提交：`02c9b78c`
+- 关闭时间：2026-08-15 00:35
+
 ### X-019 报表 provider 工厂化（大模型配置统一化 T-05）
 
 现状调查：两个报表生成器（ReportGenerator/DailyReportGenerator）各自内嵌 resolveApiKey（读旧键 CLAUDE_MEM_REPORT_QWEN_API_KEY）+ callQwen（硬编码 DashScope 端点），模型由路由层（ReportRoutes/DailyReportRoutes 的 model() 方法）与 ReportScheduler 读 CLAUDE_MEM_WEEKLY_REPORT_MODEL 传入——旧键消费点共 6 处。设计（TODO T-05）要求报表改读 CLAUDE_MEM_REPORT_PROVIDER（空=AI 段禁用），模型/key 复用厂商组，支持 5 厂商。实现为共享模块 report-provider.ts：配置解析（复用 Qwen/DeepSeek 的 resolve* 纯函数）+ 三协议单次调用分发（OpenAI 兼容= qwen/deepseek/openrouter；Anthropic Messages= claude；generateContent= gemini）。generate() 的 model 参数随之删除（配置自解析），GeneratedReport.model 元数据由解析结果填充。
