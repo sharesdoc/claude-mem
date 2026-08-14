@@ -4,8 +4,8 @@ import { existsSync } from 'fs';
 import { logger } from '../../utils/logger.js';
 import { SettingsDefaultsManager, type SettingsDefaults } from '../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../shared/paths.js';
-import { resolveQwenApiKey, resolveQwenEndpoint, resolveQwenModel } from '../../services/worker/QwenProvider.js';
-import { resolveDeepSeekApiKey, resolveDeepSeekEndpoint, resolveDeepSeekModel } from '../../services/worker/DeepSeekProvider.js';
+import { resolveQwenApiKey, resolveQwenEndpoint, resolveQwenModel, DASHSCOPE_URL } from '../../services/worker/QwenProvider.js';
+import { resolveDeepSeekApiKey, resolveDeepSeekEndpoint, resolveDeepSeekModel, DEEPSEEK_COMPLETIONS_URL } from '../../services/worker/DeepSeekProvider.js';
 import { createPostgresStorageRepositories, getSharedPostgresPool, SERVER_BETA_POSTGRES_SCHEMA_VERSION } from '../../storage/postgres/index.js';
 import { bootstrapServerBetaPostgresSchema } from '../../storage/postgres/schema.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
@@ -233,6 +233,15 @@ function buildGenerationWorkerManager(
   });
 }
 
+// X-028: 自定义端点告警——可配置端点属设计取舍(本地 vLLM/Ollama 场景),
+// 无法用地址白名单解决 SSRF 类风险; 端点非内置默认值时 WARN 提示 key 将发往该主机。
+function warnServerCustomEndpoint(provider: string, endpoint: string, defaultEndpoint: string): void {
+  if (endpoint === defaultEndpoint) return;
+  let host = endpoint;
+  try { host = new URL(endpoint).host; } catch { /* 保持原样打印 */ }
+  logger.warn('SYSTEM', `custom ${provider} endpoint configured — API key will be sent to ${host}`, {});
+}
+
 // X-020: server-beta 的生成 provider 与经典 worker 统一读 CLAUDE_MEM_PROVIDER
 // (未配置默认 claude), 模型取各厂商配置组。claude 分支仅认 API key——
 // 服务器不碰个人 OAuth 登录态(多租户防烧订阅), 缺 key → 生成禁用 + WARN。
@@ -265,22 +274,16 @@ export function buildServerGenerationProviderFromEnv(settings?: SettingsDefaults
     if (provider === 'qwen') {
       const apiKey = resolveQwenApiKey(s);
       if (!apiKey) return null;
-      return new OpenRouterObservationProvider({
-        apiKey,
-        model: resolveQwenModel(s),
-        baseUrl: resolveQwenEndpoint(s),
-        providerLabel: 'qwen',
-      });
+      const baseUrl = resolveQwenEndpoint(s);
+      warnServerCustomEndpoint('qwen', baseUrl, DASHSCOPE_URL);
+      return new OpenRouterObservationProvider({ apiKey, model: resolveQwenModel(s), baseUrl, providerLabel: 'qwen' });
     }
     if (provider === 'deepseek') {
       const apiKey = resolveDeepSeekApiKey(s);
       if (!apiKey) return null;
-      return new OpenRouterObservationProvider({
-        apiKey,
-        model: resolveDeepSeekModel(s),
-        baseUrl: resolveDeepSeekEndpoint(s),
-        providerLabel: 'deepseek',
-      });
+      const baseUrl = resolveDeepSeekEndpoint(s);
+      warnServerCustomEndpoint('deepseek', baseUrl, DEEPSEEK_COMPLETIONS_URL);
+      return new OpenRouterObservationProvider({ apiKey, model: resolveDeepSeekModel(s), baseUrl, providerLabel: 'deepseek' });
     }
   } catch {
     return null;

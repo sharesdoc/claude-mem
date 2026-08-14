@@ -29,7 +29,7 @@ import { withRetry } from './retry.js';
 //                                        已于 2026-07-24 停用)
 // ---------------------------------------------------------------------------
 
-const DEEPSEEK_COMPLETIONS_URL = 'https://api.deepseek.com/chat/completions';
+export const DEEPSEEK_COMPLETIONS_URL = 'https://api.deepseek.com/chat/completions';
 const DEFAULT_MODEL = 'deepseek-v4-flash';
 const AI_TIMEOUT_MS = 90000;
 

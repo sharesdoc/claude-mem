@@ -5,6 +5,8 @@ import { buildServerGenerationProviderFromEnv } from '../../../src/server/runtim
 import { SettingsDefaultsManager } from '../../../src/shared/SettingsDefaultsManager.js';
 import { OpenRouterObservationProvider } from '../../../src/server/generation/providers/OpenRouterObservationProvider.js';
 import type { ServerGenerationContext } from '../../../src/server/generation/providers/shared/types.js';
+import { DASHSCOPE_URL } from '../../../src/services/worker/QwenProvider.js';
+import { DEEPSEEK_COMPLETIONS_URL } from '../../../src/services/worker/DeepSeekProvider.js';
 
 // X-020: server-beta 生成 provider 合并到 CLAUDE_MEM_PROVIDER。
 // 验收标准转写:
@@ -111,6 +113,12 @@ describe('buildServerGenerationProviderFromEnv (X-020)', () => {
     const provider = buildServerGenerationProviderFromEnv(freshSettings());
     expect(provider).not.toBeNull();
     expect(provider!.providerLabel).toBe('claude');
+  });
+
+  // X-028: 默认端点常量契约——自定义端点告警的比较基准, 变更默认值必须同步。
+  it('should keep the built-in default endpoint constants stable', () => {
+    expect(DASHSCOPE_URL).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions');
+    expect(DEEPSEEK_COMPLETIONS_URL).toBe('https://api.deepseek.com/chat/completions');
   });
 });
 
