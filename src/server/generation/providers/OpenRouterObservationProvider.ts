@@ -22,6 +22,10 @@ export interface OpenRouterObservationProviderOptions {
   siteUrl?: string;
   appName?: string;
   fetchImpl?: typeof fetch;
+  // X-020: 泛化参数——OpenAI 兼容的其它厂商 (qwen/deepseek) 复用本实现,
+  // 只需换端点与 providerLabel; 缺省保持 OpenRouter 原行为。
+  baseUrl?: string;
+  providerLabel?: 'openrouter' | 'qwen' | 'deepseek';
 }
 
 interface OpenRouterResponse {
@@ -31,12 +35,13 @@ interface OpenRouterResponse {
 }
 
 export class OpenRouterObservationProvider implements ServerGenerationProvider {
-  readonly providerLabel = 'openrouter' as const;
+  readonly providerLabel: 'openrouter' | 'qwen' | 'deepseek';
   private readonly apiKey: string;
   private readonly model: string;
   private readonly maxOutputTokens: number;
   private readonly siteUrl: string;
   private readonly appName: string;
+  private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
   constructor(options: OpenRouterObservationProviderOptions) {
@@ -51,6 +56,8 @@ export class OpenRouterObservationProvider implements ServerGenerationProvider {
     this.maxOutputTokens = options.maxOutputTokens ?? 4096;
     this.siteUrl = options.siteUrl ?? 'https://github.com/thedotmack/claude-mem';
     this.appName = options.appName ?? 'claude-mem';
+    this.baseUrl = options.baseUrl ?? OPENROUTER_API_URL;
+    this.providerLabel = options.providerLabel ?? 'openrouter';
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -69,7 +76,7 @@ export class OpenRouterObservationProvider implements ServerGenerationProvider {
 
     let response: Response;
     try {
-      response = await this.fetchImpl(OPENROUTER_API_URL, {
+      response = await this.fetchImpl(this.baseUrl, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${this.apiKey}`,

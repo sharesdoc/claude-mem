@@ -2,6 +2,10 @@
 
 import { existsSync } from 'fs';
 import { logger } from '../../utils/logger.js';
+import { SettingsDefaultsManager, type SettingsDefaults } from '../../shared/SettingsDefaultsManager.js';
+import { USER_SETTINGS_PATH } from '../../shared/paths.js';
+import { resolveQwenApiKey, resolveQwenEndpoint, resolveQwenModel } from '../../services/worker/QwenProvider.js';
+import { resolveDeepSeekApiKey, resolveDeepSeekEndpoint, resolveDeepSeekModel } from '../../services/worker/DeepSeekProvider.js';
 import { createPostgresStorageRepositories, getSharedPostgresPool, SERVER_BETA_POSTGRES_SCHEMA_VERSION } from '../../storage/postgres/index.js';
 import { bootstrapServerBetaPostgresSchema } from '../../storage/postgres/schema.js';
 import type { PostgresPool } from '../../storage/postgres/pool.js';
@@ -219,7 +223,7 @@ function buildGenerationWorkerManager(
   const provider = injectedProvider ?? buildServerGenerationProviderFromEnv();
   if (!provider) {
     return new DisabledServerBetaGenerationWorkerManager(
-      'no server generation provider configured; set CLAUDE_MEM_SERVER_PROVIDER and the matching API key to enable.',
+      'no server generation provider configured; set CLAUDE_MEM_PROVIDER and the matching API key to enable.',
     );
   }
   return new ActiveServerBetaGenerationWorkerManager({
@@ -229,34 +233,59 @@ function buildGenerationWorkerManager(
   });
 }
 
-function buildServerGenerationProviderFromEnv(): ServerGenerationProvider | null {
-  const provider = (process.env.CLAUDE_MEM_SERVER_PROVIDER ?? '').trim().toLowerCase();
-  if (!provider) return null;
+// X-020: server-beta 的生成 provider 与经典 worker 统一读 CLAUDE_MEM_PROVIDER
+// (未配置默认 claude), 模型取各厂商配置组。claude 分支仅认 API key——
+// 服务器不碰个人 OAuth 登录态(多租户防烧订阅), 缺 key → 生成禁用 + WARN。
+// settings 参数可注入(测试), 缺省读 settings.json (env 覆盖由 loadFromFile 处理)。
+export function buildServerGenerationProviderFromEnv(settings?: SettingsDefaults): ServerGenerationProvider | null {
+  const s = settings ?? SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+  const provider = (s.CLAUDE_MEM_PROVIDER ?? 'claude').trim().toLowerCase();
   try {
     if (provider === 'claude' || provider === 'anthropic') {
       const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.CLAUDE_MEM_ANTHROPIC_API_KEY ?? '';
-      if (!apiKey) return null;
-      const opts: { apiKey: string; model?: string } = { apiKey };
-      if (process.env.CLAUDE_MEM_SERVER_MODEL) opts.model = process.env.CLAUDE_MEM_SERVER_MODEL;
-      return new ClaudeObservationProvider(opts);
+      if (!apiKey) {
+        logger.warn('SYSTEM', 'server-beta generation disabled: provider=claude requires ANTHROPIC_API_KEY (OAuth login state is not consumed server-side)', {});
+        return null;
+      }
+      const model = (s.CLAUDE_MEM_MODEL ?? '').trim();
+      return new ClaudeObservationProvider({ apiKey, ...(model ? { model } : {}) });
     }
     if (provider === 'gemini') {
-      const apiKey = process.env.GEMINI_API_KEY ?? process.env.CLAUDE_MEM_GEMINI_API_KEY ?? '';
+      const apiKey = process.env.GEMINI_API_KEY ?? process.env.CLAUDE_MEM_GEMINI_API_KEY ?? (s.CLAUDE_MEM_GEMINI_API_KEY ?? '').trim();
       if (!apiKey) return null;
-      const opts: { apiKey: string; model?: string } = { apiKey };
-      if (process.env.CLAUDE_MEM_SERVER_MODEL) opts.model = process.env.CLAUDE_MEM_SERVER_MODEL;
-      return new GeminiObservationProvider(opts);
+      const model = (s.CLAUDE_MEM_GEMINI_MODEL ?? '').trim();
+      return new GeminiObservationProvider({ apiKey, ...(model ? { model } : {}) });
     }
     if (provider === 'openrouter') {
-      const apiKey = process.env.OPENROUTER_API_KEY ?? process.env.CLAUDE_MEM_OPENROUTER_API_KEY ?? '';
+      const apiKey = process.env.OPENROUTER_API_KEY ?? process.env.CLAUDE_MEM_OPENROUTER_API_KEY ?? (s.CLAUDE_MEM_OPENROUTER_API_KEY ?? '').trim();
       if (!apiKey) return null;
-      const opts: { apiKey: string; model?: string } = { apiKey };
-      if (process.env.CLAUDE_MEM_SERVER_MODEL) opts.model = process.env.CLAUDE_MEM_SERVER_MODEL;
-      return new OpenRouterObservationProvider(opts);
+      const model = (s.CLAUDE_MEM_OPENROUTER_MODEL ?? '').trim();
+      return new OpenRouterObservationProvider({ apiKey, ...(model ? { model } : {}) });
+    }
+    if (provider === 'qwen') {
+      const apiKey = resolveQwenApiKey(s);
+      if (!apiKey) return null;
+      return new OpenRouterObservationProvider({
+        apiKey,
+        model: resolveQwenModel(s),
+        baseUrl: resolveQwenEndpoint(s),
+        providerLabel: 'qwen',
+      });
+    }
+    if (provider === 'deepseek') {
+      const apiKey = resolveDeepSeekApiKey(s);
+      if (!apiKey) return null;
+      return new OpenRouterObservationProvider({
+        apiKey,
+        model: resolveDeepSeekModel(s),
+        baseUrl: resolveDeepSeekEndpoint(s),
+        providerLabel: 'deepseek',
+      });
     }
   } catch {
     return null;
   }
+  logger.warn('SYSTEM', `server-beta generation disabled: unknown CLAUDE_MEM_PROVIDER "${provider}"`, {});
   return null;
 }
 
