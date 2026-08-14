@@ -1,3 +1,23 @@
+### X-029 测试基础设施修复：mock 泄漏与 stale mock（X-025 验证发现）
+
+全量测试验证（X-025）发现本批次新测试在整跑中 33 例失败，根因两级：①预存缺陷——tests/cli/handlers/ 三个文件的 mock.module(SettingsDefaultsManager/worker-utils/transcript-parser) 缺少被测链路的命名导出（fetchWithTimeout、isWorkerFallback、extractLastAssistantEntry 等），该套件本就 32/34 预存失败；且 bun 并发执行时 mock.module 跨文件泄漏到同进程其它测试文件，使 SettingsDefaultsManager.getAllDefaults 变为 undefined，波及本批次新测试与既有 settings-defaults-manager 测试；②本批次新测试对共享模块与真实凭证库（~/.claude-mem/.env）的隐式依赖，在并发污染下不稳定。修复分两层：补全 stale mock 导出 + mock.restore；新测试改为纯对象构造（不 import SettingsDefaultsManager 值导入）+ CLAUDE_MEM_ENV_FILE 指向不存在路径的凭证库隔离 + 真实 defaults 断言加未 mock 守卫（skipIf）。修复后整跑 120 fail（基线 a57fa387 为 133 fail），本批次新测试整跑 0 失败；CORS 用例整跑失败经单独运行 15/15 全绿确认为预存顺序/端口抖动，与本批次无关。
+
+- 编号：X-029
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：X-025 全量测试验证（2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：补全三个 cli/handlers 测试文件的 mock 命名导出与 mock.restore；五个新测试文件改纯对象构造 + 凭证库隔离 + skipIf 守卫。
+- 根因分析：Why-1——新测试整跑失败，因为 bun 并发执行时他文件 mock.module 泄漏到本文件；Why-2——泄漏存在，因为 bun 1.3.12 的 mock 注册表在同进程多文件间共享且原测试文件从不 restore；Why-3——泄漏恰好致命，因为新测试依赖 SettingsDefaultsManager.getAllDefaults（被 mock 对象无此方法）；Why-4——"空 key"断言失败，因为 resolver 三级回脱的凭证库一级读真实 ~/.claude-mem/.env（或被他测试污染的 CLAUDE_MEM_ENV_FILE）；Why-5——cli/handlers 套件自身预存失败，因为被测链路新增的命名导出（fetchWithTimeout 等）从未同步进 mock 工厂。
+- 影响评估：P1（测试可靠性）。整跑中本批次测试 33 例假阳性，掩盖真实回归信号。
+- 涉及文件与行号：`tests/cli/handlers/summarize-tag-stripping.test.ts`、`tests/cli/handlers/summarize-subagent-skip.test.ts`、`tests/cli/handlers/file-edit-observer-session-skip.test.ts`、`tests/services/worker/deepseek-provider-config.test.ts`、`tests/services/worker/qwen-provider-config.test.ts`、`tests/services/worker/reports/report-provider.test.ts`、`tests/server/generation/server-provider-env.test.ts`、`tests/shared/llm-provider-settings.test.ts`。
+- 关联需求：N/A
+- 实际修改位置：三个 cli/handlers 文件（worker-utils mock 补 fetchWithTimeout/isWorkerFallback；transcript-parser mock 补 extractLastMessageFromJsonl/extractLastAssistantEntry/computePerTurnActivity；afterAll mock.restore）；五个新测试文件（SettingsDefaultsManager 值导入改 type 导入 + {} as unknown as SettingsDefaults 纯对象构造；beforeEach CLAUDE_MEM_ENV_FILE 指向不存在路径 + afterEach 恢复；llm-provider-settings 加 skipIf(!REAL_DEFAULTS_AVAILABLE) 守卫）。
+- 阶段验证结果：整跑 153→120 fail（基线 133），本批次新测试整跑 0 失败；`npm run typecheck` 0 错误；CORS 用例单独运行 15/15 全绿（整跑失败为预存端口/顺序抖动）；cli/handlers 套件 32→16 fail（其余失败源于嵌套 claude-mem.github 重复目录干扰 bun 路径解析，预存环境问题）。
+- 测试方法：(1) `bun test` 整跑本批次测试文件零失败；(2) `bun test tests/cli/handlers/summarize-tag-stripping.test.ts` 单独全绿；(3) `npm run typecheck` 通过。
+- 代码修复提交：`722bd891`
+
 ### X-024 文档同步（大模型配置统一化 T-10）
 
 现状调查：CLAUDE.md/README/docs 中无旧键残留（历史文档从未记录 REPORT_QWEN_API_KEY 等键），任务收敛为新增统一 provider 架构文档。docs/public/configuration.mdx 的 provider 表仅三厂商（:17），是公开文档的主要缺口。
