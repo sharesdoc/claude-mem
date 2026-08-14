@@ -43,6 +43,26 @@ export interface SyncAgentConfig {
 
 export type FetchFn = typeof fetch;
 
+/**
+ * X-037: 鉴权头构建抽为纯函数(可测)。
+ * 版本头仅随 accessToken 分支发送——apikey/jwt/mtls 模式下误配
+ * AUTH_VERSION='2' 不得让服务端按 sha1(apiKey) 比对而拒绝。
+ */
+export function buildSyncAuthHeaders(
+  config: Pick<SyncAgentConfig, 'accessToken' | 'authMode' | 'apiKey' | 'authVersion'>,
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (config.accessToken) {
+    headers['authorization'] = `Bearer ${config.accessToken}`;
+    if (config.authVersion === '2') {
+      headers['x-claude-mem-auth-version'] = '2';
+    }
+  } else if (config.authMode === 'apikey' && config.apiKey) {
+    headers['authorization'] = `Bearer ${config.apiKey}`;
+  }
+  return headers;
+}
+
 interface IngestResponse {
   applied: Record<string, unknown>;
   next_watermark: Partial<SyncState['watermark']>;
@@ -199,17 +219,8 @@ export class SyncAgent {
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       'x-sync-user': this.config.userLabel,
+      ...buildSyncAuthHeaders(this.config),
     };
-    // Access token (LAN shared secret) takes priority over apiKey.
-    if (this.config.accessToken) {
-      headers['authorization'] = `Bearer ${this.config.accessToken}`;
-    } else if (this.config.authMode === 'apikey' && this.config.apiKey) {
-      headers['authorization'] = `Bearer ${this.config.apiKey}`;
-    }
-    // X-036: 版本化鉴权——'2' 声明走服务端哈希校验路径。
-    if (this.config.authVersion === '2') {
-      headers['x-claude-mem-auth-version'] = '2';
-    }
 
     const response = await this.fetchImpl(url, {
       method: 'POST',

@@ -55,6 +55,19 @@ describe('verifyAccessToken (X-036)', () => {
     expect(verifyAccessToken(fakeReq(' 2 '), TOKEN, s)).toBe(true);
   });
 
+  // X-037: 未知版本拒绝(不得静默落明文路径), 以及 >256 长度守卫恢复。
+  it('should reject unknown version headers instead of falling back to legacy', () => {
+    const s = settings({ CLAUDE_MEM_SERVER_ACCESS_TOKEN: TOKEN });
+    expect(verifyAccessToken(fakeReq('3'), TOKEN, s)).toBe(false);
+    expect(verifyAccessToken(fakeReq('2,2'), TOKEN, s)).toBe(false);
+  });
+
+  it('should reject tokens longer than 256 bytes (no silent truncation prefix match)', () => {
+    const s = settings({ CLAUDE_MEM_SERVER_ACCESS_TOKEN: TOKEN });
+    const long = TOKEN + 'x'.repeat(300);
+    expect(verifyAccessToken(fakeReq(), long, s)).toBe(false);
+  });
+
   it('loadAccessAuth should surface both keys trimmed', () => {
     const s = settings({
       CLAUDE_MEM_SERVER_ACCESS_TOKEN: '  plain  ',

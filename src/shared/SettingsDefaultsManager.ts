@@ -111,7 +111,9 @@ export interface SettingsDefaults {
   /** Server-side sha1 hash of the shared token (X-036). v2 clients present the
    *  plaintext + X-Claude-Mem-Auth-Version: 2; server compares sha1(presented)
    *  against this value so the plaintext no longer needs to live on the server
-   *  once legacy clients are retired. */
+   *  once legacy clients are retired. 安全前提 (X-037): 令牌须为 ≥128bit 随机
+   * 熵(如 shasum 输出的 40 位随机十六进制)——低熵令牌可被离线暴力/彩虹表恢复,
+   * 低熵场景应保留明文双轨。 */
   CLAUDE_MEM_SYNC_SHASUM_VALUE: string;
   /** Client-side auth version (X-036). '2' = send X-Claude-Mem-Auth-Version: 2
    *  and authenticate against the server-side shasum value. Empty = legacy. */

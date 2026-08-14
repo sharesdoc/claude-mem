@@ -5,7 +5,7 @@ import { DatabaseManager } from '../../DatabaseManager.js';
 import { AdminSessionStore, extractBearerToken } from '../AdminSessionStore.js';
 import { ReportGenerator, upsertWeeklyReport, weekMondayOf } from '../../reports/ReportGenerator.js';
 import { mdToHtml } from '../../reports/mdToHtml.js';
-import { loopbackBypassAllowed, verifyAccessToken } from '../middleware/tokenAuth.js';
+import { loopbackBypassAllowed, verifyAccessTokenAgainst, loadAccessAuth } from '../middleware/tokenAuth.js';
 import {
   runPool, batchConcurrency, createBatchJob, recordOutcome, finishBatchJob, getBatchJob,
   weekEndEpoch, isPeriodComplete, rosterAllUsers, activeUsersInRange, userHasActivity, type BatchOutcome,
@@ -35,13 +35,18 @@ interface ReportRow {
 }
 
 export class ReportRoutes extends BaseRouteHandler {
+  // X-037: 构造期缓存鉴权配置, 鉴权热路径不再每请求读盘。
+  private readonly accessAuth = loadAccessAuth();
+
   constructor(
     private dbManager: DatabaseManager,
     private requireAuth: boolean,
+    /** @deprecated X-037: 仅为兼容调用方保留, 鉴权值以 loadAccessAuth() 为准。 */
     private serverAccessToken: string,
     private adminSessions?: AdminSessionStore,
   ) {
     super();
+    void this.serverAccessToken;
   }
 
   setupRoutes(app: express.Application): void {
@@ -60,8 +65,8 @@ export class ReportRoutes extends BaseRouteHandler {
   private authorized(req: Request): boolean {
     if (!this.requireAuth) return true;
     const presented = extractBearerToken(req) ?? (typeof req.query.token === 'string' ? req.query.token : '');
-    // X-036: 明文/哈希双轨校验统一走 tokenAuth.verifyAccessToken。
-    if (presented && verifyAccessToken(req, presented)) return true;
+    // X-036/X-037: 明文/哈希双轨校验统一走缓存配置的 verifyAccessTokenAgainst。
+    if (presented && verifyAccessTokenAgainst(this.accessAuth, req, presented)) return true;
     if (this.adminSessions && presented && this.adminSessions.verify(presented)) return true;
     // X-005: loopback operator with local auto-login enabled needs no token —
     // mirrors the API gate and tokenAuth so the stats page's weekly-report

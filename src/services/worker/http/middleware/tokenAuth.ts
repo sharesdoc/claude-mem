@@ -58,16 +58,26 @@ export function sha1Hex(value: string): string {
   return createHash('sha1').update(value).digest('hex');
 }
 
-/** 服务端令牌鉴权配置(明文 + 哈希双键, trim 后小写归一化哈希)。
+/** 服务端令牌鉴权配置(明文 + 哈希双键)。 */
+export interface AccessAuth {
+  plain: string;
+  shasum: string;
+}
+
+/** 读取令牌鉴权配置(明文 + 哈希双键, trim 后小写归一化哈希)。
  *  settings 可注入(测试); 缺省读 settings.json。 */
-export function loadAccessAuth(settings?: SettingsDefaults): { plain: string; shasum: string } {
+export function loadAccessAuth(settings?: SettingsDefaults): AccessAuth {
   try {
     const s = settings ?? SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
     return {
       plain: (s.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim(),
       shasum: (s.CLAUDE_MEM_SYNC_SHASUM_VALUE ?? '').trim().toLowerCase(),
     };
-  } catch {
+  } catch (error: unknown) {
+    // X-037: 不再静默——settings.json 损坏时鉴权退化必须可观测。
+    logger.warn('HTTP', 'Failed to load access-token settings (auth degraded)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
     return { plain: '', shasum: '' };
   }
 }
@@ -83,25 +93,43 @@ function timingSafeCompare(a: string, b: string): boolean {
 }
 
 /**
- * 校验携带令牌 (X-036)。两键皆未配置 → false(调用方决定直通语义);
- * 版本头=2 → sha1(presented) 对 CLAUDE_MEM_SYNC_SHASUM_VALUE;
- * 否则 → 明文对 CLAUDE_MEM_SERVER_ACCESS_TOKEN。settings 可注入(测试)。
+ * 校验携带令牌 (X-036/X-037)。两键皆未配置 → false(调用方决定直通语义);
+ * 版本头=2 → sha1(presented) 对 shasum; 无头 → 明文比对 plain;
+ * 未知非空版本 → 拒绝 + WARN(未来版本不得静默落入老路径)。
+ * 调用方传入缓存配置避免每请求读盘(热路径)。
  */
-export function verifyAccessToken(req: Request, presented: string, settings?: SettingsDefaults): boolean {
-  const auth = loadAccessAuth(settings);
+export function verifyAccessTokenAgainst(auth: AccessAuth, req: Request, presented: string): boolean {
+  // X-037: 恢复旧实现的显式长度守卫(>256 直接拒绝, 不做静默截断前缀匹配)。
+  if (presented.length > 256) return false;
   if (!auth.plain && !auth.shasum) return false;
   const version = String(req.headers['x-claude-mem-auth-version'] ?? '').trim();
-  if (version === '2') {
-    if (!auth.shasum) return false;
-    return timingSafeCompare(sha1Hex(presented), auth.shasum);
+  if (version !== '') {
+    if (version === '2') {
+      if (!auth.shasum) {
+        // X-037: 部署顺序错误(客户端先行)必须可排查。
+        logger.warn('HTTP', 'auth version 2 presented but server shasum value unset — rejecting', {});
+        return false;
+      }
+      return timingSafeCompare(sha1Hex(presented), auth.shasum);
+    }
+    logger.warn('HTTP', `unknown auth version "${version}" — rejecting`, {});
+    return false;
   }
   if (!auth.plain) return false;
   return timingSafeCompare(presented, auth.plain);
 }
 
+/** 便捷包装: 每次读盘(适合低频调用与测试注入), 热路径请用 verifyAccessTokenAgainst。 */
+export function verifyAccessToken(req: Request, presented: string, settings?: SettingsDefaults): boolean {
+  return verifyAccessTokenAgainst(loadAccessAuth(settings), req, presented);
+}
+
 export function tokenAuth(serverToken: string, adminSessions?: AdminSessionStore) {
+  // @deprecated X-037: serverToken 参数仅为兼容既有调用方保留, 鉴权值以
+  // loadAccessAuth() 为准(构造期缓存一次, 避免每请求读盘)。
+  void serverToken;
   const hasAdminFallback = adminSessions !== undefined;
-  const auth = loadAccessAuth();
+  const auth = loadAccessAuth();  // 构造期快照: 变更需重启 worker, 与旧语义一致
 
   // No authenticator configured at all → pass through (standalone / client).
   if (!auth.plain && !auth.shasum && !hasAdminFallback) {
@@ -126,8 +154,8 @@ export function tokenAuth(serverToken: string, adminSessions?: AdminSessionStore
       return;
     }
 
-    // 1) Try static access token (X-036: 明文/哈希双轨, 恒时比对).
-    if (verifyAccessToken(req, header)) {
+    // 1) Try static access token (X-036/X-037: 明文/哈希双轨, 恒时比对, 构造期缓存).
+    if (verifyAccessTokenAgainst(auth, req, header)) {
       next();
       return;
     }
