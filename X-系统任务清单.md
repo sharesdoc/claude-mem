@@ -116,6 +116,23 @@ rev 审查（摘要 provider 层审查员）证实 4 项代码缺陷：①端点
 - 测试方法：(1) `bun test` 整跑本批次测试文件零失败；(2) `bun test tests/cli/handlers/summarize-tag-stripping.test.ts` 单独全绿；(3) `npm run typecheck` 通过。
 - 代码修复提交：`722bd891`
 
+### X-025 构建 + 全量测试 + rev 审查 + 缺陷修复（大模型配置统一化 T-11 收官）
+
+统一化批次（X-014~X-024）实现完毕后，执行 TODO T-11：build-and-sync 重建全部 hook 产物并确定性重启 worker；全量测试与干净 HEAD 基线（a57fa387）对比；委托 rev 独立审查（4 分组审查子代理 + OCR 外部独立审查）发现 7 个代码缺陷（4 个本批次引入、3 个批次暴露的预存缺陷），经 X-030~X-034 修复闭环；复跑全量与重建产物。
+
+- 编号：X-025
+- 任务类型：其他（验证/审查）
+- 严重程度：P1
+- 状态：已验证-关闭
+- 来源：TODO-llm-provider.md T-11（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-11（独立 fix，无 A-F/M 体系）
+- 任务描述：build-and-sync + worker 健康验证 + 全量测试基线对比 + rev 审查 + 审查缺陷修复闭环 + 复审。
+- 实际修改位置：plugin/ 构建产物重建（`ada147ac`、`a5f1daf7`）；审查修复 X-030~X-034（见各条目）；审查报告 `review-report-20260815012100.md`。
+- 阶段验证结果：worker /api/health status=ok、initialized=true、mcpReady=true、ai.provider=claude（X-017 删除自动兜底后默认 claude 生效的运行时证据）；全量 4261 用例 120 fail/1 error，基线 a57fa387 为 133 fail/5 errors（净改善 13，本批次新增测试整跑 0 失败）；typecheck 0 错误；rev 审查最终结论 approve（0 blocking/0 未处理 important，11 项 nit·suggestion 留档转 J）。
+- rev 审查结果：`review-report-20260815012100.md` 结论 `approve`；发现并修复 7 缺陷（尾斜杠解析/超时死代码/abort 误分类/Gemini 密钥入 URL/EnvManager 写回缺口/install 类型缺口/subagent mock 缺失）；need-confirm 设计取舍（无迁移兼容、模型统一、自定义端点自担责）均已按设计定稿接受并文档化。
+- 代码修复提交：`ada147ac`、`a5f1daf7`（构建产物）、`0a75437f`~`eb97085b`（X-030~X-034）、`74f170a6`（回填）
+- 关闭时间：2026-08-15 01:25
+
 ### X-024 文档同步（大模型配置统一化 T-10）
 
 现状调查：CLAUDE.md/README/docs 中无旧键残留（历史文档从未记录 REPORT_QWEN_API_KEY 等键），任务收敛为新增统一 provider 架构文档。docs/public/configuration.mdx 的 provider 表仅三厂商（:17），是公开文档的主要缺口。
