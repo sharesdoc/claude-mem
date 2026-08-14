@@ -1,3 +1,23 @@
+### X-035 自定义端点 SSRF 加固：scheme 校验 + redirect manual（rev 委托）
+
+后台安全审查再次点名 QwenProvider/DeepSeekProvider 的可配置端点（SSRF/Credential-Exfiltration），建议三档：URL 形状校验、封锁 loopback/内网地址、凭据仅发给白名单主机。处置：采纳①③中与设计兼容的部分——新增 provider-endpoint.ts 做 http(s) scheme 校验（非 http(s) 启动期快速失败/报表层禁 AI 段），所有凭据承载 fetch 加 `redirect: 'manual'`（防 302 弹跳带凭据请求到任意目标）；**不采纳** loopback/内网封锁与凭据白名单——本地 vLLM/Ollama 部署是自定义端点的核心设计用例，封锁即杀死该场景，且配置源是本地 settings 而非远程输入（与 X-027/X-028 同取舍），已有自定义端点 WARN 兜底。
+
+- 编号：X-035
+- 任务类型：缺陷
+- 严重程度：P2
+- 状态：已完成-待验证
+- 来源：rev-委托（后台安全审查，2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：新增 `src/services/worker/provider-endpoint.ts`（isHttpEndpoint/assertHttpEndpoint）；Qwen/DeepSeek getConfig 加 assertHttpEndpoint；两 provider 与 report-provider 三协议 fetch 加 redirect: 'manual'；report-provider qwen/deepseek 分支非 http(s) 端点 → WARN + null；测试补 scheme 校验/无效端点/redirect 断言用例。
+- 根因分析：Why-1——凭据请求默认跟随 3xx 重定向，自定义端点可把 Bearer 请求弹到任意目标；Why-2——非 URL 字符串直入 fetch 报 opaque 网络错误难排查；Why-3——loopback 封锁不可行（本地推理服务是核心用例）。
+- 影响评估：P2。需用户配置被篡改或端点恶意才成立；加固后凭据不再可被 302 弹跳，配置错误快速可见。
+- 涉及文件与行号：`src/services/worker/provider-endpoint.ts`（新增）、`src/services/worker/QwenProvider.ts`、`src/services/worker/DeepSeekProvider.ts`、`src/services/worker/reports/report-provider.ts`、`tests/services/worker/provider-endpoint.test.ts`（新增）、`tests/services/worker/reports/report-provider.test.ts`。
+- 关联需求：N/A
+- 实际修改位置：同上。
+- 阶段验证结果：61 用例 0 fail（含新 4+2 用例）；`npm run typecheck` 0 错误。
+- 测试方法：(1) `bun test tests/services/worker/provider-endpoint.test.ts tests/services/worker/reports/report-provider.test.ts` 全绿；(2) `npm run typecheck` 通过。
+- 代码修复提交：`dfbacc1c`
+
 ### X-034 摘要 provider abort 误分类修复（rev 委托）
 
 OCR + 摘要层审查员发现：classifyQwenError/classifyDeepSeekError 把 fetch 中止（cause=AbortError）包装为 ClassifiedProviderError(kind=transient)，withRetry 会重试已中止的请求（会话中止时连发 3 次注定失败的 fetch）；且 isAbortError 不识别 wrapped cause，会话层把"中止"误记"失败"。
