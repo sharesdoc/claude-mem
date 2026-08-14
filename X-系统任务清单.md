@@ -1,3 +1,23 @@
+### X-038 鉴权取值源统一与死参数清理（review-report-20260815022400 N-01）
+
+现状调查（rev 报告 N-01 展开）：除已知的 tokenAuth.serverToken 与两路由 serverAccessToken 死参数外，发现**更深一层缺陷**——`serverApiGate.ts:55` 从未纳入 X-036 双轨：它用自有的 `tokenMatches` 明文长度敏感比对，且只接收 worker-service:289 传入的 `CLAUDE_MEM_SERVER_ACCESS_TOKEN` 明文。收敛态（服务端只留 `CLAUDE_MEM_SYNC_SHASUM_VALUE`）下，server 模式默认拒绝门会把**所有** v2 请求（含 /api/sync/ingest）在到达 tokenAuth 之前拦下——X-036 的收敛路径实际不可达。修复：serverApiGate 统一改用 `loadAccessAuth()` 构造期缓存 + `verifyAccessTokenAgainst`（自动获得明文/哈希双轨），顺带清除 5 处死参数（tokenAuth/DataRoutes/SyncRoutes/两报表路由/worker-service 传参）。
+
+- 编号：X-038
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：review-report-20260815022400.md N-01 + 展开调查（2026-08-15）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：serverApiGate 删 serverToken 参数与 tokenMatches，改构造期 loadAccessAuth 缓存 + verifyAccessTokenAgainst；tokenAuth 删 serverToken 参数；DataRoutes/SyncRoutes/ReportRoutes/DailyReportRoutes 删对应死参数；worker-service 清理传参与设置对象字段。
+- 根因分析：Why-1——收敛态全拒，因为 API 门在 tokenAuth 之前、且只做明文比对；Why-2——明文比对存在，因为 serverApiGate 是 X-036 之前的历史实现、审查范围未覆盖其 diff；Why-3——死参数存在，因为 X-037 选择保守标注 @deprecated 而非清理。
+- 影响评估：P1。收敛路径不可达 = 版本化迁移的目标功能（服务端去明文）实际无法兑现。
+- 涉及文件与行号：`src/services/worker/http/middleware/serverApiGate.ts`、`src/services/worker/http/middleware/tokenAuth.ts`、`src/services/worker/http/routes/DataRoutes.ts:103-105,141`、`src/services/worker/http/routes/SyncRoutes.ts:108-114,139`、`src/services/worker/http/routes/ReportRoutes.ts:37-50`、`src/services/worker/http/routes/DailyReportRoutes.ts:35-48`、`src/services/worker-service.ts:289-295,343-345,360-370`。
+- 关联需求：N/A
+- 实际修改位置：serverApiGate.ts（删 tokenMatches/serverToken 参数，构造期 loadAccessAuth + verifyAccessTokenAgainst）、tokenAuth.ts（删 serverToken 参数）、DataRoutes.ts（删 serverAccessToken 参数与传参）、SyncRoutes.ts（SyncRoutesSettings 删 SERVER_ACCESS_TOKEN 字段）、ReportRoutes/DailyReportRoutes（删 serverAccessToken 参数）、worker-service.ts（清理 5 处传参与设置对象字段）
+- 阶段验证结果：typecheck 0 错误；affected 套件 146 用例中 3 个失败经 git stash 基线对比确认为预存（search-routes-welcome-hint + data-routes-delete-auth，paths API 漂移类），与本次无关；token-auth-version + sync-auth-headers 13 用例全绿
+- 测试方法：(1) bun test tests/worker/middleware/ tests/services/sync/ tests/admin-role.test.ts tests/worker/http/ 与基线对比零新增失败；(2) npm run typecheck 通过
+- 代码修复提交：`d5a155cc`
+
 ### X-037 X-036 审查缺陷修复（rev 委托）
 
 rev 审查（子代理 + OCR 双信源）对 X-036 发现 3 项 important + 2 项 need-confirm 处置 + 3 项 nit，全部属实并修复：①鉴权热路径回归——verifyAccessToken 每次请求同步 readFileSync+JSON.parse 读盘（旧实现构造期常量比对），中间件与路由改构造期缓存；②SyncAgent 在 apikey/jwt/mtls 模式下若误配 AUTH_VERSION='2' 会无条件发版本头，Bearer apiKey 被服务端按 sha1(apiKey) 比对拒绝——版本头仅限 accessToken 分支；③旧实现 presented.length<=256 显式守卫被删除，timingSafeCompare 静默截断使 256 字节前缀匹配可通过——恢复长度守卫；④未知版本值静默落明文路径——改为拒绝 + WARN；⑤v2 无服务端哈希时直接 401 无日志——补 WARN；⑥loadAccessAuth catch 静默吞异常——补 WARN；⑦tokenAuth.serverToken 与两路由的 serverAccessToken 死参数——标注 @deprecated 迁移占位（清理调用点留待后续）；⑧熵约束——shasum 键注释补 ≥128bit 随机要求。
