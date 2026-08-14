@@ -285,7 +285,6 @@ export class WorkerService implements WorkerRef {
     // (mints sessions on login) and DataRoutes (verifies before writes).
     const isServerMode = resolveBindAddress().role === 'server';
     const adminSessions = new AdminSessionStore();
-    const statsSettings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
 
     // X-006: server mode is default-deny — mounted before every route below
     // so no endpoint is reachable without loopback origin, the shared access

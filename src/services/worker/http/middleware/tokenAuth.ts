@@ -69,8 +69,14 @@ export interface AccessAuth {
 export function loadAccessAuth(settings?: SettingsDefaults): AccessAuth {
   try {
     const s = settings ?? SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const plain = (s.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim();
+    // X-040: verifyAccessTokenAgainst 对 >256 字节的携带值直接拒绝,
+    // 配置超长令牌会永远无法通过——启动期显式告警。
+    if (plain.length > 256) {
+      logger.warn('HTTP', 'CLAUDE_MEM_SERVER_ACCESS_TOKEN exceeds 256 bytes — requests carrying the full token will be rejected', {});
+    }
     return {
-      plain: (s.CLAUDE_MEM_SERVER_ACCESS_TOKEN ?? '').trim(),
+      plain,
       shasum: (s.CLAUDE_MEM_SYNC_SHASUM_VALUE ?? '').trim().toLowerCase(),
     };
   } catch (error: unknown) {
@@ -82,14 +88,13 @@ export function loadAccessAuth(settings?: SettingsDefaults): AccessAuth {
   }
 }
 
-/** 恒时十六进制/ASCII 比对(补齐至 256 字节防长度侧信道)。 */
+/** 恒时比对 (X-040): UTF-8 编码 + 显式长度相等, 恢复旧 tokenMatches 语义——
+ *  256 字节零填充会使尾随 NUL 与填充不可区分(cmp('abc\\0','abc') 误真),
+ *  ascii 编码使高位字符低位截断('Ł' 与 'A' 同字节), 均被长度+UTF-8 方案排除。 */
 function timingSafeCompare(a: string, b: string): boolean {
-  const MAX = 256;
-  const ab = Buffer.alloc(MAX, 0);
-  Buffer.from(a.slice(0, MAX), 'ascii').copy(ab);
-  const bb = Buffer.alloc(MAX, 0);
-  Buffer.from(b.slice(0, MAX), 'ascii').copy(bb);
-  return timingSafeEqual(ab, bb);
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  return ab.length === bb.length && timingSafeEqual(ab, bb);
 }
 
 /**
@@ -112,7 +117,9 @@ export function verifyAccessTokenAgainst(auth: AccessAuth, req: Request, present
       }
       return timingSafeCompare(sha1Hex(presented), auth.shasum);
     }
-    logger.warn('HTTP', `unknown auth version "${version}" — rejecting`, {});
+    // X-040: 攻击者可控头值入日志前白名单过滤(防刷日志与控制字符注入)。
+    const safeVersion = /^[\x20-\x7E]{1,16}$/.test(version) ? version : '(invalid)';
+    logger.warn('HTTP', `unknown auth version "${safeVersion}" — rejecting`, {});
     return false;
   }
   if (!auth.plain) return false;

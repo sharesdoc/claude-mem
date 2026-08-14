@@ -36,7 +36,6 @@ async function spinUp(db: Database, settings: {
   CLAUDE_MEM_SERVER_REQUIRE_TLS?: string;
   CLAUDE_MEM_SERVER_AUTH_MODE?: string;
   CLAUDE_MEM_SERVER_ALLOWED_USERS?: string;
-  CLAUDE_MEM_SERVER_ACCESS_TOKEN?: string;
   CLAUDE_MEM_SERVER_INGEST_MAX_BATCH?: string;
 } = {}): Promise<{ url: string; close: () => Promise<void> }> {
   const app = express();
@@ -45,7 +44,6 @@ async function spinUp(db: Database, settings: {
     CLAUDE_MEM_SERVER_REQUIRE_TLS: 'false',
     CLAUDE_MEM_SERVER_AUTH_MODE: 'none',
     CLAUDE_MEM_SERVER_ALLOWED_USERS: '',
-    CLAUDE_MEM_SERVER_ACCESS_TOKEN: '',
     CLAUDE_MEM_SERVER_INGEST_MAX_BATCH: '1000',
     ...settings,
   }).setupRoutes(app);

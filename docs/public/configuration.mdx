@@ -88,6 +88,8 @@ The LAN shared token pairs a server-side validation key with a client-side crede
 2. **Clients next**: set `CLAUDE_MEM_SYNC_AUTH_VERSION='2'` (client keeps `CLAUDE_MEM_SYNC_ACCESS_TOKEN`).
 3. **Converge**: once every client sends the version header, delete `CLAUDE_MEM_SERVER_ACCESS_TOKEN` (and the client-side copy on server nodes) — the server then stores only the hash.
 
+> After convergence, browser-based access that relies on the static token in the URL (`?token=` on `/report` / downloads, or EventSource `/stream`) can no longer authenticate — browsers cannot send the version header. Use an admin login session for those, or keep the plaintext key. Also note the 256-byte token length cap: requests presenting a longer token are rejected.
+
 <Note>
 The token **must** have ≥128 bits of random entropy (e.g. 40 random hex chars from `shasum`) — an unsalted sha1 of a low-entropy token is recoverable offline.
 </Note>
