@@ -1,3 +1,23 @@
+### X-037 X-036 审查缺陷修复（rev 委托）
+
+rev 审查（子代理 + OCR 双信源）对 X-036 发现 3 项 important + 2 项 need-confirm 处置 + 3 项 nit，全部属实并修复：①鉴权热路径回归——verifyAccessToken 每次请求同步 readFileSync+JSON.parse 读盘（旧实现构造期常量比对），中间件与路由改构造期缓存；②SyncAgent 在 apikey/jwt/mtls 模式下若误配 AUTH_VERSION='2' 会无条件发版本头，Bearer apiKey 被服务端按 sha1(apiKey) 比对拒绝——版本头仅限 accessToken 分支；③旧实现 presented.length<=256 显式守卫被删除，timingSafeCompare 静默截断使 256 字节前缀匹配可通过——恢复长度守卫；④未知版本值静默落明文路径——改为拒绝 + WARN；⑤v2 无服务端哈希时直接 401 无日志——补 WARN；⑥loadAccessAuth catch 静默吞异常——补 WARN；⑦tokenAuth.serverToken 与两路由的 serverAccessToken 死参数——标注 @deprecated 迁移占位（清理调用点留待后续）；⑧熵约束——shasum 键注释补 ≥128bit 随机要求。
+
+- 编号：X-037
+- 任务类型：缺陷
+- 严重程度：P1
+- 状态：已完成-待验证
+- 来源：rev-委托（2026-08-15，子代理 + OCR）
+- 所属计划项：TODO-llm-provider.md（独立 fix，无 A-F/M 体系）
+- 任务描述：见上 ①-⑧。
+- 根因分析：Why-1——热路径读盘因为 verifyAccessToken 无 settings 注入时每次调用 loadFromFile，中间件/路由未在构造期缓存；Why-2——版本头误发因为 header 添加语句在 accessToken 分支之外；Why-3——长度守卫丢失因为重构时把调用方的 length<=256 检查收敛进 timingSafeCompare 的静默截断。
+- 影响评估：P1（每请求阻塞 IO；apikey+误配组合鉴权失效；长令牌前缀通过）。
+- 涉及文件与行号：`src/services/worker/http/middleware/tokenAuth.ts`、`src/services/worker/http/routes/ReportRoutes.ts`、`src/services/worker/http/routes/DailyReportRoutes.ts`、`src/services/sync/SyncAgent.ts`、`src/shared/SettingsDefaultsManager.ts`、`tests/worker/middleware/token-auth-version.test.ts`、`tests/services/sync/sync-auth-headers.test.ts`（新增）。
+- 关联需求：N/A
+- 实际修改位置：tokenAuth.ts（AccessAuth 接口、verifyAccessTokenAgainst 纯函数+长度守卫+未知版本拒绝、loadAccessAuth catch WARN、中间件构造期缓存、serverToken 参数 @deprecated）、ReportRoutes/DailyReportRoutes（构造期缓存 accessAuth、serverAccessToken 参数 @deprecated）、SyncAgent.ts（buildSyncAuthHeaders 纯函数、版本头仅 accessToken 分支）、SettingsDefaultsManager（shasum 键注释补熵约束）、tests（token-auth-version +3 用例、sync-auth-headers 新增 4 用例）
+- 阶段验证结果：RED——新增 7 用例先于实现（未知版本拒绝/长度守卫/头构建条件 3 类断言失败）；GREEN——13 pass/0 fail；middleware+sync 套件 71 pass/0 fail；typecheck 0 错误
+- 测试方法：(1) bun test tests/worker/middleware/token-auth-version.test.ts tests/services/sync/sync-auth-headers.test.ts 全绿；(2) bun test tests/worker/middleware/ tests/services/sync/ 无新增失败；(3) npm run typecheck 通过
+- 代码修复提交：`PENDING`
+
 ### X-036 令牌哈希版本化校验（双轨迁移）
 
 用户方案（2026-08-15 定稿）：服务端新增 `CLAUDE_MEM_SYNC_SHASUM_VALUE`（共享令牌的 sha1 十六进制），客户端新增 `CLAUDE_MEM_SYNC_AUTH_VERSION`（'2' = 请求带 `X-Claude-Mem-Auth-Version: 2` 头走新路径）。服务端校验按版本头路由：有头=2 → `sha1(presented)` 恒时比对哈希键；无头 → 明文恒时比对 `CLAUDE_MEM_SERVER_ACCESS_TOKEN`（老逻辑）。双轨期间服务端两键并存（攻击面不变），收敛点在新 client 全覆盖后服务端删明文键。设计事实：本机 ADMIN_PASSWORD（42b07b…）恰为同步令牌的 sha1——用户"shasum 口令"规范的既有实践。
