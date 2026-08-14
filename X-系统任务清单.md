@@ -1,3 +1,22 @@
+### X-024 文档同步（大模型配置统一化 T-10）
+
+现状调查：CLAUDE.md/README/docs 中无旧键残留（历史文档从未记录 REPORT_QWEN_API_KEY 等键），任务收敛为新增统一 provider 架构文档。docs/public/configuration.mdx 的 provider 表仅三厂商（:17），是公开文档的主要缺口。
+
+- 编号：X-024
+- 任务类型：其他（文档）
+- 严重程度：P2
+- 状态：已完成-待验证
+- 来源：TODO-llm-provider.md T-10（2026-08-14 与用户对话设计定稿）
+- 所属计划项：TODO-llm-provider.md T-10（独立 fix，无 A-F/M 体系）
+- 任务描述：docs/public/configuration.mdx 更新 CLAUDE_MEM_PROVIDER 行（5 厂商+默认语义），新增 Qwen/DeepSeek provider 设置表（key/model/URL 及 OpenAI 兼容自担责说明）、Report AI Provider 设置表（空=禁用、复用厂商组）、server-beta claude 仅认 key 的边界提示；CLAUDE.md Configuration 段新增 LLM Provider Architecture 概要（三处选择逻辑文件指针）；README.md Configuration 段补一句话级厂商说明。
+- 验收标准：(1) 文档无旧键残留（grep）；(2) 5 厂商与 REPORT_PROVIDER 语义在公开文档可查；(3) server-beta 多租户边界写明；(4) 文档构建不受影响（MDX 语法合规）。
+- 涉及文件与行号：`docs/public/configuration.mdx:14-46`、`CLAUDE.md:36-38`、`README.md:302-306`。
+- 关联需求：`doc/B-系统设计文档.md`（需 ree 刷新——与代码层事实同步）
+- 实际修改位置：`docs/public/configuration.mdx`（provider 行扩 5 厂商；新增 Qwen/DeepSeek/Report AI Provider 三张表 + server-beta Note 块）、`CLAUDE.md`（LLM Provider Architecture 段落）、`README.md`（厂商一句话）。
+- 阶段验证结果：文档 grep 四旧键零残留；MDX 为纯表格与 Note 组件，无语法风险；typecheck 不涉及。
+- 测试方法：(1) grep 旧键零残留；(2) docs 站点构建由 CI 在 push main 后自动执行。
+- 代码修复提交：`751972bf`
+
 ### X-023 Viewer UI 设置面板更新（大模型配置统一化 T-09）
 
 现状调查：Viewer 的 Advanced 设置区（ContextSettingsModal.tsx:334-449）provider 选择仅 claude/gemini/openrouter 三选项，无 qwen/deepseek 分组字段与 REPORT_PROVIDER；types.ts Settings 与 constants/settings.ts DEFAULT_SETTINGS 均缺新 7 键。服务端白名单（X-018）已支持新键写入，本任务补齐前端。注意 constants/settings.ts:2 的 CLAUDE_MEM_MODEL 默认值（claude-sonnet-4-6）与 SettingsDefaultsManager 不一致（预存漂移，仅离线兜底使用，不在本任务范围）。
