@@ -28,6 +28,13 @@ describe('LLM provider settings defaults (X-014)', () => {
     expect(defaults.CLAUDE_MEM_REPORT_PROVIDER).toBe('');
   });
 
+  // X-021: 废弃键已从 SettingsDefaults 彻底移除(不做旧版兼容)。
+  it('should NOT include the deprecated report keys anymore', () => {
+    const defaults = SettingsDefaultsManager.getAllDefaults() as Record<string, unknown>;
+    expect(defaults.CLAUDE_MEM_WEEKLY_REPORT_MODEL).toBeUndefined();
+    expect(defaults.CLAUDE_MEM_REPORT_QWEN_API_KEY).toBeUndefined();
+  });
+
   it('should persist new keys when creating a fresh settings file', async () => {
     const { mkdirSync, writeFileSync, existsSync, rmSync } = await import('fs');
     const { join } = await import('path');

@@ -7,8 +7,10 @@ import { SettingsDefaultsManager } from '../../src/shared/SettingsDefaultsManage
 import { isQwenAvailable } from '../../src/services/worker/QwenProvider.js';
 
 /**
- * X-008: DASHSCOPE_API_KEY → CLAUDE_MEM_REPORT_QWEN_API_KEY 改名的向后兼容，
- * 以及 isQwenAvailable() 与 getQwenConfig() 三级回脱的一致性。
+ * X-015/X-021: Qwen 凭证改 CLAUDE_MEM_QWEN_API_KEY 后 isQwenAvailable()
+ * 与 resolveQwenApiKey() 三级回脱（env > settings.json > ~/.claude-mem/.env）
+ * 的一致性。旧键兼容（X-008 DASHSCOPE_API_KEY → CLAUDE_MEM_REPORT_QWEN_API_KEY）
+ * 已按统一化方案移除（不做旧版兼容）。
  *
  * 隔离：CLAUDE_MEM_ENV_FILE 指向临时 .env，避免读写用户真实 ~/.claude-mem/.env；
  * isQwenAvailable 的 settings 读取用 spyOn mock 成空默认值，聚焦 getCredential 回退。
@@ -17,13 +19,11 @@ import { isQwenAvailable } from '../../src/services/worker/QwenProvider.js';
 const TEST_DIR = fs.mkdtempSync(join(tmpdir(), 'claude-mem-qwen-key-compat-'));
 const TEST_ENV_FILE = join(TEST_DIR, '.env');
 const ORIGINAL_ENV_FILE = process.env.CLAUDE_MEM_ENV_FILE;
-const ORIGINAL_ENV_KEY = process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY;
 const ORIGINAL_NEW_KEY = process.env.CLAUDE_MEM_QWEN_API_KEY;
 
-describe('X-008 Qwen key rename backward compat', () => {
+describe('Qwen key resolution via new CLAUDE_MEM_QWEN_API_KEY (X-015/X-021)', () => {
   beforeEach(() => {
     process.env.CLAUDE_MEM_ENV_FILE = TEST_ENV_FILE;
-    delete process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY;
     delete process.env.CLAUDE_MEM_QWEN_API_KEY;
     if (fs.existsSync(TEST_ENV_FILE)) fs.unlinkSync(TEST_ENV_FILE);
   });
@@ -31,35 +31,31 @@ describe('X-008 Qwen key rename backward compat', () => {
   afterEach(() => {
     if (ORIGINAL_ENV_FILE === undefined) delete process.env.CLAUDE_MEM_ENV_FILE;
     else process.env.CLAUDE_MEM_ENV_FILE = ORIGINAL_ENV_FILE;
-    if (ORIGINAL_ENV_KEY === undefined) delete process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY;
-    else process.env.CLAUDE_MEM_REPORT_QWEN_API_KEY = ORIGINAL_ENV_KEY;
     if (ORIGINAL_NEW_KEY === undefined) delete process.env.CLAUDE_MEM_QWEN_API_KEY;
     else process.env.CLAUDE_MEM_QWEN_API_KEY = ORIGINAL_NEW_KEY;
   });
 
-  describe('loadClaudeMemEnv — legacy .env key', () => {
-    it('should map legacy DASHSCOPE_API_KEY in .env to CLAUDE_MEM_REPORT_QWEN_API_KEY when new key absent', () => {
-      fs.writeFileSync(TEST_ENV_FILE, 'DASHSCOPE_API_KEY=sk-dotenv-legacy\n');
+  describe('loadClaudeMemEnv — .env new key', () => {
+    it('should parse CLAUDE_MEM_QWEN_API_KEY from .env', () => {
+      fs.writeFileSync(TEST_ENV_FILE, 'CLAUDE_MEM_QWEN_API_KEY=sk-dotenv-new\n');
 
       const env = loadClaudeMemEnv();
 
-      expect(env.CLAUDE_MEM_REPORT_QWEN_API_KEY).toBe('sk-dotenv-legacy');
+      expect(env.CLAUDE_MEM_QWEN_API_KEY).toBe('sk-dotenv-new');
     });
 
-    it('getCredential should resolve the legacy .env key via the new name', () => {
-      fs.writeFileSync(TEST_ENV_FILE, 'DASHSCOPE_API_KEY=sk-dotenv-cred\n');
+    it('getCredential should resolve the .env key via the new name', () => {
+      fs.writeFileSync(TEST_ENV_FILE, 'CLAUDE_MEM_QWEN_API_KEY=sk-dotenv-cred\n');
 
-      expect(getCredential('CLAUDE_MEM_REPORT_QWEN_API_KEY')).toBe('sk-dotenv-cred');
+      expect(getCredential('CLAUDE_MEM_QWEN_API_KEY')).toBe('sk-dotenv-cred');
     });
 
-    it('should prefer the new key over the legacy key when both are in .env', () => {
-      fs.writeFileSync(TEST_ENV_FILE, [
-        'DASHSCOPE_API_KEY=sk-legacy',
-        'CLAUDE_MEM_REPORT_QWEN_API_KEY=sk-new',
-        '',
-      ].join('\n'));
+    it('should not map legacy DASHSCOPE_API_KEY anymore (no back-compat by design)', () => {
+      fs.writeFileSync(TEST_ENV_FILE, 'DASHSCOPE_API_KEY=sk-legacy\n');
 
-      expect(getCredential('CLAUDE_MEM_REPORT_QWEN_API_KEY')).toBe('sk-new');
+      const env = loadClaudeMemEnv();
+
+      expect(env.CLAUDE_MEM_QWEN_API_KEY).toBeUndefined();
     });
   });
 

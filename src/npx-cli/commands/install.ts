@@ -961,38 +961,38 @@ async function promptProvider(options: InstallOptions): Promise<ProviderId> {
 }
 
 /**
- * 周报 AI(Qwen / 阿里云 DashScope)凭证配置。提示输入 CLAUDE_MEM_REPORT_QWEN_API_KEY,默认值
- * 取当前有效值 getSetting('CLAUDE_MEM_REPORT_QWEN_API_KEY')(env 优先、settings.json 兜底):
+ * Qwen(阿里云 DashScope)凭证配置。提示输入 CLAUDE_MEM_QWEN_API_KEY,默认值
+ * 取当前有效值 getSetting('CLAUDE_MEM_QWEN_API_KEY')(env 优先、settings.json 兜底):
  * 回车即沿用、留空则跳过。写入 settings.json 后,即便 worker 由 GUI(不读 shell
  * rc,拿不到 env)启动也能用上 key。与记忆 provider 无关,故始终询问。
  */
 async function promptDashscopeKey(): Promise<void> {
-  const current = String(getSetting('CLAUDE_MEM_REPORT_QWEN_API_KEY') ?? '').trim();
+  const current = String(getSetting('CLAUDE_MEM_QWEN_API_KEY') ?? '').trim();
 
   if (!isInteractive) {
     // 非交互(CI/脚本):env 或现有配置里有就持久化到 settings.json,供 GUI 启动的 worker 使用。
     if (current) {
-      const wrote = mergeSettings({ CLAUDE_MEM_REPORT_QWEN_API_KEY: current });
-      if (wrote) log.info('Saved CLAUDE_MEM_REPORT_QWEN_API_KEY to ~/.claude-mem/settings.json (from env).');
+      const wrote = mergeSettings({ CLAUDE_MEM_QWEN_API_KEY: current });
+      if (wrote) log.info('Saved CLAUDE_MEM_QWEN_API_KEY to ~/.claude-mem/settings.json (from env).');
     }
     return;
   }
 
   const result = await p.text({
-    message: 'DashScope (Qwen) API key for weekly-report AI — Enter to keep, blank to skip:',
+    message: 'DashScope (Qwen) API key — Enter to keep, blank to skip:',
     placeholder: current ? '' : 'sk-... (optional)',
     initialValue: current, // env / 现有值作默认,直接回车即沿用
   });
 
-  if (p.isCancel(result)) return; // 取消不阻断安装;周报 AI 可日后再配
+  if (p.isCancel(result)) return; // 取消不阻断安装;Qwen 可日后再配
 
   const key = String(result ?? '').trim();
   if (!key) {
-    log.info('CLAUDE_MEM_REPORT_QWEN_API_KEY left blank — weekly-report AI stays off until configured.');
+    log.info('CLAUDE_MEM_QWEN_API_KEY left blank — Qwen stays off until configured.');
     return;
   }
-  const wrote = mergeSettings({ CLAUDE_MEM_REPORT_QWEN_API_KEY: key });
-  if (wrote) log.success('Saved CLAUDE_MEM_REPORT_QWEN_API_KEY to ~/.claude-mem/settings.json.');
+  const wrote = mergeSettings({ CLAUDE_MEM_QWEN_API_KEY: key });
+  if (wrote) log.success('Saved CLAUDE_MEM_QWEN_API_KEY to ~/.claude-mem/settings.json.');
 }
 
 async function promptClaudeModel(options: InstallOptions): Promise<void> {
