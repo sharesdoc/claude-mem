@@ -89,6 +89,18 @@ describe('resolveReportProviderConfig (X-019)', () => {
     expect(c!.endpoint).toBe('https://api.deepseek.com/chat/completions');
   });
 
+  it('should resolve qwen with qwen3-max default when CLAUDE_MEM_QWEN_MODEL is not set', () => {
+    const s = freshSettings();
+    s.CLAUDE_MEM_REPORT_PROVIDER = 'qwen';
+    s.CLAUDE_MEM_QWEN_API_KEY = 'sk-q';
+    // 未显式配置 CLAUDE_MEM_QWEN_MODEL 时应回落到 qwen3-max 默认值
+    // (与 resolveQwenModel 改为"未配置返回空串"之前的行为保持一致)。
+    const c = resolveReportProviderConfig(s);
+    expect(c).not.toBeNull();
+    expect(c!.provider).toBe('qwen');
+    expect(c!.model).toBe('qwen3-max');
+  });
+
   it('should complete base-URL paths for qwen custom endpoints too', () => {
     const s = freshSettings();
     s.CLAUDE_MEM_REPORT_PROVIDER = 'qwen';

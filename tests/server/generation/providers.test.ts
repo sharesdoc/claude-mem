@@ -148,7 +148,7 @@ function jsonResponse(status: number, body: unknown, headers?: Record<string, st
 
 describe('ClaudeObservationProvider', () => {
   it('returns synthetic skip when prompt builder reports skippedAll', async () => {
-    const provider = new ClaudeObservationProvider({ apiKey: 'fake', fetchImpl: async () => {
+    const provider = new ClaudeObservationProvider({ apiKey: 'fake', model: 'test-model', fetchImpl: async () => {
       throw new Error('should not be called');
     } });
     const context = makeContext({ payload: '<private>secret</private>' });
@@ -167,6 +167,7 @@ describe('ClaudeObservationProvider', () => {
     );
     const provider = new ClaudeObservationProvider({
       apiKey: 'sk-fake',
+      model: 'test-model',
       fetchImpl: fakeFetch.fetch,
     });
     const result = await provider.generate(makeContext());
@@ -177,8 +178,14 @@ describe('ClaudeObservationProvider', () => {
 
   it('classifies non-OK responses through classifyClaudeServerError', async () => {
     const fakeFetch = new FakeFetch(jsonResponse(401, { error: { message: 'Invalid API key' } }));
-    const provider = new ClaudeObservationProvider({ apiKey: 'sk-fake', fetchImpl: fakeFetch.fetch });
+    const provider = new ClaudeObservationProvider({ apiKey: 'sk-fake', model: 'test-model', fetchImpl: fakeFetch.fetch });
     await expect(provider.generate(makeContext())).rejects.toBeInstanceOf(ServerClassifiedProviderError);
+  });
+
+  // 依据: Task-20260927091425627-P2 — 模型名缺失时不再回落 DEFAULT_MODEL，
+  // 构造函数直接抛错，风格对齐既有的 "API Key 缺失即抛错" 先例。
+  it('throws ServerClassifiedProviderError when model is not provided', () => {
+    expect(() => new ClaudeObservationProvider({ apiKey: 'sk-fake' })).toThrow(ServerClassifiedProviderError);
   });
 });
 
@@ -190,11 +197,16 @@ describe('GeminiObservationProvider', () => {
         usageMetadata: { totalTokenCount: 42 },
       }),
     );
-    const provider = new GeminiObservationProvider({ apiKey: 'fake', fetchImpl: fakeFetch.fetch });
+    const provider = new GeminiObservationProvider({ apiKey: 'fake', model: 'test-model', fetchImpl: fakeFetch.fetch });
     const result = await provider.generate(makeContext());
     expect(result.rawText).toContain('<observation>');
     expect(result.tokensUsed).toBe(42);
     expect(result.providerLabel).toBe('gemini');
+  });
+
+  // 依据: Task-20260927091425627-P2
+  it('throws ServerClassifiedProviderError when model is not provided', () => {
+    expect(() => new GeminiObservationProvider({ apiKey: 'fake' })).toThrow(ServerClassifiedProviderError);
   });
 });
 
@@ -206,7 +218,7 @@ describe('OpenRouterObservationProvider', () => {
         usage: { total_tokens: 100 },
       }),
     );
-    const provider = new OpenRouterObservationProvider({ apiKey: 'fake', fetchImpl: fakeFetch.fetch });
+    const provider = new OpenRouterObservationProvider({ apiKey: 'fake', model: 'test-model', fetchImpl: fakeFetch.fetch });
     const result = await provider.generate(makeContext());
     expect(result.rawText).toContain('<observation>');
     expect(result.tokensUsed).toBe(100);
@@ -215,7 +227,7 @@ describe('OpenRouterObservationProvider', () => {
 
   it('classifies a 429 response as rate_limit', async () => {
     const fakeFetch = new FakeFetch(jsonResponse(429, { error: { message: 'rl' } }));
-    const provider = new OpenRouterObservationProvider({ apiKey: 'fake', fetchImpl: fakeFetch.fetch });
+    const provider = new OpenRouterObservationProvider({ apiKey: 'fake', model: 'test-model', fetchImpl: fakeFetch.fetch });
     try {
       await provider.generate(makeContext());
       expect.unreachable();
@@ -223,5 +235,10 @@ describe('OpenRouterObservationProvider', () => {
       expect(error).toBeInstanceOf(ServerClassifiedProviderError);
       expect((error as ServerClassifiedProviderError).kind).toBe('rate_limit');
     }
+  });
+
+  // 依据: Task-20260927091425627-P2
+  it('throws ServerClassifiedProviderError when model is not provided', () => {
+    expect(() => new OpenRouterObservationProvider({ apiKey: 'fake' })).toThrow(ServerClassifiedProviderError);
   });
 });

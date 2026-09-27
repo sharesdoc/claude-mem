@@ -194,6 +194,13 @@ export class GeminiProvider {
       throw new Error('Gemini API key not configured. Set CLAUDE_MEM_GEMINI_API_KEY in settings or GEMINI_API_KEY environment variable.');
     }
 
+    // 依据: Task-20260927091425627-P2 — 模型名未配置时直接阻塞, 不再悄悄补默认模型。
+    // 注: 这里的 model 类型是 GeminiModel | ''，此判断收窄后 model 在函数剩余
+    // 部分即为 GeminiModel（TS 对 '' 这个唯一 falsy 字面量做控制流收窄）。
+    if (!model) {
+      throw new Error('Gemini model not configured. Set CLAUDE_MEM_GEMINI_MODEL in settings or environment.');
+    }
+
     if (!session.memorySessionId) {
       const syntheticMemorySessionId = `gemini-${session.contentSessionId}-${Date.now()}`;
       session.memorySessionId = syntheticMemorySessionId;
@@ -500,14 +507,17 @@ export class GeminiProvider {
     return { content, tokensUsed };
   }
 
-  private getGeminiConfig(): { apiKey: string; model: GeminiModel; rateLimitingEnabled: boolean } {
+  private getGeminiConfig(): { apiKey: string; model: GeminiModel | ''; rateLimitingEnabled: boolean } {
     const settingsPath = paths.settings();
     const settings = SettingsDefaultsManager.loadFromFile(settingsPath);
 
     const apiKey = settings.CLAUDE_MEM_GEMINI_API_KEY || getCredential('GEMINI_API_KEY') || '';
 
     const defaultModel: GeminiModel = 'gemini-2.5-flash';
-    const configuredModel = settings.CLAUDE_MEM_GEMINI_MODEL || defaultModel;
+    // 依据: Task-20260927091425627-P2 — 区分"未配置"(空串) 与"配置了但无效"两种
+    // 情况: 未配置不再回落 defaultModel, 交由 startSession() 报错阻塞; 配置了但
+    // 不在白名单里(无效值)的 warn+回落行为保持不变, 不在本任务范围内。
+    const rawConfigured = (settings.CLAUDE_MEM_GEMINI_MODEL ?? '').trim();
     const validModels: GeminiModel[] = [
       'gemini-2.5-flash-lite',
       'gemini-2.5-flash',
@@ -518,12 +528,14 @@ export class GeminiProvider {
       'gemini-3-flash-preview',
     ];
 
-    let model: GeminiModel;
-    if (validModels.includes(configuredModel as GeminiModel)) {
-      model = configuredModel as GeminiModel;
+    let model: GeminiModel | '';
+    if (!rawConfigured) {
+      model = '';
+    } else if (validModels.includes(rawConfigured as GeminiModel)) {
+      model = rawConfigured as GeminiModel;
     } else {
-      logger.warn('SDK', `Invalid Gemini model "${configuredModel}", falling back to ${defaultModel}`, {
-        configured: configuredModel,
+      logger.warn('SDK', `Invalid Gemini model "${rawConfigured}", falling back to ${defaultModel}`, {
+        configured: rawConfigured,
         validModels,
       });
       model = defaultModel;
@@ -538,6 +550,8 @@ export class GeminiProvider {
 export function isGeminiAvailable(): boolean {
   const settingsPath = paths.settings();
   const settings = SettingsDefaultsManager.loadFromFile(settingsPath);
+  // 依据: Task-20260927091425627-P2 — 模型名未配置时判不可用，与 apiKey 门槛并列。
+  if (!(settings.CLAUDE_MEM_GEMINI_MODEL ?? '').trim()) return false;
   return !!(settings.CLAUDE_MEM_GEMINI_API_KEY || getCredential('GEMINI_API_KEY'));
 }
 

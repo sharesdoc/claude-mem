@@ -281,6 +281,19 @@ describe('SettingsDefaultsManager', () => {
       expect(defaults.CLAUDE_MEM_DATA_DIR).toBeDefined();
       expect(defaults.CLAUDE_MEM_LOG_LEVEL).toBeDefined();
     });
+
+    // 依据: Task-20260927091425627-P2 — 模型名不再有出厂默认值,
+    // 未显式配置时必须为空串, 让下游 isXAvailable()/startSession() 的
+    // "未配置" 判断真正生效(而不是被这里悄悄垫一个非空默认型号)。
+    it('should default all provider model fields to empty string (no silent model fallback)', () => {
+      const defaults = SettingsDefaultsManager.getAllDefaults();
+
+      expect(defaults.CLAUDE_MEM_MODEL).toBe('');
+      expect(defaults.CLAUDE_MEM_GEMINI_MODEL).toBe('');
+      expect(defaults.CLAUDE_MEM_OPENROUTER_MODEL).toBe('');
+      expect(defaults.CLAUDE_MEM_DEEPSEEK_MODEL).toBe('');
+      expect(defaults.CLAUDE_MEM_QWEN_MODEL).toBe('');
+    });
   });
 
   describe('get', () => {

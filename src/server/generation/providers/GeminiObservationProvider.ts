@@ -14,7 +14,6 @@ import type {
 } from './shared/types.js';
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1/models';
-const DEFAULT_MODEL = 'gemini-2.5-flash';
 
 export interface GeminiObservationProviderOptions {
   apiKey: string;
@@ -45,8 +44,15 @@ export class GeminiObservationProvider implements ServerGenerationProvider {
         cause: new Error('apiKey is required'),
       });
     }
+    // 依据: Task-20260927091425627-P2 — 模型名不再有默认值回落，缺失即抛错。
+    if (!options.model) {
+      throw new ServerClassifiedProviderError('Gemini model not configured', {
+        kind: 'unrecoverable',
+        cause: new Error('model is required'),
+      });
+    }
     this.apiKey = options.apiKey;
-    this.model = options.model ?? DEFAULT_MODEL;
+    this.model = options.model;
     this.maxOutputTokens = options.maxOutputTokens ?? 4096;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }

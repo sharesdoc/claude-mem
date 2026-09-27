@@ -61,8 +61,14 @@ describe('Qwen key resolution via new CLAUDE_MEM_QWEN_API_KEY (X-015/X-021)', ()
 
   describe('isQwenAvailable — getCredential fallback (R-005, X-015 新键)', () => {
     it('should return true when CLAUDE_MEM_QWEN_API_KEY is only in .env (env + settings empty)', () => {
-      // settings.json 不参与（mock 成全空默认），env 未设，仅 .env 有 key
-      const emptyDefaults = SettingsDefaultsManager.getAllDefaults();
+      // settings.json 不参与（mock 成全空默认，但补一个模型名），env 未设，仅 .env 有 key。
+      // 依据: Task-20260927091425627-P2 — isQwenAvailable() 新增模型名非空门槛，
+      // 本测试的关注点是 apiKey 的 getCredential(.env) 回退，因此显式配置模型名，
+      // 避免与本任务新加的"模型未配置判不可用"门槛混淆。
+      const emptyDefaults = {
+        ...SettingsDefaultsManager.getAllDefaults(),
+        CLAUDE_MEM_QWEN_MODEL: 'qwen3-max',
+      };
       const spy = spyOnSettings(emptyDefaults);
       fs.writeFileSync(TEST_ENV_FILE, 'CLAUDE_MEM_QWEN_API_KEY=sk-only-dotenv\n');
 

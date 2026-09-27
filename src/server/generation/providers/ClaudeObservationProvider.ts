@@ -14,7 +14,6 @@ import type {
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages';
 const ANTHROPIC_VERSION = '2023-06-01';
-const DEFAULT_MODEL = 'claude-3-5-sonnet-latest';
 
 export interface ClaudeObservationProviderOptions {
   apiKey: string;
@@ -43,8 +42,16 @@ export class ClaudeObservationProvider implements ServerGenerationProvider {
         cause: new Error('apiKey is required'),
       });
     }
+    // 依据: Task-20260927091425627-P2 — 模型名不再有默认值回落，缺失即抛错，
+    // 风格对齐上面的 API Key 缺失校验。
+    if (!options.model) {
+      throw new ServerClassifiedProviderError('Anthropic model not configured', {
+        kind: 'unrecoverable',
+        cause: new Error('model is required'),
+      });
+    }
     this.apiKey = options.apiKey;
-    this.model = options.model ?? DEFAULT_MODEL;
+    this.model = options.model;
     this.maxOutputTokens = options.maxOutputTokens ?? 4096;
     this.fetchImpl = options.fetchImpl ?? fetch;
   }

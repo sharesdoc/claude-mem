@@ -127,8 +127,9 @@ export interface SettingsDefaults {
   CLAUDE_MEM_REPORT_PROVIDER: string;
 
   // ── Qwen provider group (OpenAI-compatible protocol only) ───────────
-  /** Qwen model id for observation/summary + report synthesis. Empty falls
-   *  back to QwenProvider's DEFAULT_MODEL. */
+  /** Qwen model id for observation/summary + report synthesis. Empty means
+   *  not configured — Task-20260927091425627-P2: no more silent default,
+   *  provider is treated as unavailable until a model id is explicitly set. */
   CLAUDE_MEM_QWEN_MODEL: string;
   /** DashScope API key for Qwen. Empty = provider unavailable. */
   CLAUDE_MEM_QWEN_API_KEY: string;
@@ -148,7 +149,9 @@ export interface SettingsDefaults {
 
 export class SettingsDefaultsManager {
   private static readonly DEFAULTS: SettingsDefaults = {
-    CLAUDE_MEM_MODEL: 'claude-haiku-4-5-20251001',
+    // 依据: Task-20260927091425627-P2 — 模型名不再有出厂默认值，未显式配置时
+    // 各 provider 判不可用(次级厂商)或直接报错阻塞(Claude,选型链条终点)。
+    CLAUDE_MEM_MODEL: '',
     CLAUDE_MEM_CONTEXT_OBSERVATIONS: '50',
     CLAUDE_MEM_WORKER_PORT: String(37700 + ((process.getuid?.() ?? 77) % 100)),
     CLAUDE_MEM_WORKER_HOST: '127.0.0.1',
@@ -156,12 +159,12 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_PROVIDER: 'claude',  // Default to Claude
     CLAUDE_MEM_CLAUDE_AUTH_METHOD: 'subscription',  // Default to logged-in Claude SDK auth (not API key)
     CLAUDE_MEM_GEMINI_API_KEY: '',  // Empty by default, can be set via UI or env
-    CLAUDE_MEM_GEMINI_MODEL: 'gemini-2.5-flash-lite',  // Default Gemini model (highest free tier RPM)
+    CLAUDE_MEM_GEMINI_MODEL: '',  // 依据: Task-20260927091425627-P2 — 不再有出厂默认值，空 = 未配置
     CLAUDE_MEM_GEMINI_RATE_LIMITING_ENABLED: 'true',  // Rate limiting ON by default for free tier users
     CLAUDE_MEM_GEMINI_MAX_CONTEXT_MESSAGES: '20',  // Max messages in Gemini context window
     CLAUDE_MEM_GEMINI_MAX_TOKENS: '100000',  // Max estimated tokens (~100k safety limit)
     CLAUDE_MEM_OPENROUTER_API_KEY: '',  // Empty by default, can be set via UI or env
-    CLAUDE_MEM_OPENROUTER_MODEL: 'xiaomi/mimo-v2-flash:free',  // Default OpenRouter model (free tier)
+    CLAUDE_MEM_OPENROUTER_MODEL: '',  // 依据: Task-20260927091425627-P2 — 不再有出厂默认值，空 = 未配置
     CLAUDE_MEM_OPENROUTER_SITE_URL: '',  // Optional: for OpenRouter analytics
     CLAUDE_MEM_OPENROUTER_APP_NAME: 'claude-mem',  // App name for OpenRouter analytics
     CLAUDE_MEM_OPENROUTER_MAX_CONTEXT_MESSAGES: '20',  // Max messages in context window
@@ -195,7 +198,7 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_SEMANTIC_INJECT: 'false',             // Inject relevant past observations on every UserPromptSubmit (experimental, disabled by default)
     CLAUDE_MEM_SEMANTIC_INJECT_LIMIT: '5',           // Top-N most relevant observations to inject per prompt
     CLAUDE_MEM_TIER_ROUTING_ENABLED: 'true',         // Route observations to models by complexity
-    CLAUDE_MEM_TIER_SIMPLE_MODEL: 'haiku', // Portable tier alias — works across Direct API, Bedrock, Vertex, Azure (see #1463)
+    CLAUDE_MEM_TIER_SIMPLE_MODEL: '', // Empty = do not override; must be explicitly configured (see #1463)
     CLAUDE_MEM_TIER_SUMMARY_MODEL: '',                // Empty = use default model for summaries
     CLAUDE_MEM_CHROMA_ENABLED: 'true',         // Set to 'false' to disable Chroma and use SQLite-only search
     CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME: '1', // 0=off, 1=AI time only, 2=AI+human think time
@@ -251,11 +254,11 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_WEEKLY_REPORT_ENABLED: 'true',               // daily auto-generation of weekly work reports
     CLAUDE_MEM_WEEKLY_REPORT_TIME: '13:00',                 // local HH:MM to refresh this week's report
     CLAUDE_MEM_REPORT_PROVIDER: '',                         // Report AI provider; empty = AI section disabled.
-    CLAUDE_MEM_QWEN_MODEL: '',                              // Qwen provider model id; empty falls back to QwenProvider DEFAULT_MODEL.
+    CLAUDE_MEM_QWEN_MODEL: '',                              // 依据: Task-20260927091425627-P2 — 空 = 未配置，不再回落默认模型。
     CLAUDE_MEM_QWEN_API_KEY: '',                            // DashScope key for Qwen; empty = provider unavailable.
     CLAUDE_MEM_QWEN_URL: '',                                // OpenAI-compatible endpoint; empty = DashScope compatible-mode URL.
     CLAUDE_MEM_DEEPSEEK_API_KEY: '',                        // DeepSeek key; empty = provider unavailable.
-    CLAUDE_MEM_DEEPSEEK_MODEL: 'deepseek-v4-flash',        // deepseek-chat alias retired 2026-07-24.
+    CLAUDE_MEM_DEEPSEEK_MODEL: '',        // 依据: Task-20260927091425627-P2 — 不再有出厂默认值，空 = 未配置
     CLAUDE_MEM_DEEPSEEK_URL: 'https://api.deepseek.com',   // OpenAI-compatible endpoint.
   };
 

@@ -1,5 +1,5 @@
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import type { SettingsDefaults } from '../../../src/shared/SettingsDefaultsManager.js';
 import {
   resolveQwenApiKey,
@@ -7,7 +7,11 @@ import {
   resolveQwenModel,
   isQwenAvailable,
   classifyQwenError,
+  QwenProvider,
 } from '../../../src/services/worker/QwenProvider.js';
+import type { DatabaseManager } from '../../../src/services/worker/DatabaseManager.js';
+import type { SessionManager } from '../../../src/services/worker/SessionManager.js';
+import { SettingsDefaultsManager } from '../../../src/shared/SettingsDefaultsManager.js';
 
 // X-015: QwenProvider 切换到 CLAUDE_MEM_QWEN_* 配置组。
 // 验收标准转写：
@@ -125,12 +129,14 @@ describe('QwenProvider config resolvers (X-015)', () => {
   });
 
   describe('resolveQwenModel', () => {
-    it('should fall back to qwen3-max when model is empty', () => {
+    // 依据: Task-20260927091425627-P2 — 模型名未配置时不再回落 qwen3-max，
+    // 如实返回空串, 交由 isQwenAvailable()/startSession() 判定为不可用。
+    it('should return empty string when model is not configured (no default fallback)', () => {
       // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
       // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 空对象即可。
       const settings = {} as unknown as SettingsDefaults;
       settings.CLAUDE_MEM_QWEN_MODEL = '';
-      expect(resolveQwenModel(settings)).toBe('qwen3-max');
+      expect(resolveQwenModel(settings)).toBe('');
     });
 
     it('should accept arbitrary model ids (custom OpenAI-compatible endpoints)', () => {
@@ -151,9 +157,68 @@ describe('QwenProvider config resolvers (X-015)', () => {
   });
 
   describe('isQwenAvailable', () => {
-    it('should be true when CLAUDE_MEM_QWEN_API_KEY env is set', () => {
+    it('should be true when CLAUDE_MEM_QWEN_API_KEY env is set and a model is configured', () => {
       process.env.CLAUDE_MEM_QWEN_API_KEY = 'sk-env';
-      expect(isQwenAvailable()).toBe(true);
+      // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
+      // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 纯对象即可。
+      const settings = { CLAUDE_MEM_QWEN_MODEL: 'qwen3-max' } as unknown as SettingsDefaults;
+      const loadFromFileSpy = spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(() => settings);
+      try {
+        expect(isQwenAvailable()).toBe(true);
+      } finally {
+        loadFromFileSpy.mockRestore();
+      }
+    });
+
+    // 依据: Task-20260927091425627-P2 — apiKey 已配但模型名未配时应判不可用，
+    // 让 provider-selection 的选型链条自动跳到下一家, 而不是悄悄用默认模型跑 Qwen。
+    it('should be false when API key is set but model is NOT configured', () => {
+      process.env.CLAUDE_MEM_QWEN_API_KEY = 'sk-env';
+      const settings = { CLAUDE_MEM_QWEN_MODEL: '' } as unknown as SettingsDefaults;
+      const loadFromFileSpy = spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(() => settings);
+      try {
+        expect(isQwenAvailable()).toBe(false);
+      } finally {
+        loadFromFileSpy.mockRestore();
+      }
+    });
+
+    // 依据: doc/rev-report-20260927102826977.md R-003 —
+    // settings.json 损坏（loadFromFile 抛异常）时，模型名校验的 catch 分支不应
+    // 直接判不可用，需保留"env 优先"这条原有容错路径——env 已配置 API key 时
+    // 仍应判为可用，而不是被无关的模型名校验短路。
+    it('should still be true when settings.json is corrupted (loadFromFile throws) but env API key is configured', () => {
+      process.env.CLAUDE_MEM_QWEN_API_KEY = 'sk-env';
+      const loadFromFileSpy = spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(() => {
+        throw new Error('settings.json is corrupted');
+      });
+      try {
+        expect(isQwenAvailable()).toBe(true);
+      } finally {
+        loadFromFileSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('QwenProvider.startSession model guard', () => {
+    // 依据: Task-20260927091425627-P2 — 双重保险: 即便 isQwenAvailable() 的选型
+    // 判断在某种路径下被绕过, startSession() 自己也不会带着空模型名发请求。
+    it('should throw when API key is configured but model is empty', async () => {
+      const settings = {
+        CLAUDE_MEM_QWEN_API_KEY: 'sk-test',
+        CLAUDE_MEM_QWEN_MODEL: '',
+        CLAUDE_MEM_QWEN_URL: '',
+      } as unknown as SettingsDefaults;
+      const loadFromFileSpy = spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(() => settings);
+      delete process.env.CLAUDE_MEM_QWEN_API_KEY;
+
+      try {
+        const provider = new QwenProvider({} as DatabaseManager, {} as SessionManager);
+        const session = { sessionDbId: 1 } as any;
+        await expect(provider.startSession(session)).rejects.toThrow(/CLAUDE_MEM_QWEN_MODEL/);
+      } finally {
+        loadFromFileSpy.mockRestore();
+      }
     });
   });
 });

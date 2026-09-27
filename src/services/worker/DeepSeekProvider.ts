@@ -25,13 +25,13 @@ import { assertHttpEndpoint } from './provider-endpoint.js';
 //   凭证  CLAUDE_MEM_DEEPSEEK_API_KEY    (env > settings.json > ~/.claude-mem/.env)
 //   端点  CLAUDE_MEM_DEEPSEEK_URL        (非空 = 调用方自担责保证 OpenAI 兼容；
 //                                        空 = https://api.deepseek.com/chat/completions)
-//   模型  CLAUDE_MEM_DEEPSEEK_MODEL      (空 = deepseek-v4-flash；
-//                                        deepseek-chat/deepseek-reasoner 别名
-//                                        已于 2026-07-24 停用)
+//   模型  CLAUDE_MEM_DEEPSEEK_MODEL      (空 = 未配置, 判不可用/startSession 报错;
+//                                        Task-20260927091425627-P2 不再回落
+//                                        默认模型; deepseek-chat/deepseek-reasoner
+//                                        别名已于 2026-07-24 停用)
 // ---------------------------------------------------------------------------
 
 export const DEEPSEEK_COMPLETIONS_URL = 'https://api.deepseek.com/chat/completions';
-const DEFAULT_MODEL = 'deepseek-v4-flash';
 const AI_TIMEOUT_MS = 90000;
 
 /** OpenAI chat/completions 请求体 */
@@ -134,6 +134,11 @@ export class DeepSeekProvider {
 
     if (!apiKey) {
       throw new Error('DeepSeek API key not configured. Set CLAUDE_MEM_DEEPSEEK_API_KEY in settings or environment.');
+    }
+
+    // 依据: Task-20260927091425627-P2 — 模型名未配置时直接阻塞, 不再悄悄补默认模型。
+    if (!model) {
+      throw new Error('DeepSeek model not configured. Set CLAUDE_MEM_DEEPSEEK_MODEL in settings or environment.');
     }
 
     // 合成 memorySessionId (与 Gemini/Qwen 模式一致)
@@ -412,13 +417,24 @@ export function resolveDeepSeekEndpoint(settings: SettingsDefaults): string {
   return `${normalized}/chat/completions`;
 }
 
-/** DeepSeek 模型解析 (X-016)：任意模型名直接采用，空回落 DEFAULT_MODEL。 */
+/** DeepSeek 模型解析 (X-016)：任意模型名直接采用。
+ *  依据: Task-20260927091425627-P2 — 空不再回落默认模型，如实返回空串。 */
 export function resolveDeepSeekModel(settings: SettingsDefaults): string {
-  return (settings.CLAUDE_MEM_DEEPSEEK_MODEL ?? '').trim() || DEFAULT_MODEL;
+  return (settings.CLAUDE_MEM_DEEPSEEK_MODEL ?? '').trim();
 }
 
-/** 检查 DeepSeek 是否可用 (有 key 即可)。 */
+/** 检查 DeepSeek 是否可用 (有 key 且已配置模型名)。 */
 export function isDeepSeekAvailable(): boolean {
+  // 依据: Task-20260927091425627-P2 — 模型名未配置时判不可用，与 apiKey 门槛并列。
+  // R-003: 模型名门槛与下方 apiKey 门槛是两个独立判断——settings.json 损坏时模型名
+  // 无法核实，不应连带短路掉"env 优先"的 apiKey 判断路径，故 catch 分支不直接 return false。
+  try {
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    if (!resolveDeepSeekModel(settings)) return false;
+  } catch {
+    // settings 文件不可读：模型名无法核实，视为未阻断，继续走下方 apiKey 判断
+  }
+
   // env 优先
   if ((process.env.CLAUDE_MEM_DEEPSEEK_API_KEY ?? '').trim()) return true;
 

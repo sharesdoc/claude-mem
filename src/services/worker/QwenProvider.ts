@@ -18,7 +18,6 @@ import { withRetry } from './retry.js';
 import { assertHttpEndpoint } from './provider-endpoint.js';
 
 export const DASHSCOPE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions';
-const DEFAULT_MODEL = 'qwen3-max';
 const AI_TIMEOUT_MS = 90000;
 
 // ---------------------------------------------------------------------------
@@ -28,7 +27,8 @@ const AI_TIMEOUT_MS = 90000;
 //   凭证  CLAUDE_MEM_QWEN_API_KEY    (env > settings.json > ~/.claude-mem/.env)
 //   端点  CLAUDE_MEM_QWEN_URL        (空 = DASHSCOPE_URL 兼容端点；非空由调用方
 //                                   自担责保证 OpenAI 兼容)
-//   模型  CLAUDE_MEM_QWEN_MODEL      (空 = DEFAULT_MODEL)
+//   模型  CLAUDE_MEM_QWEN_MODEL      (空 = 未配置, 判不可用/startSession 报错;
+//                                   Task-20260927091425627-P2 不再回落默认模型)
 // ---------------------------------------------------------------------------
 
 /** DashScope chat/completions 请求体 */
@@ -116,7 +116,8 @@ export function classifyQwenError(input: {
 }
 
 // 模型 id 不再做白名单限制：CLAUDE_MEM_QWEN_URL 允许指向任意 OpenAI 兼容端点，
-// 模型名由该端点定义，配置值直接采用（空 = DEFAULT_MODEL）。
+// 模型名由该端点定义，配置值直接采用（空 = 未配置，Task-20260927091425627-P2
+// 不再回落默认模型）。
 export type QwenModel = string;
 
 export class QwenProvider {
@@ -135,6 +136,11 @@ export class QwenProvider {
 
     if (!apiKey) {
       throw new Error('Qwen API key not configured. Set CLAUDE_MEM_QWEN_API_KEY in settings or environment.');
+    }
+
+    // 依据: Task-20260927091425627-P2 — 模型名未配置时直接阻塞, 不再悄悄补默认模型。
+    if (!model) {
+      throw new Error('Qwen model not configured. Set CLAUDE_MEM_QWEN_MODEL in settings or environment.');
     }
 
     // 合成 memorySessionId (与 Gemini 模式一致)
@@ -413,14 +419,25 @@ export function resolveQwenEndpoint(settings: SettingsDefaults): string {
   return `${normalized}/chat/completions`;
 }
 
-/** Qwen 模型解析 (X-015)：任意模型名直接采用（自定义端点下模型名由端点定义），
- *  空回落 DEFAULT_MODEL。 */
+/** Qwen 模型解析 (X-015)：任意模型名直接采用（自定义端点下模型名由端点定义）。
+ *  依据: Task-20260927091425627-P2 — 空不再回落默认模型，如实返回空串。 */
 export function resolveQwenModel(settings: SettingsDefaults): string {
-  return (settings.CLAUDE_MEM_QWEN_MODEL ?? '').trim() || DEFAULT_MODEL;
+  return (settings.CLAUDE_MEM_QWEN_MODEL ?? '').trim();
 }
 
-/** 检查 Qwen / DashScope 是否可用 (有 key 即可)。 */
+/** 检查 Qwen / DashScope 是否可用 (有 key 且已配置模型名)。 */
 export function isQwenAvailable(): boolean {
+  // 依据: Task-20260927091425627-P2 — 模型名未配置时判不可用，与 apiKey 门槛并列，
+  // 让 provider-selection 的选型链条自动跳到下一家。
+  // R-003: 模型名门槛与下方 apiKey 门槛是两个独立判断——settings.json 损坏时模型名
+  // 无法核实，不应连带短路掉"env 优先"的 apiKey 判断路径，故 catch 分支不直接 return false。
+  try {
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    if (!resolveQwenModel(settings)) return false;
+  } catch {
+    // settings 文件不可读：模型名无法核实，视为未阻断，继续走下方 apiKey 判断
+  }
+
   // env 优先
   if ((process.env.CLAUDE_MEM_QWEN_API_KEY ?? '').trim()) return true;
 

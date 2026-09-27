@@ -72,7 +72,7 @@ export function resolveReportProviderConfig(settings?: SettingsDefaults): Report
         return null;
       }
       warnOnCustomEndpoint('qwen', endpoint, DASHSCOPE_COMPLETIONS_URL);
-      return { provider: 'qwen', apiKey, model: resolveQwenModel(s), endpoint };
+      return { provider: 'qwen', apiKey, model: resolveQwenModel(s) || 'qwen3-max', endpoint };
     }
     case 'deepseek': {
       const apiKey = resolveDeepSeekApiKey(s);
@@ -84,7 +84,7 @@ export function resolveReportProviderConfig(settings?: SettingsDefaults): Report
         return null;
       }
       warnOnCustomEndpoint('deepseek', endpoint, DEEPSEEK_COMPLETIONS_URL);
-      return { provider: 'deepseek', apiKey, model: resolveDeepSeekModel(s), endpoint };
+      return { provider: 'deepseek', apiKey, model: resolveDeepSeekModel(s) || 'deepseek-v4-flash', endpoint };
     }
     case 'openrouter': {
       const apiKey = (process.env.OPENROUTER_API_KEY ?? '').trim()

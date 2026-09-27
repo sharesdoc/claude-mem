@@ -43,7 +43,11 @@ describe('buildServerGenerationProviderFromEnv (X-020)', () => {
   it('should default to claude and use ANTHROPIC_API_KEY', () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-env';
     delete process.env.CLAUDE_MEM_PROVIDER;
-    const provider = buildServerGenerationProviderFromEnv(freshSettings());
+    const s = freshSettings();
+    // 依据: Task-20260927091425627-P2 — 模型名不再有默认值，claude 分支
+    // 不传 model 字段会让构造函数抛错; 显式配置模型名以测试"能正常解析"这条主张。
+    s.CLAUDE_MEM_MODEL = 'claude-haiku-4-5-20251001';
+    const provider = buildServerGenerationProviderFromEnv(s);
     expect(provider).not.toBeNull();
     expect(provider!.providerLabel).toBe('claude');
   });
@@ -52,6 +56,15 @@ describe('buildServerGenerationProviderFromEnv (X-020)', () => {
     delete process.env.ANTHROPIC_API_KEY;
     const provider = buildServerGenerationProviderFromEnv(freshSettings());
     expect(provider).toBeNull();
+  });
+
+  // 依据: Task-20260927091425627-P2 — claude 分支模型名缺失回归护栏:
+  // 有 key 但 CLAUDE_MEM_MODEL 未配置时, 生成同样应被禁用(返回 null),
+  // 而不是像过去那样悄悄垫 claude-haiku-4-5-20251001 继续跑。
+  it('should return null for claude when API key is set but model is not configured', () => {
+    process.env.ANTHROPIC_API_KEY = 'sk-ant-env';
+    delete process.env.CLAUDE_MEM_PROVIDER;
+    expect(buildServerGenerationProviderFromEnv(freshSettings())).toBeNull();
   });
 
   it('should resolve qwen from its provider group', () => {
@@ -66,14 +79,36 @@ describe('buildServerGenerationProviderFromEnv (X-020)', () => {
     expect(provider!.providerLabel).toBe('qwen');
   });
 
+  // 依据: Task-20260927091425627-P2 — resolveQwenModel 不再回落默认模型，
+  // qwen/deepseek 分支始终显式传 model 字段给 OpenRouterObservationProvider
+  // 构造函数; 模型名未配置时构造函数会抛错, 被本函数的 try/catch 吞掉后
+  // 表现为 null(与 apiKey 缺失时"生成禁用"的语义一致)。
+  it('should return null when qwen has an API key but no model configured', () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const s = freshSettings();
+    s.CLAUDE_MEM_PROVIDER = 'qwen';
+    s.CLAUDE_MEM_QWEN_API_KEY = 'sk-q-srv';
+    expect(buildServerGenerationProviderFromEnv(s)).toBeNull();
+  });
+
   it('should resolve deepseek from its provider group', () => {
     delete process.env.ANTHROPIC_API_KEY;
     const s = freshSettings();
     s.CLAUDE_MEM_PROVIDER = 'deepseek';
     s.CLAUDE_MEM_DEEPSEEK_API_KEY = 'sk-ds-srv';
+    s.CLAUDE_MEM_DEEPSEEK_MODEL = 'deepseek-v4-flash';
     const provider = buildServerGenerationProviderFromEnv(s);
     expect(provider).not.toBeNull();
     expect(provider!.providerLabel).toBe('deepseek');
+  });
+
+  // 依据: Task-20260927091425627-P2 — 同上，deepseek 分支的模型名缺失回归护栏。
+  it('should return null when deepseek has an API key but no model configured', () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const s = freshSettings();
+    s.CLAUDE_MEM_PROVIDER = 'deepseek';
+    s.CLAUDE_MEM_DEEPSEEK_API_KEY = 'sk-ds-srv';
+    expect(buildServerGenerationProviderFromEnv(s)).toBeNull();
   });
 
   it('should resolve gemini via GEMINI_API_KEY env', () => {
@@ -81,9 +116,20 @@ describe('buildServerGenerationProviderFromEnv (X-020)', () => {
     process.env.GEMINI_API_KEY = 'sk-g-env';
     const s = freshSettings();
     s.CLAUDE_MEM_PROVIDER = 'gemini';
+    // 依据: Task-20260927091425627-P2 — 模型名不再有默认值。
+    s.CLAUDE_MEM_GEMINI_MODEL = 'gemini-2.5-flash-lite';
     const provider = buildServerGenerationProviderFromEnv(s);
     expect(provider).not.toBeNull();
     expect(provider!.providerLabel).toBe('gemini');
+  });
+
+  // 依据: Task-20260927091425627-P2 — gemini 分支模型名缺失回归护栏。
+  it('should return null for gemini when API key is set but model is not configured', () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.GEMINI_API_KEY = 'sk-g-env';
+    const s = freshSettings();
+    s.CLAUDE_MEM_PROVIDER = 'gemini';
+    expect(buildServerGenerationProviderFromEnv(s)).toBeNull();
   });
 
   it('should resolve openrouter from its settings key', () => {
@@ -91,9 +137,20 @@ describe('buildServerGenerationProviderFromEnv (X-020)', () => {
     const s = freshSettings();
     s.CLAUDE_MEM_PROVIDER = 'openrouter';
     s.CLAUDE_MEM_OPENROUTER_API_KEY = 'sk-or-srv';
+    // 依据: Task-20260927091425627-P2 — 模型名不再有默认值。
+    s.CLAUDE_MEM_OPENROUTER_MODEL = 'xiaomi/mimo-v2-flash:free';
     const provider = buildServerGenerationProviderFromEnv(s);
     expect(provider).not.toBeNull();
     expect(provider!.providerLabel).toBe('openrouter');
+  });
+
+  // 依据: Task-20260927091425627-P2 — openrouter 分支模型名缺失回归护栏。
+  it('should return null for openrouter when API key is set but model is not configured', () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    const s = freshSettings();
+    s.CLAUDE_MEM_PROVIDER = 'openrouter';
+    s.CLAUDE_MEM_OPENROUTER_API_KEY = 'sk-or-srv';
+    expect(buildServerGenerationProviderFromEnv(s)).toBeNull();
   });
 
   it('should return null when the selected vendor has no key', () => {
@@ -107,7 +164,10 @@ describe('buildServerGenerationProviderFromEnv (X-020)', () => {
     process.env.ANTHROPIC_API_KEY = 'sk-ant-env';
     process.env.CLAUDE_MEM_SERVER_PROVIDER = 'qwen';
     delete process.env.CLAUDE_MEM_PROVIDER;
-    const provider = buildServerGenerationProviderFromEnv(freshSettings());
+    const s = freshSettings();
+    // 依据: Task-20260927091425627-P2 — 模型名不再有默认值。
+    s.CLAUDE_MEM_MODEL = 'claude-haiku-4-5-20251001';
+    const provider = buildServerGenerationProviderFromEnv(s);
     expect(provider).not.toBeNull();
     expect(provider!.providerLabel).toBe('claude');
   });

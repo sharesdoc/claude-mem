@@ -179,6 +179,14 @@ export class ClaudeProvider {
     const claudePath = findClaudeExecutable('SDK');
 
     const modelId = session.modelOverride || this.getModelId();
+
+    // 依据: Task-20260927091425627-P2 — Claude 是选型链条终点(没有更下一家可换),
+    // 模型名缺失时不再悄悄垫默认模型，直接报错阻塞。session.modelOverride 存在时
+    // modelId 天然非空，不受影响。
+    if (!modelId) {
+      throw new Error('Claude model not configured. Set CLAUDE_MEM_MODEL in settings or environment.');
+    }
+
     const disallowedTools = [
       'Bash',           // Prevent infinite loops
       'Read',           // No file reading
@@ -512,6 +520,6 @@ export class ClaudeProvider {
   private getModelId(): string {
     const settingsPath = paths.settings();
     const settings = SettingsDefaultsManager.loadFromFile(settingsPath);
-    return settings.CLAUDE_MEM_MODEL;
+    return (settings.CLAUDE_MEM_MODEL ?? '').trim();
   }
 }

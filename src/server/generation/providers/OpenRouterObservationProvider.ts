@@ -13,7 +13,6 @@ import type {
 } from './shared/types.js';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const DEFAULT_MODEL = 'anthropic/claude-3.5-sonnet';
 
 export interface OpenRouterObservationProviderOptions {
   apiKey: string;
@@ -51,8 +50,17 @@ export class OpenRouterObservationProvider implements ServerGenerationProvider {
         cause: new Error('apiKey is required'),
       });
     }
+    // 依据: Task-20260927091425627-P2 — 模型名不再有默认值回落，缺失即抛错。
+    // 注: 本类被 qwen/deepseek server-beta 分支复用(providerLabel 泛化)，
+    // 该门槛同样适用于这两家。
+    if (!options.model) {
+      throw new ServerClassifiedProviderError(`${options.providerLabel ?? 'OpenRouter'} model not configured`, {
+        kind: 'unrecoverable',
+        cause: new Error('model is required'),
+      });
+    }
     this.apiKey = options.apiKey;
-    this.model = options.model ?? DEFAULT_MODEL;
+    this.model = options.model;
     this.maxOutputTokens = options.maxOutputTokens ?? 4096;
     this.siteUrl = options.siteUrl ?? 'https://github.com/thedotmack/claude-mem';
     this.appName = options.appName ?? 'claude-mem';

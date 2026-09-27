@@ -1,5 +1,5 @@
 
-import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import type { SettingsDefaults } from '../../../src/shared/SettingsDefaultsManager.js';
 import {
   resolveDeepSeekApiKey,
@@ -8,7 +8,11 @@ import {
   classifyDeepSeekError,
   isDeepSeekAvailable,
   isDeepSeekSelected,
+  DeepSeekProvider,
 } from '../../../src/services/worker/DeepSeekProvider.js';
+import type { DatabaseManager } from '../../../src/services/worker/DatabaseManager.js';
+import type { SessionManager } from '../../../src/services/worker/SessionManager.js';
+import { SettingsDefaultsManager } from '../../../src/shared/SettingsDefaultsManager.js';
 
 // X-016: DeepSeekProvider 配置解析与错误分类。
 // 验收标准转写：
@@ -102,12 +106,14 @@ describe('DeepSeekProvider config resolvers (X-016)', () => {
   });
 
   describe('resolveDeepSeekModel', () => {
-    it('should fall back to deepseek-v4-flash when empty', () => {
+    // 依据: Task-20260927091425627-P2 — 模型名未配置时不再回落 deepseek-v4-flash，
+    // 如实返回空串, 交由 isDeepSeekAvailable()/startSession() 判定为不可用。
+    it('should return empty string when model is not configured (no default fallback)', () => {
       // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
       // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 空对象即可。
       const settings = {} as unknown as SettingsDefaults;
       settings.CLAUDE_MEM_DEEPSEEK_MODEL = '';
-      expect(resolveDeepSeekModel(settings)).toBe('deepseek-v4-flash');
+      expect(resolveDeepSeekModel(settings)).toBe('');
     });
 
     it('should accept arbitrary model ids', () => {
@@ -155,9 +161,45 @@ describe('DeepSeekProvider config resolvers (X-016)', () => {
   });
 
   describe('isDeepSeekAvailable', () => {
-    it('should be true when env key set', () => {
+    it('should be true when env key set and a model is configured', () => {
       process.env.CLAUDE_MEM_DEEPSEEK_API_KEY = 'sk-ds-env';
-      expect(isDeepSeekAvailable()).toBe(true);
+      // X-029: 纯对象构造——bun 并发执行时其它文件的 mock.module(SettingsDefaultsManager)
+      // 会泄漏到本文件使 getAllDefaults 失效; resolver 只按需读取字段, 纯对象即可。
+      const settings = { CLAUDE_MEM_DEEPSEEK_MODEL: 'deepseek-v4-flash' } as unknown as SettingsDefaults;
+      const loadFromFileSpy = spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(() => settings);
+      try {
+        expect(isDeepSeekAvailable()).toBe(true);
+      } finally {
+        loadFromFileSpy.mockRestore();
+      }
+    });
+
+    // 依据: Task-20260927091425627-P2 — apiKey 已配但模型名未配时应判不可用。
+    it('should be false when API key is set but model is NOT configured', () => {
+      process.env.CLAUDE_MEM_DEEPSEEK_API_KEY = 'sk-ds-env';
+      const settings = { CLAUDE_MEM_DEEPSEEK_MODEL: '' } as unknown as SettingsDefaults;
+      const loadFromFileSpy = spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(() => settings);
+      try {
+        expect(isDeepSeekAvailable()).toBe(false);
+      } finally {
+        loadFromFileSpy.mockRestore();
+      }
+    });
+
+    // 依据: doc/rev-report-20260927102826977.md R-003 —
+    // settings.json 损坏（loadFromFile 抛异常）时，模型名校验的 catch 分支不应
+    // 直接判不可用，需保留"env 优先"这条原有容错路径——env 已配置 API key 时
+    // 仍应判为可用，而不是被无关的模型名校验短路。
+    it('should still be true when settings.json is corrupted (loadFromFile throws) but env API key is configured', () => {
+      process.env.CLAUDE_MEM_DEEPSEEK_API_KEY = 'sk-ds-env';
+      const loadFromFileSpy = spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(() => {
+        throw new Error('settings.json is corrupted');
+      });
+      try {
+        expect(isDeepSeekAvailable()).toBe(true);
+      } finally {
+        loadFromFileSpy.mockRestore();
+      }
     });
   });
 
@@ -165,6 +207,28 @@ describe('DeepSeekProvider config resolvers (X-016)', () => {
     it('should return false when provider is claude', () => {
       // 默认 provider 为 claude，不额外改 settings 时必为 false
       expect(isDeepSeekSelected()).toBe(false);
+    });
+  });
+
+  describe('DeepSeekProvider.startSession model guard', () => {
+    // 依据: Task-20260927091425627-P2 — 双重保险: startSession() 自身也拒绝
+    // 空模型名, 不依赖 isDeepSeekAvailable() 单点把关。
+    it('should throw when API key is configured but model is empty', async () => {
+      const settings = {
+        CLAUDE_MEM_DEEPSEEK_API_KEY: 'sk-ds-test',
+        CLAUDE_MEM_DEEPSEEK_MODEL: '',
+        CLAUDE_MEM_DEEPSEEK_URL: '',
+      } as unknown as SettingsDefaults;
+      const loadFromFileSpy = spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(() => settings);
+      delete process.env.CLAUDE_MEM_DEEPSEEK_API_KEY;
+
+      try {
+        const provider = new DeepSeekProvider({} as DatabaseManager, {} as SessionManager);
+        const session = { sessionDbId: 1 } as any;
+        await expect(provider.startSession(session)).rejects.toThrow(/CLAUDE_MEM_DEEPSEEK_MODEL/);
+      } finally {
+        loadFromFileSpy.mockRestore();
+      }
     });
   });
 });

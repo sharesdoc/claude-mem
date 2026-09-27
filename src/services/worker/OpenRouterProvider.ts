@@ -151,6 +151,11 @@ export class OpenRouterProvider {
       throw new Error('OpenRouter API key not configured. Set CLAUDE_MEM_OPENROUTER_API_KEY in settings or OPENROUTER_API_KEY environment variable.');
     }
 
+    // 依据: Task-20260927091425627-P2 — 模型名未配置时直接阻塞, 不再悄悄补默认模型。
+    if (!model) {
+      throw new Error('OpenRouter model not configured. Set CLAUDE_MEM_OPENROUTER_MODEL in settings or environment.');
+    }
+
     if (!session.memorySessionId) {
       const syntheticMemorySessionId = `openrouter-${session.contentSessionId}-${Date.now()}`;
       session.memorySessionId = syntheticMemorySessionId;
@@ -527,7 +532,8 @@ export class OpenRouterProvider {
 
     const apiKey = settings.CLAUDE_MEM_OPENROUTER_API_KEY || getCredential('OPENROUTER_API_KEY') || '';
 
-    const model = settings.CLAUDE_MEM_OPENROUTER_MODEL || 'xiaomi/mimo-v2-flash:free';
+    // 依据: Task-20260927091425627-P2 — 模型名不再回落默认值，未配置时如实返回空串。
+    const model = (settings.CLAUDE_MEM_OPENROUTER_MODEL ?? '').trim();
 
     const siteUrl = settings.CLAUDE_MEM_OPENROUTER_SITE_URL || '';
     const appName = settings.CLAUDE_MEM_OPENROUTER_APP_NAME || 'claude-mem';
@@ -539,6 +545,8 @@ export class OpenRouterProvider {
 export function isOpenRouterAvailable(): boolean {
   const settingsPath = USER_SETTINGS_PATH;
   const settings = SettingsDefaultsManager.loadFromFile(settingsPath);
+  // 依据: Task-20260927091425627-P2 — 模型名未配置时判不可用，与 apiKey 门槛并列。
+  if (!(settings.CLAUDE_MEM_OPENROUTER_MODEL ?? '').trim()) return false;
   return !!(settings.CLAUDE_MEM_OPENROUTER_API_KEY || getCredential('OPENROUTER_API_KEY'));
 }
 

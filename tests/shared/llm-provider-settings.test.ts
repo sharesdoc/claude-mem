@@ -6,7 +6,8 @@ import { SettingsDefaultsManager } from '../../src/shared/SettingsDefaultsManage
 // 断言出厂默认值——新增键的默认语义是设计的验收标准：
 //   - Qwen/DeepSeek key 为空 = 未启用
 //   - QWEN_URL 为空 = provider 内回落 DashScope 兼容端点
-//   - DeepSeek 默认 deepseek-v4-flash（deepseek-chat 别名已于 2026-07-24 停用）
+//   - DeepSeek 模型出厂为空串（Task-20260927091425627-P2：模型名不再有默认值，
+//     未配置时 DeepSeek 判不可用，不再悄悄回落 deepseek-v4-flash）
 //   - REPORT_PROVIDER 为空 = 报表 AI 段禁用
 // X-029: bun 并发执行时其它测试文件的 mock.module(SettingsDefaultsManager) 可能
 // 泄漏到本文件(本套测试的目的正是真实默认值), 被 mock 时整体跳过。
@@ -20,10 +21,12 @@ describe('LLM provider settings defaults (X-014)', () => {
     expect(defaults.CLAUDE_MEM_QWEN_MODEL).toBe('');
   });
 
-  it.skipIf(!REAL_DEFAULTS_AVAILABLE)('should include the DeepSeek provider group with v4-flash defaults', () => {
+  // 依据: Task-20260927091425627-P2 — CLAUDE_MEM_DEEPSEEK_MODEL 出厂值从
+  // 'deepseek-v4-flash' 改为空串，模型名不再有出厂默认值。
+  it.skipIf(!REAL_DEFAULTS_AVAILABLE)('should include the DeepSeek provider group with empty model default (no silent fallback)', () => {
     const defaults = SettingsDefaultsManager.getAllDefaults();
     expect(defaults.CLAUDE_MEM_DEEPSEEK_API_KEY).toBe('');
-    expect(defaults.CLAUDE_MEM_DEEPSEEK_MODEL).toBe('deepseek-v4-flash');
+    expect(defaults.CLAUDE_MEM_DEEPSEEK_MODEL).toBe('');
     expect(defaults.CLAUDE_MEM_DEEPSEEK_URL).toBe('https://api.deepseek.com');
   });
 
@@ -50,7 +53,8 @@ describe('LLM provider settings defaults (X-014)', () => {
     try {
       writeFileSync(settingsPath, '{}');
       const result = SettingsDefaultsManager.loadFromFile(settingsPath);
-      expect(result.CLAUDE_MEM_DEEPSEEK_MODEL).toBe('deepseek-v4-flash');
+      // 依据: Task-20260927091425627-P2 — 空文件落回出厂默认值时模型名应为空串。
+      expect(result.CLAUDE_MEM_DEEPSEEK_MODEL).toBe('');
       expect(result.CLAUDE_MEM_REPORT_PROVIDER).toBe('');
       expect(existsSync(settingsPath)).toBe(true);
     } finally {
