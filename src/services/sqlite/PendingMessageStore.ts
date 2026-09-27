@@ -2,6 +2,12 @@ import { Database } from 'bun:sqlite';
 import type { PendingMessage } from '../worker-types.js';
 import { logger } from '../../utils/logger.js';
 
+export interface RecoveryPreparationResult {
+  eligibleCount: number;
+  discardedCount: number;
+  skippedBecauseOverLimit: boolean;
+}
+
 export interface PersistentPendingMessage {
   id: number;
   session_db_id: number;
@@ -134,6 +140,57 @@ export class PendingMessageStore {
     `);
     const result = stmt.get() as { count: number };
     return result.count;
+  }
+
+  /**
+   * Applies the bounded recovery policy to one still-active session.
+   * Original payloads are stored separately in raw_events, so deleting queue
+   * rows here intentionally does not delete the source event.
+   */
+  prepareRecovery(sessionDbId: number, cutoffEpoch: number, maxMessages: number): RecoveryPreparationResult {
+    // Backfill the archive before dropping any legacy queue rows. This protects
+    // events queued before raw_events was introduced, and also makes queue
+    // cleanup safe if a prior raw write was interrupted.
+    this.db.prepare(`
+      INSERT OR IGNORE INTO raw_events (
+        content_session_id, session_db_id, event_type, tool_use_id,
+        tool_name, tool_input, tool_response, cwd, last_assistant_message,
+        prompt_number, agent_id, agent_type, created_at_epoch
+      )
+      SELECT content_session_id, session_db_id, message_type, tool_use_id,
+             tool_name, tool_input, tool_response, cwd, last_assistant_message,
+             prompt_number, agent_id, agent_type, created_at_epoch
+      FROM pending_messages
+      WHERE session_db_id = ? AND status IN ('pending', 'processing')
+    `).run(sessionDbId);
+
+    const eligible = this.db.prepare(`
+      SELECT COUNT(*) AS count
+      FROM pending_messages
+      WHERE session_db_id = ? AND status IN ('pending', 'processing') AND created_at_epoch >= ?
+    `).get(sessionDbId, cutoffEpoch) as { count: number };
+
+    if (eligible.count > maxMessages) {
+      const discarded = this.db.prepare(`
+        DELETE FROM pending_messages
+        WHERE session_db_id = ? AND status IN ('pending', 'processing')
+      `).run(sessionDbId).changes;
+      return {
+        eligibleCount: eligible.count,
+        discardedCount: discarded,
+        skippedBecauseOverLimit: true,
+      };
+    }
+
+    const discarded = this.db.prepare(`
+      DELETE FROM pending_messages
+      WHERE session_db_id = ? AND status IN ('pending', 'processing') AND created_at_epoch < ?
+    `).run(sessionDbId, cutoffEpoch).changes;
+    return {
+      eligibleCount: eligible.count,
+      discardedCount: discarded,
+      skippedBecauseOverLimit: false,
+    };
   }
 
   hasAnyPendingWork(): boolean {

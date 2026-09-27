@@ -412,4 +412,31 @@ describe('PendingMessageStore', () => {
     expect(store.hasAnyPendingWork()).toBe(true);
     expect(store.getSessionsWithPendingMessages()).toEqual([sessionDbId, session2Id]);
   });
+
+  test('drops old recovery rows but keeps recent rows within the cap', () => {
+    const oldId = enqueueMessage({ toolUseId: 'old' });
+    const boundaryId = enqueueMessage({ toolUseId: 'boundary' });
+    const recentId = enqueueMessage({ toolUseId: 'recent' });
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    db.prepare('UPDATE pending_messages SET created_at_epoch = ? WHERE id = ?').run(cutoff - 1, oldId);
+    db.prepare('UPDATE pending_messages SET created_at_epoch = ? WHERE id = ?').run(cutoff, boundaryId);
+
+    const result = store.prepareRecovery(sessionDbId, cutoff, 10);
+
+    expect(result).toEqual({ eligibleCount: 2, discardedCount: 1, skippedBecauseOverLimit: false });
+    expect(store.getPendingCount(sessionDbId)).toBe(2);
+    expect(store.claimNextMessage(sessionDbId)?.id).toBe(boundaryId);
+    expect(store.claimNextMessage(sessionDbId)?.id).toBe(recentId);
+  });
+
+  test('discards the whole compensation batch when it exceeds the cap', () => {
+    for (let i = 0; i < 11; i++) enqueueMessage({ toolUseId: `tool-${i}` });
+
+    const result = store.prepareRecovery(sessionDbId, Date.now() - 24 * 60 * 60 * 1000, 10);
+
+    expect(result.eligibleCount).toBe(11);
+    expect(result.discardedCount).toBe(11);
+    expect(result.skippedBecauseOverLimit).toBe(true);
+    expect(store.getPendingCount(sessionDbId)).toBe(0);
+  });
 });

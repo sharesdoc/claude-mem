@@ -82,6 +82,15 @@ export class SessionRoutes extends BaseRouteHandler {
   ): Promise<void> {
     if (!session) return;
 
+    const dbSession = this.dbManager.getSessionById(session.sessionDbId);
+    if (dbSession.status !== 'active') {
+      logger.info('SESSION', 'Skipping generator recovery for non-active session', {
+        sessionId: session.sessionDbId,
+        status: dbSession.status,
+      });
+      return;
+    }
+
     if (session.abortController.signal.aborted) {
       logger.debug('SESSION', 'Resetting aborted AbortController before starting generator', {
         sessionId: session.sessionDbId
@@ -102,6 +111,20 @@ export class SessionRoutes extends BaseRouteHandler {
 
     const pendingStore = this.sessionManager.getPendingMessageStore();
     const actualQueueDepth = await pendingStore.getPendingCount(session.sessionDbId);
+
+    if (session.recoveryPending || actualQueueDepth > 0) {
+      const recovery = await this.sessionManager.prepareActiveSessionRecovery(session.sessionDbId);
+      session.recoveryPending = false;
+      logger.info('SESSION', 'Bounded active-session recovery prepared', {
+        sessionId: session.sessionDbId,
+        eligibleCount: recovery.eligibleCount,
+        discardedCount: recovery.discardedCount,
+        skippedBecauseOverLimit: recovery.skippedBecauseOverLimit,
+      });
+      if (recovery.skippedBecauseOverLimit) {
+        return;
+      }
+    }
 
     logger.info('SESSION', `Generator auto-starting (${source}) using ${agentName}`, {
       sessionId: session.sessionDbId,
@@ -138,6 +161,9 @@ export class SessionRoutes extends BaseRouteHandler {
           provider: provider,
           error: errorMsg
         }, error);
+
+        session.recoveryPending = true;
+        session.abortReason = 'provider-unavailable';
 
         try {
           const reset = await this.sessionManager.resetProcessingToPending(session.sessionDbId);

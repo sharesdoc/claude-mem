@@ -12,6 +12,9 @@ import { getObservationQueueEngineName } from '../../server/queue/redis-config.j
 import { getSdkProcessForSession, ensureSdkProcessExit } from '../../supervisor/process-registry.js';
 import { getSupervisor } from '../../supervisor/index.js';
 import { RestartGuard } from './RestartGuard.js';
+import { RawEventStore } from '../sqlite/RawEventStore.js';
+import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
+import { USER_SETTINGS_PATH } from '../../shared/paths.js';
 
 export class SessionManager {
   private dbManager: DatabaseManager;
@@ -175,6 +178,7 @@ export class SessionManager {
       consecutiveRestarts: 0,  // DEPRECATED: use restartGuard. Kept for logging compat.
       restartGuard: new RestartGuard(),
       lastGeneratorActivity: Date.now(),  // Initialize for stale detection (Issue #1099)
+      recoveryPending: false,
       pendingAgentId: null,   // Subagent identity carried from the most recent claimed message
       pendingAgentType: null  
     };
@@ -222,6 +226,8 @@ export class SessionManager {
       toolUseId: data.toolUseId,
     };
 
+    this.storeRawEvent(session, message);
+
     try {
       const queue = this.getQueueEngine();
       const messageId = await queue.enqueue(sessionDbId, session.contentSessionId, message);
@@ -259,6 +265,8 @@ export class SessionManager {
       last_assistant_message: lastAssistantMessage
     };
 
+    this.storeRawEvent(session, message);
+
     try {
       const queue = this.getQueueEngine();
       const messageId = await queue.enqueue(sessionDbId, session.contentSessionId, message);
@@ -285,6 +293,25 @@ export class SessionManager {
       throw error; 
     }
 
+  }
+
+  private storeRawEvent(session: ActiveSession, message: PendingMessage): void {
+    new RawEventStore(this.dbManager.getSessionStore().db).append({
+      contentSessionId: session.contentSessionId,
+      sessionDbId: session.sessionDbId,
+      project: session.project,
+      platformSource: session.platformSource,
+      eventType: message.type,
+      toolUseId: message.toolUseId,
+      toolName: message.tool_name,
+      toolInput: message.tool_input,
+      toolResponse: message.tool_response,
+      cwd: message.cwd,
+      lastAssistantMessage: message.last_assistant_message,
+      promptNumber: message.prompt_number,
+      agentId: message.agentId,
+      agentType: message.agentType,
+    });
   }
 
   async clearPendingForSession(sessionDbId: number): Promise<number> {
@@ -437,6 +464,18 @@ export class SessionManager {
     return await this.getTotalQueueDepth();
   }
 
+  async prepareActiveSessionRecovery(sessionDbId: number): Promise<{
+    eligibleCount: number;
+    discardedCount: number;
+    skippedBecauseOverLimit: boolean;
+  }> {
+    const settings = SettingsDefaultsManager.loadFromFile(USER_SETTINGS_PATH);
+    const maxAgeHours = parsePositiveSetting(settings.CLAUDE_MEM_RAW_EVENT_MAX_AGE_HOURS, 24);
+    const maxCompensation = parsePositiveSetting(settings.CLAUDE_MEM_RAW_EVENT_MAX_COMPENSATION, 10);
+    const cutoffEpoch = Date.now() - maxAgeHours * 60 * 60 * 1000;
+    return this.getQueueEngine().prepareRecovery(sessionDbId, cutoffEpoch, maxCompensation);
+  }
+
   async isAnySessionProcessing(): Promise<boolean> {
     return (await this.getTotalQueueDepth()) > 0;
   }
@@ -476,6 +515,11 @@ export class SessionManager {
   getPendingMessageStore(): InspectableObservationQueueEngine {
     return this.getQueueEngine();
   }
+}
+
+function parsePositiveSetting(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function isHealthCheckedQueue(queue: InspectableObservationQueueEngine): queue is HealthCheckedObservationQueueEngine {

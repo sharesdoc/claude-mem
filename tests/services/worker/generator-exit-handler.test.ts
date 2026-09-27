@@ -29,6 +29,7 @@ function createDeps(pendingCount = 3) {
   const pendingStore = {
     clearPendingForSession: mock(() => undefined),
     getPendingCount: mock(() => pendingCount),
+    resetProcessingToPending: mock(() => 0),
   };
   const sessionManager = {
     getPendingMessageStore: mock(() => pendingStore),
@@ -123,6 +124,19 @@ describe('handleGeneratorExit hard-stop reasons', () => {
     expect(pendingStore.clearPendingForSession).not.toHaveBeenCalled();
     expect(completionHandler.finalizeSession).toHaveBeenCalledWith(42);
     expect(sessionManager.removeSessionImmediate).toHaveBeenCalledWith(42);
+    expect(restartGenerator).not.toHaveBeenCalled();
+  });
+
+  it('keeps the active session paused after provider unavailability', async () => {
+    const session = createSession();
+    const { deps, pendingStore, completionHandler, sessionManager, restartGenerator } = createDeps();
+
+    await handleGeneratorExit(session, 'provider-unavailable', deps);
+
+    expect(pendingStore.resetProcessingToPending).toHaveBeenCalledWith(42);
+    expect(session.recoveryPending).toBe(true);
+    expect(completionHandler.finalizeSession).not.toHaveBeenCalled();
+    expect(sessionManager.removeSessionImmediate).not.toHaveBeenCalled();
     expect(restartGenerator).not.toHaveBeenCalled();
   });
 });
