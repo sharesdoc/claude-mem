@@ -23,6 +23,7 @@ import { getProjectContext } from '../../../../utils/project-name.js';
 import { normalizePlatformSource } from '../../../../shared/platform-source.js';
 import { handleGeneratorExit } from '../../session/GeneratorExitHandler.js';
 import { SessionCompletionHandler } from '../../session/SessionCompletionHandler.js';
+import { RawEventStore } from '../../../sqlite/RawEventStore.js';
 import { getUptimeSeconds } from '../../../../shared/uptime.js';
 import { USER_PROMPT_DEDUPE_WINDOW_MS } from '../../../../shared/user-prompts.js';
 
@@ -285,22 +286,34 @@ export class SessionRoutes extends BaseRouteHandler {
   });
 
   private handleSummarizeByClaudeId = this.wrapHandler(async (req: Request, res: Response): Promise<void> => {
-    const { contentSessionId, last_assistant_message, agentId } = req.body;
+    const { contentSessionId, last_assistant_message, agentId, agentType } = req.body;
     const platformSource = normalizePlatformSource(req.body.platformSource);
     // 远程客户端通过 hook 上报的 project 与 user_prompt,用于补全会话上下文。
     const project = typeof req.body.project === 'string' ? req.body.project : '';
     const hookUserPrompt = typeof req.body.user_prompt === 'string' ? req.body.user_prompt : '';
 
+    const store = this.dbManager.getSessionStore();
+    const sessionDbId = store.createSDKSession(contentSessionId, project, hookUserPrompt, undefined, platformSource);
+    const promptNumber = store.getPromptNumberFromUserPrompts(contentSessionId);
+
+    // Sub-agent summarize is not queued for generation, but it remains a
+    // permanent raw event so the archive is complete.
     if (agentId) {
+      new RawEventStore(store.db).append({
+        contentSessionId,
+        sessionDbId,
+        project,
+        platformSource,
+        eventType: 'summarize',
+        promptNumber: promptNumber > 0 ? promptNumber : undefined,
+        agentId,
+        agentType: typeof agentType === 'string' ? agentType : undefined,
+        lastAssistantMessage: last_assistant_message,
+        payload: req.body,
+      });
       res.json({ status: 'skipped', reason: 'subagent_context' });
       return;
     }
-
-    const store = this.dbManager.getSessionStore();
-
-    // 创建/更新会话时带入 project 和 hookUserPrompt,确保 generator 有足够上下文生成总结。
-    const sessionDbId = store.createSDKSession(contentSessionId, project, hookUserPrompt, undefined, platformSource);
-    const promptNumber = store.getPromptNumberFromUserPrompts(contentSessionId);
 
     const userPrompt = PrivacyCheckValidator.checkUserPromptPrivacy(
       store,
@@ -487,6 +500,9 @@ export class SessionRoutes extends BaseRouteHandler {
     const cleanedPrompt = stripMemoryTagsFromPrompt(prompt);
 
     if (!cleanedPrompt || cleanedPrompt.trim() === '') {
+      this.sessionManager.recordUserInputEvent(sessionDbId, prompt, promptNumber,
+        typeof req.body.agentId === 'string' ? req.body.agentId : undefined,
+        typeof req.body.agentType === 'string' ? req.body.agentType : undefined);
       logger.debug('HOOK', 'Session init - prompt entirely private', {
         sessionId: sessionDbId,
         promptNumber,
@@ -509,6 +525,9 @@ export class SessionRoutes extends BaseRouteHandler {
     );
 
     if (duplicatePrompt) {
+      this.sessionManager.recordUserInputEvent(sessionDbId, prompt, duplicatePrompt.prompt_number,
+        typeof req.body.agentId === 'string' ? req.body.agentId : undefined,
+        typeof req.body.agentType === 'string' ? req.body.agentType : undefined);
       const contextInjected = this.sessionManager.getSession(sessionDbId) !== undefined;
       logger.debug('SESSION', 'Duplicate user prompt skipped', {
         sessionId: sessionDbId,
@@ -543,6 +562,23 @@ export class SessionRoutes extends BaseRouteHandler {
     }
 
     store.saveUserPrompt(contentSessionId, promptNumber, cleanedPrompt, submittedAtEpoch, thinkTimeMs);
+
+    // A new user input is the only boundary that closes the previous round.
+    // Raw events remain immutable; only the processing range is fixed here.
+    // Closing the previous round fixes its raw-event range and enqueues work;
+    // model execution remains asynchronous and must not delay this request.
+    void this.sessionManager.flushInputRound(sessionDbId).catch((error) => {
+      logger.error('QUEUE', 'Failed to enqueue previous input round asynchronously', {
+        sessionId: sessionDbId,
+      }, error instanceof Error ? error : new Error(String(error)));
+    });
+    this.sessionManager.beginInputRound(
+      sessionDbId,
+      promptNumber,
+      cleanedPrompt,
+      typeof req.body.agentId === 'string' ? req.body.agentId : undefined,
+      typeof req.body.agentType === 'string' ? req.body.agentType : undefined,
+    );
 
     const contextInjected = this.sessionManager.getSession(sessionDbId) !== undefined;
 
@@ -625,8 +661,16 @@ export class SessionRoutes extends BaseRouteHandler {
 
     session.modelOverride = undefined;
 
-    const pendingStore = this.sessionManager.getPendingMessageStore();
-    const pending = await pendingStore.peekPendingTypes(session.sessionDbId);
+    const pendingStore = this.sessionManager.getPendingMessageStore() as unknown as {
+      peekPendingTypesForRound?: (sessionDbId: number, promptNumber: number) => Promise<Array<{ message_type: string; tool_name: string | null }>>;
+    };
+    // The current prompt is still open while a generator is started. When a
+    // continuation arrives, only the immediately preceding closed prompt is
+    // eligible for this generator; older session queue rows must not affect it.
+    const targetPrompt = session.lastPromptNumber - 1;
+    const pending = targetPrompt > 0 && pendingStore.peekPendingTypesForRound
+      ? await pendingStore.peekPendingTypesForRound(session.sessionDbId, targetPrompt)
+      : [];
 
     if (pending.length === 0) {
       session.modelOverride = undefined;

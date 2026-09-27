@@ -15,6 +15,7 @@ import { RestartGuard } from './RestartGuard.js';
 import { RawEventStore } from '../sqlite/RawEventStore.js';
 import { SettingsDefaultsManager } from '../../shared/SettingsDefaultsManager.js';
 import { USER_SETTINGS_PATH } from '../../shared/paths.js';
+import { InputRoundStore } from '../sqlite/InputRoundStore.js';
 
 export class SessionManager {
   private dbManager: DatabaseManager;
@@ -31,12 +32,13 @@ export class SessionManager {
   private getQueueEngine(): InspectableObservationQueueEngine {
     if (!this.queueEngine) {
       this.queueEngineName = getObservationQueueEngineName();
+      const sessionStore = this.dbManager.getSessionStore();
       if (this.queueEngineName === 'bullmq') {
         this.queueEngine = new BullMqObservationQueueEngine({
+          db: sessionStore.db,
           onMutate: () => this.onPendingMutate?.()
         });
       } else {
-        const sessionStore = this.dbManager.getSessionStore();
         this.queueEngine = new SqliteObservationQueueEngine(
           sessionStore.db,
           () => this.onPendingMutate?.()
@@ -180,7 +182,8 @@ export class SessionManager {
       lastGeneratorActivity: Date.now(),  // Initialize for stale detection (Issue #1099)
       recoveryPending: false,
       pendingAgentId: null,   // Subagent identity carried from the most recent claimed message
-      pendingAgentType: null  
+      pendingAgentType: null,
+      pendingRoundSlice: null
     };
 
     logger.debug('SESSION', 'Creating new session object (memorySessionId cleared to prevent stale resume)', {
@@ -228,6 +231,12 @@ export class SessionManager {
 
     this.storeRawEvent(session, message);
 
+    const rounds = new InputRoundStore(this.dbManager.getSessionStore().db);
+    if (data.prompt_number !== undefined && rounds.isOpen(session.contentSessionId, data.prompt_number)) {
+      logger.debug('QUEUE', 'Observation held until input round closes', { sessionId: sessionDbId, promptNumber: data.prompt_number });
+      return;
+    }
+
     try {
       const queue = this.getQueueEngine();
       const messageId = await queue.enqueue(sessionDbId, session.contentSessionId, message);
@@ -263,9 +272,16 @@ export class SessionManager {
     const message: PendingMessage = {
       type: 'summarize',
       last_assistant_message: lastAssistantMessage
+      ,prompt_number: session.lastPromptNumber
     };
 
     this.storeRawEvent(session, message);
+
+    const rounds = new InputRoundStore(this.dbManager.getSessionStore().db);
+    if (rounds.isOpen(session.contentSessionId, session.lastPromptNumber)) {
+      logger.debug('QUEUE', 'Summary held until input round closes', { sessionId: sessionDbId, promptNumber: session.lastPromptNumber });
+      return;
+    }
 
     try {
       const queue = this.getQueueEngine();
@@ -314,6 +330,92 @@ export class SessionManager {
     });
   }
 
+  beginInputRound(sessionDbId: number, promptNumber: number, prompt: string, agentId?: string, agentType?: string): void {
+    const session = this.sessions.get(sessionDbId) ?? this.initializeSession(sessionDbId, prompt, promptNumber);
+    const db = this.dbManager.getSessionStore().db;
+    const rounds = new InputRoundStore(db);
+    rounds.openRound(session.contentSessionId, promptNumber);
+    new RawEventStore(db).append({
+      contentSessionId: session.contentSessionId,
+      sessionDbId,
+      project: session.project,
+      platformSource: session.platformSource,
+      eventType: 'user_input',
+      toolInput: prompt,
+      promptNumber,
+      agentId,
+      agentType,
+      payload: prompt,
+    });
+  }
+
+  /** Archive an input that cannot open a normal round (private or duplicate). */
+  recordUserInputEvent(sessionDbId: number, prompt: string, promptNumber: number, agentId?: string, agentType?: string): void {
+    const session = this.sessions.get(sessionDbId) ?? this.initializeSession(sessionDbId);
+    new RawEventStore(this.dbManager.getSessionStore().db).append({
+      contentSessionId: session.contentSessionId,
+      sessionDbId,
+      project: session.project,
+      platformSource: session.platformSource,
+      eventType: 'user_input',
+      promptNumber,
+      agentId,
+      agentType,
+      toolInput: prompt,
+      payload: prompt,
+    });
+  }
+
+  async flushInputRound(sessionDbId: number): Promise<number> {
+    // Finalization can run after a worker restart, so recover the content
+    // session from sdk_sessions instead of depending on the in-memory map.
+    const session = this.sessions.get(sessionDbId) ?? this.initializeSession(sessionDbId);
+    const db = this.dbManager.getSessionStore().db;
+    const rounds = new InputRoundStore(db);
+    const openRound = rounds.getOpenRound(session.contentSessionId);
+    if (!openRound) return 0;
+    const closed = rounds.closeOpenRound(session.contentSessionId);
+    if (closed === 0) return 0;
+    const promptNumber = openRound.prompt_number;
+    const slices = rounds.getClosedSlices(session.contentSessionId, promptNumber);
+    let queued = 0;
+    const queue = this.getQueueEngine();
+    for (const slice of slices) {
+      const events = rounds.getSliceEvents(session.contentSessionId, slice);
+      if (events.length === 0) continue;
+      const firstEvent = events[0];
+      queued += await queue.enqueue(sessionDbId, session.contentSessionId, {
+        type: 'observation',
+        tool_name: 'input_round_slice',
+        tool_input: events.map(event => ({
+          id: event.id,
+          event_type: event.event_type,
+          tool_use_id: event.tool_use_id,
+          tool_name: event.tool_name,
+          tool_input: parseJson(event.tool_input),
+          tool_response: parseJson(event.tool_response),
+          payload: parseJson(event.payload),
+          agent_id: event.agent_id,
+          agent_type: event.agent_type,
+        })),
+        tool_response: { start_raw_event_id: slice.start_raw_event_id, end_raw_event_id: slice.end_raw_event_id },
+        cwd: firstEvent.cwd ?? undefined,
+        last_assistant_message: events.at(-1)?.last_assistant_message ?? undefined,
+        prompt_number: promptNumber,
+        agentId: firstEvent.agent_id ?? undefined,
+        agentType: firstEvent.agent_type ?? undefined,
+        roundSlice: {
+          promptNumber,
+          sliceNumber: slice.slice_number,
+          startRawEventId: slice.start_raw_event_id,
+          endRawEventId: slice.end_raw_event_id,
+          idempotencyKey: slice.idempotency_key,
+        },
+      });
+    }
+    return queued;
+  }
+
   async clearPendingForSession(sessionDbId: number): Promise<number> {
     return await this.getQueueEngine().clearPendingForSession(sessionDbId);
   }
@@ -336,6 +438,7 @@ export class SessionManager {
     if (session) {
       session.claimedMessageIds = [];
       session.earliestPendingTimestamp = null;
+      session.pendingRoundSlice = null;
     }
     return confirmed;
   }
@@ -488,9 +591,12 @@ export class SessionManager {
 
     const queue = this.getQueueEngine();
     await this.resetProcessingToPending(sessionDbId);
-
     for await (const message of queue.createIterator({
       sessionDbId,
+      // Closed round slices and legacy non-slice messages must share the
+      // queue. PendingMessageStore excludes only slices belonging to an open
+      // round, preserving compatibility with pre-round queue rows.
+      roundSlicesOnly: false,
       signal: session.abortController.signal,
       onIdleTimeout: () => {
         logger.info('SESSION', 'Triggering abort due to idle timeout to kill subprocess', { sessionDbId });
@@ -500,6 +606,7 @@ export class SessionManager {
       }
     })) {
       session.claimedMessageIds.push(message._persistentId);
+      session.pendingRoundSlice = message.roundSlice ?? null;
       if (session.earliestPendingTimestamp === null) {
         session.earliestPendingTimestamp = message._originalTimestamp;
       } else {
@@ -512,6 +619,24 @@ export class SessionManager {
     }
   }
 
+  /**
+   * Persists the provider response for the claimed slice. Slice results are
+   * later concatenated by slice number; no second model request is made for a
+   * completed round. Repeated provider confirmation is harmless because the
+   * same row is updated with the same result.
+   */
+  recordCurrentSliceResult(sessionDbId: number, result: string): void {
+    const session = this.sessions.get(sessionDbId);
+    const slice = session?.pendingRoundSlice;
+    if (!session || !slice) return;
+    new InputRoundStore(this.dbManager.getSessionStore().db).recordSliceResult(
+      session.contentSessionId,
+      slice.promptNumber,
+      slice.sliceNumber,
+      result,
+    );
+  }
+
   getPendingMessageStore(): InspectableObservationQueueEngine {
     return this.getQueueEngine();
   }
@@ -520,6 +645,15 @@ export class SessionManager {
 function parsePositiveSetting(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseJson(value: string | null): unknown {
+  if (value === null) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
 }
 
 function isHealthCheckedQueue(queue: InspectableObservationQueueEngine): queue is HealthCheckedObservationQueueEngine {

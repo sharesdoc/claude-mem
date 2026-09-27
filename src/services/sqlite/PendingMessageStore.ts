@@ -23,6 +23,10 @@ export interface PersistentPendingMessage {
   created_at_epoch: number;
   agent_type: string | null;
   agent_id: string | null;
+  round_slice_key: string | null;
+  round_slice_number: number | null;
+  round_slice_start_raw_event_id: number | null;
+  round_slice_end_raw_event_id: number | null;
 }
 
 export class PendingMessageStore {
@@ -43,8 +47,9 @@ export class PendingMessageStore {
         tool_name, tool_input, tool_response, cwd,
         last_assistant_message,
         prompt_number, status, created_at_epoch,
-        agent_type, agent_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+        agent_type, agent_id, round_slice_key, round_slice_number,
+        round_slice_start_raw_event_id, round_slice_end_raw_event_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, NULL, NULL, NULL, NULL)
     `);
 
     const result = stmt.run(
@@ -70,19 +75,85 @@ export class PendingMessageStore {
     return 0;
   }
 
-  claimNextMessage(sessionDbId: number): PersistentPendingMessage | null {
+  enqueueRoundSlice(
+    sessionDbId: number,
+    contentSessionId: string,
+    message: PendingMessage,
+  ): number {
+    const slice = message.roundSlice;
+    if (!slice) throw new Error('Round slice metadata is required for slice queue tasks');
+    const result = this.db.prepare(`
+      INSERT OR IGNORE INTO pending_messages (
+        session_db_id, content_session_id, tool_use_id, message_type,
+        tool_name, tool_input, tool_response, cwd, last_assistant_message,
+        prompt_number, status, created_at_epoch, agent_type, agent_id,
+        round_slice_key, round_slice_number, round_slice_start_raw_event_id,
+        round_slice_end_raw_event_id
+      ) VALUES (?, ?, NULL, 'observation', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      sessionDbId,
+      contentSessionId,
+      message.tool_name ?? null,
+      message.tool_input === undefined ? null : JSON.stringify(message.tool_input),
+      message.tool_response === undefined ? null : JSON.stringify(message.tool_response),
+      message.cwd ?? null,
+      message.last_assistant_message ?? null,
+      slice.promptNumber,
+      Date.now(),
+      message.agentType ?? null,
+      message.agentId ?? null,
+      slice.idempotencyKey,
+      slice.sliceNumber,
+      slice.startRawEventId,
+      slice.endRawEventId,
+    );
+    if (result.changes > 0) {
+      this.onMutate?.();
+      return Number(result.lastInsertRowid);
+    }
+    return 0;
+  }
+
+  claimNextMessage(sessionDbId: number, roundSlicesOnly = false): PersistentPendingMessage | null {
     const sql = `
       UPDATE pending_messages
          SET status = 'processing'
        WHERE id = (
          SELECT id FROM pending_messages
           WHERE session_db_id = ? AND status = 'pending'
-          ORDER BY id ASC
+            AND (? = 0 OR round_slice_key IS NOT NULL)
+            AND (round_slice_key IS NULL OR EXISTS (
+              SELECT 1 FROM round_slices rs
+              WHERE rs.content_session_id = pending_messages.content_session_id
+                AND rs.prompt_number = pending_messages.prompt_number
+                AND rs.slice_number = pending_messages.round_slice_number
+                AND rs.idempotency_key = pending_messages.round_slice_key
+                AND rs.status IN ('pending', 'processing', 'failed')
+                AND EXISTS (
+                  SELECT 1 FROM input_rounds ir
+                  WHERE ir.content_session_id = rs.content_session_id
+                    AND ir.prompt_number = rs.prompt_number
+                    AND ir.status != 'open'
+                )
+            ))
+            AND (prompt_number IS NULL OR NOT EXISTS (
+              SELECT 1 FROM input_rounds ir
+              WHERE ir.content_session_id = pending_messages.content_session_id
+                AND ir.prompt_number = pending_messages.prompt_number
+                AND ir.status = 'open'
+            ) OR EXISTS (
+              SELECT 1 FROM round_slices rs
+              WHERE rs.content_session_id = pending_messages.content_session_id
+                AND rs.prompt_number = pending_messages.prompt_number
+                AND rs.status IN ('pending', 'processing', 'failed')
+            ))
+          ORDER BY CASE WHEN round_slice_key IS NULL THEN 0 ELSE 1 END,
+                   prompt_number ASC, round_slice_number ASC, id ASC
           LIMIT 1
        )
        RETURNING *
     `;
-    const claimed = this.db.prepare(sql).get(sessionDbId) as PersistentPendingMessage | null;
+    const claimed = this.db.prepare(sql).get(sessionDbId, roundSlicesOnly ? 1 : 0) as PersistentPendingMessage | null;
     if (claimed) {
       logger.info('QUEUE', `CLAIMED | sessionDbId=${sessionDbId} | messageId=${claimed.id} | type=${claimed.message_type}`, {
         sessionId: sessionDbId
@@ -227,6 +298,24 @@ export class PendingMessageStore {
     return stmt.all(sessionDbId) as Array<{ message_type: string; tool_name: string | null }>;
   }
 
+  peekPendingTypesForPrompt(sessionDbId: number, promptNumber: number): Array<{ message_type: string; tool_name: string | null }> {
+    return this.db.prepare(`
+      SELECT message_type, tool_name FROM pending_messages
+      WHERE session_db_id = ? AND prompt_number = ? AND status IN ('pending', 'processing')
+      ORDER BY id ASC
+    `).all(sessionDbId, promptNumber) as Array<{ message_type: string; tool_name: string | null }>;
+  }
+
+  peekPendingTypesForRound(sessionDbId: number, promptNumber: number): Array<{ message_type: string; tool_name: string | null }> {
+    return this.db.prepare(`
+      SELECT message_type, tool_name FROM pending_messages
+      WHERE session_db_id = ? AND prompt_number = ?
+        AND round_slice_key IS NOT NULL
+        AND status IN ('pending', 'processing')
+      ORDER BY round_slice_number ASC
+    `).all(sessionDbId, promptNumber) as Array<{ message_type: string; tool_name: string | null }>;
+  }
+
   toPendingMessage(persistent: PersistentPendingMessage): PendingMessage {
     return {
       type: persistent.message_type,
@@ -238,6 +327,13 @@ export class PendingMessageStore {
       last_assistant_message: persistent.last_assistant_message || undefined,
       agentId: persistent.agent_id ?? undefined,
       agentType: persistent.agent_type ?? undefined
+      ,roundSlice: persistent.round_slice_key ? {
+        promptNumber: persistent.prompt_number!,
+        sliceNumber: persistent.round_slice_number!,
+        startRawEventId: persistent.round_slice_start_raw_event_id!,
+        endRawEventId: persistent.round_slice_end_raw_event_id!,
+        idempotencyKey: persistent.round_slice_key,
+      } : undefined
     };
   }
 }

@@ -12,6 +12,7 @@ export interface CreateIteratorOptions {
   idleTimeoutMs?: number;
   claimRetryDelayMs?: number;
   maxClaimFailures?: number;
+  roundSlicesOnly?: boolean;
 }
 
 export class SessionQueueProcessor {
@@ -28,6 +29,7 @@ export class SessionQueueProcessor {
       idleTimeoutMs = IDLE_TIMEOUT_MS,
       claimRetryDelayMs = 250,
       maxClaimFailures = 3
+      ,roundSlicesOnly = false
     } = options;
     let lastActivityTime = Date.now();
     let claimFailures = 0;
@@ -35,7 +37,7 @@ export class SessionQueueProcessor {
     while (!signal.aborted) {
       let persistentMessage: PersistentPendingMessage | null = null;
       try {
-        persistentMessage = this.store.claimNextMessage(sessionDbId);
+        persistentMessage = this.store.claimNextMessage(sessionDbId, roundSlicesOnly);
       } catch (error) {
         if (signal.aborted) return;
         const normalizedError = error instanceof Error ? error : new Error(String(error));

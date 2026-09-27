@@ -56,6 +56,7 @@ export interface ObservationQueueHealth {
 
 export interface ObservationQueueInspection {
   peekPendingTypes(sessionDbId: number): Promise<Array<{ message_type: string; tool_name: string | null }>>;
+  peekPendingTypesForPrompt(sessionDbId: number, promptNumber: number): Promise<Array<{ message_type: string; tool_name: string | null }>>;
 }
 
 export type InspectableObservationQueueEngine = ObservationQueueEngine & ObservationQueueInspection;
@@ -73,7 +74,9 @@ export class SqliteObservationQueueEngine implements InspectableObservationQueue
   }
 
   async enqueue(sessionDbId: number, contentSessionId: string, message: PendingMessage): Promise<number> {
-    const id = this.store.enqueue(sessionDbId, contentSessionId, message);
+    const id = message.roundSlice
+      ? this.store.enqueueRoundSlice(sessionDbId, contentSessionId, message)
+      : this.store.enqueue(sessionDbId, contentSessionId, message);
     if (id > 0) {
       this.emit(sessionDbId);
     }
@@ -121,6 +124,10 @@ export class SqliteObservationQueueEngine implements InspectableObservationQueue
 
   async peekPendingTypes(sessionDbId: number): Promise<Array<{ message_type: string; tool_name: string | null }>> {
     return this.store.peekPendingTypes(sessionDbId);
+  }
+
+  async peekPendingTypesForPrompt(sessionDbId: number, promptNumber: number): Promise<Array<{ message_type: string; tool_name: string | null }>> {
+    return this.store.peekPendingTypesForPrompt(sessionDbId, promptNumber);
   }
 
   async close(): Promise<void> {

@@ -4,6 +4,7 @@ import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import { Queue, Worker, type Job, type JobType, type QueueOptions, type WorkerOptions } from 'bullmq';
 import { Redis } from 'ioredis';
+import type { Database } from 'bun:sqlite';
 import type { PendingMessage, PendingMessageWithId } from '../../services/worker-types.js';
 import type { CreateIteratorOptions } from '../../services/queue/SessionQueueProcessor.js';
 import { logger } from '../../utils/logger.js';
@@ -47,6 +48,7 @@ interface RedisHealthClient {
 }
 
 export interface BullMqObservationQueueEngineOptions {
+  db?: Database;
   config?: RedisQueueConfig;
   queueFactory?: (name: string, options: QueueOptions) => BullMqQueue;
   workerFactory?: (name: string, options: WorkerOptions) => BullMqWorker;
@@ -84,11 +86,13 @@ export class BullMqObservationQueueEngine
   private nextClaimId = 1;
   private nextEnqueueId = 1;
   private healthClient: RedisHealthClient | null = null;
+  private readonly db?: Database;
 
   constructor(private readonly options: BullMqObservationQueueEngineOptions = {}) {
     this.config = options.config ?? getRedisQueueConfig();
     this.lockDurationMs = options.lockDurationMs ?? DEFAULT_LOCK_DURATION_MS;
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.db = options.db;
     this.registryKey = `${this.config.prefix}:queue_registry:sessions`;
   }
 
@@ -152,6 +156,17 @@ export class BullMqObservationQueueEngine
       }
 
       if (job) {
+        if (this.isOpenRoundSlice(job.data.contentSessionId, job.data.message)) {
+          // A stale/replayed BullMQ job must not consume an open round. Put it
+          // back into waiting state until the input boundary closes it.
+          try {
+            await job.moveToWait(token);
+          } catch (error) {
+            throw this.toRedisUnavailableError(error);
+          }
+          await this.waitForMessage(runtime.events, signal, this.pollIntervalMs);
+          continue;
+        }
         const claimId = this.nextClaimId++;
         this.activeClaims.set(claimId, {
           sessionDbId,
@@ -179,6 +194,21 @@ export class BullMqObservationQueueEngine
         return;
       }
     }
+  }
+
+  private isOpenRoundSlice(contentSessionId: string, message: PendingMessage): boolean {
+    const slice = message.roundSlice;
+    if (!this.db || !slice) return false;
+    const row = this.db.prepare(`
+      SELECT 1 AS open_round
+      FROM input_rounds
+      WHERE content_session_id = ? AND prompt_number = ? AND status = 'open'
+      LIMIT 1
+    `).get(
+      contentSessionId,
+      slice.promptNumber,
+    ) as { open_round: number } | null;
+    return row?.open_round === 1;
   }
 
   async confirmProcessed(messageId: number): Promise<number> {
@@ -304,6 +334,16 @@ export class BullMqObservationQueueEngine
       message_type: job.data.message.type,
       tool_name: job.data.message.tool_name ?? null,
     }));
+  }
+
+  async peekPendingTypesForPrompt(sessionDbId: number, promptNumber: number): Promise<Array<{ message_type: string; tool_name: string | null }>> {
+    const jobs = await this.getSessionRuntime(sessionDbId).queue.getJobs(QUEUE_JOB_TYPES, 0, -1, true);
+    return jobs
+      .filter(job => job.data.message.prompt_number === promptNumber)
+      .map(job => ({
+        message_type: job.data.message.type,
+        tool_name: job.data.message.tool_name ?? null,
+      }));
   }
 
   async getHealth(): Promise<ObservationQueueHealth> {
@@ -547,6 +587,9 @@ export class BullMqObservationQueueEngine
 }
 
 export function getSafeJobId(contentSessionId: string, message: PendingMessage, createdAtEpoch: number): string {
+  if (message.roundSlice) {
+    return `slice_${sha256(`${contentSessionId}\0${message.roundSlice.idempotencyKey}`)}`;
+  }
   if (message.type === 'observation') {
     if (message.toolUseId) {
       return `obs_${sha256(`${contentSessionId}\0${message.toolUseId}`)}`;
@@ -566,6 +609,7 @@ function stableMessageFingerprint(message: PendingMessage): string {
     prompt_number: message.prompt_number ?? null,
     agentId: message.agentId ?? null,
     agentType: message.agentType ?? null,
+    roundSlice: message.roundSlice ?? null,
   });
 }
 

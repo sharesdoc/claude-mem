@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 
-export type RawEventType = 'observation' | 'summarize';
+export type RawEventType = 'user_input' | 'observation' | 'summarize' | 'internal' | 'sub_agent';
 
 export interface RawEventInput {
   contentSessionId: string;
@@ -17,6 +17,9 @@ export interface RawEventInput {
   promptNumber?: number;
   agentId?: string;
   agentType?: string;
+  parentAgentId?: string;
+  parentEventId?: number;
+  payload?: unknown;
   createdAtEpoch?: number;
 }
 
@@ -36,8 +39,9 @@ export class RawEventStore {
         content_session_id, session_db_id, project, platform_source,
         event_type, tool_use_id, tool_name, tool_input, tool_response,
         cwd, last_assistant_message, prompt_number, agent_id, agent_type,
+        parent_agent_id, parent_event_id, payload,
         created_at_epoch
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       event.contentSessionId,
       event.sessionDbId ?? null,
@@ -53,6 +57,9 @@ export class RawEventStore {
       event.promptNumber ?? null,
       event.agentId ?? null,
       event.agentType ?? null,
+      event.parentAgentId ?? null,
+      event.parentEventId ?? null,
+      serialize(event.payload),
       event.createdAtEpoch ?? Date.now(),
     );
 

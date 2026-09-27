@@ -142,11 +142,17 @@ CREATE TABLE IF NOT EXISTS pending_messages (
   created_at_epoch         INTEGER NOT NULL,
   agent_type               TEXT,
   agent_id                 TEXT,
+  round_slice_key          TEXT,
+  round_slice_number       INTEGER,
+  round_slice_start_raw_event_id INTEGER,
+  round_slice_end_raw_event_id   INTEGER,
   FOREIGN KEY (session_db_id) REFERENCES sdk_sessions(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_pending_messages_session        ON pending_messages(session_db_id);
 CREATE INDEX IF NOT EXISTS idx_pending_messages_status         ON pending_messages(status);
 CREATE INDEX IF NOT EXISTS idx_pending_messages_claude_session ON pending_messages(content_session_id);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_pending_messages_round_slice
+  ON pending_messages(round_slice_key) WHERE round_slice_key IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_pending_session_tool
   ON pending_messages(content_session_id, tool_use_id)
   WHERE tool_use_id IS NOT NULL;
@@ -161,7 +167,7 @@ CREATE TABLE IF NOT EXISTS raw_events (
   session_db_id          INTEGER,
   project                TEXT,
   platform_source        TEXT,
-  event_type             TEXT NOT NULL CHECK(event_type IN ('observation', 'summarize')),
+  event_type             TEXT NOT NULL CHECK(event_type IN ('user_input', 'observation', 'summarize', 'internal', 'sub_agent')),
   tool_use_id            TEXT,
   tool_name              TEXT,
   tool_input             TEXT,
@@ -171,6 +177,9 @@ CREATE TABLE IF NOT EXISTS raw_events (
   prompt_number          INTEGER,
   agent_id               TEXT,
   agent_type             TEXT,
+  parent_agent_id        TEXT,
+  parent_event_id        INTEGER,
+  payload                TEXT,
   created_at_epoch       INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_raw_events_session ON raw_events(content_session_id, created_at_epoch DESC);
@@ -178,6 +187,30 @@ CREATE INDEX IF NOT EXISTS idx_raw_events_created ON raw_events(created_at_epoch
 CREATE UNIQUE INDEX IF NOT EXISTS ux_raw_events_tool_use
   ON raw_events(content_session_id, event_type, tool_use_id)
   WHERE tool_use_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS input_rounds (
+  content_session_id TEXT NOT NULL,
+  prompt_number INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('open', 'closed', 'processing', 'completed', 'failed')),
+  opened_at_epoch INTEGER NOT NULL,
+  closed_at_epoch INTEGER,
+  PRIMARY KEY (content_session_id, prompt_number)
+);
+
+CREATE TABLE IF NOT EXISTS round_slices (
+  content_session_id TEXT NOT NULL,
+  prompt_number INTEGER NOT NULL,
+  slice_number INTEGER NOT NULL,
+  start_raw_event_id INTEGER NOT NULL,
+  end_raw_event_id INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'completed', 'failed')) DEFAULT 'pending',
+  idempotency_key TEXT NOT NULL UNIQUE,
+  result_text TEXT,
+  PRIMARY KEY (content_session_id, prompt_number, slice_number),
+  FOREIGN KEY (content_session_id, prompt_number) REFERENCES input_rounds(content_session_id, prompt_number)
+);
+CREATE INDEX IF NOT EXISTS idx_input_rounds_status ON input_rounds(content_session_id, status);
+CREATE INDEX IF NOT EXISTS idx_round_slices_status ON round_slices(content_session_id, status, prompt_number, slice_number);
 
 -- ─────────────────────────────────────────────────────────────────────
 -- user_prompts: per-prompt history (UI + FTS search).

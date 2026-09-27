@@ -26,9 +26,16 @@ export class SessionCompletionHandler {
 
     sessionStore.markSessionCompleted(sessionDbId);
 
+    let flushed = 0;
+    try {
+      flushed = await this.sessionManager.flushInputRound(sessionDbId);
+    } catch (e) {
+      logger.error('SESSION', 'Failed to close final input round', { sessionId: sessionDbId }, e instanceof Error ? e : new Error(String(e)));
+    }
+
     try {
       const pendingStore = this.sessionManager.getPendingMessageStore();
-      const cleared = await pendingStore.clearPendingForSession(sessionDbId);
+      const cleared = flushed > 0 ? 0 : await pendingStore.clearPendingForSession(sessionDbId);
       if (cleared > 0) {
         logger.warn('SESSION', `Cleared ${cleared} orphaned pending messages on session finalize`, {
           sessionId: sessionDbId, cleared

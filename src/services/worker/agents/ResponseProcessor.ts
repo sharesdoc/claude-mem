@@ -104,6 +104,13 @@ export async function processAgentResponse(
 
   session.lastSummaryStored = result.summaryId !== null;
 
+  // A round slice has already been processed by this model response. Store
+  // the response before deleting its queue row; the round store concatenates
+  // completed slices in slice order and never invokes another model call.
+  // Optional chaining keeps lightweight provider test doubles and older
+  // embedders compatible; the production SessionManager always implements it.
+  sessionManager.recordCurrentSliceResult?.(session.sessionDbId, text);
+
   if (summary && (summary.skipped || session.lastSummaryStored)) {
     await ingestSummary({
       kind: 'parsed',

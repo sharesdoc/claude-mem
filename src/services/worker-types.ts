@@ -36,6 +36,7 @@ export interface ActiveSession {
   lastSummaryStored?: boolean;
   pendingAgentId?: string | null;
   pendingAgentType?: string | null;
+  pendingRoundSlice?: PendingMessage['roundSlice'] | null;
   abortReason?: 'idle' | 'shutdown' | 'overflow' | 'restart-guard' | 'quota' | string | null;
   respawnTimer?: ReturnType<typeof setTimeout>;
 }
@@ -51,6 +52,13 @@ export interface PendingMessage {
   agentId?: string;
   agentType?: string;
   toolUseId?: string;
+  roundSlice?: {
+    promptNumber: number;
+    sliceNumber: number;
+    startRawEventId: number;
+    endRawEventId: number;
+    idempotencyKey: string;
+  };
 }
 
 export interface PendingMessageWithId extends PendingMessage {

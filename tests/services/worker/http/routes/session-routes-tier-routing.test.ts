@@ -94,4 +94,36 @@ describe('SessionRoutes.applyTierRouting -> ClaudeProvider.startSession real cal
       (paths as { settings?: () => string }).settings = originalSettingsFn;
     }
   });
+
+  it('uses only the current closed round slices and never falls back to older session pending rows', async () => {
+    const settings = {
+      CLAUDE_MEM_MODEL: 'default-model',
+      CLAUDE_MEM_TIER_ROUTING_ENABLED: 'true',
+      CLAUDE_MEM_TIER_SIMPLE_MODEL: 'simple-model',
+      CLAUDE_MEM_TIER_SUMMARY_MODEL: 'summary-model',
+    } as unknown as SettingsDefaults;
+    const loadFromFileSpy = spyOn(SettingsDefaultsManager, 'loadFromFile').mockImplementation(() => settings);
+    try {
+      const fakePendingStore = {
+        peekPendingTypes: async () => [{ message_type: 'summarize', tool_name: null }],
+        peekPendingTypesForRound: async (_sessionDbId: number, promptNumber: number) => {
+          expect(promptNumber).toBe(1);
+          return [{ message_type: 'observation', tool_name: 'Read' }];
+        },
+      };
+      const fakeSessionManager = { getPendingMessageStore: () => fakePendingStore } as unknown as SessionManager;
+      const routes = new SessionRoutes(
+        fakeSessionManager, {} as DatabaseManager, {} as ClaudeProvider,
+        {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+      );
+      const session = {
+        sessionDbId: 2, contentSessionId: 'tier-round', modelOverride: undefined,
+        lastPromptNumber: 2,
+      } as any;
+      await (routes as any).applyTierRouting(session);
+      expect(session.modelOverride).toBe('simple-model');
+    } finally {
+      loadFromFileSpy.mockRestore();
+    }
+  });
 });

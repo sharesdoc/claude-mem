@@ -86,6 +86,7 @@ export class SessionStore {
     this.ensureDiscoveryTokensColumn();
     this.createPendingMessagesTable();
     this.createRawEventsTable();
+    this.ensureInputRoundTables();
     this.renameSessionIdColumns();
     this.repairSessionIdColumnRename();
     this.addFailedAtEpochColumn();
@@ -1099,7 +1100,7 @@ export class SessionStore {
         session_db_id        INTEGER,
         project              TEXT,
         platform_source      TEXT,
-        event_type           TEXT NOT NULL CHECK(event_type IN ('observation', 'summarize')),
+        event_type           TEXT NOT NULL CHECK(event_type IN ('user_input', 'observation', 'summarize', 'internal', 'sub_agent')),
         tool_use_id          TEXT,
         tool_name            TEXT,
         tool_input           TEXT,
@@ -1109,6 +1110,9 @@ export class SessionStore {
         prompt_number        INTEGER,
         agent_id             TEXT,
         agent_type           TEXT,
+        parent_agent_id      TEXT,
+        parent_event_id      INTEGER,
+        payload              TEXT,
         created_at_epoch     INTEGER NOT NULL
       )
     `);
@@ -1119,6 +1123,48 @@ export class SessionStore {
       ON raw_events(content_session_id, event_type, tool_use_id)
       WHERE tool_use_id IS NOT NULL
     `);
+  }
+
+  private ensureInputRoundTables(): void {
+    const pendingColumns = this.db.query('PRAGMA table_info(pending_messages)').all() as TableColumnInfo[];
+    if (!pendingColumns.some(c => c.name === 'round_slice_key')) this.db.run('ALTER TABLE pending_messages ADD COLUMN round_slice_key TEXT');
+    if (!pendingColumns.some(c => c.name === 'round_slice_number')) this.db.run('ALTER TABLE pending_messages ADD COLUMN round_slice_number INTEGER');
+    if (!pendingColumns.some(c => c.name === 'round_slice_start_raw_event_id')) this.db.run('ALTER TABLE pending_messages ADD COLUMN round_slice_start_raw_event_id INTEGER');
+    if (!pendingColumns.some(c => c.name === 'round_slice_end_raw_event_id')) this.db.run('ALTER TABLE pending_messages ADD COLUMN round_slice_end_raw_event_id INTEGER');
+    this.db.run('CREATE UNIQUE INDEX IF NOT EXISTS ux_pending_messages_round_slice ON pending_messages(round_slice_key) WHERE round_slice_key IS NOT NULL');
+    const rawColumns = this.db.query('PRAGMA table_info(raw_events)').all() as TableColumnInfo[];
+    if (!rawColumns.some(c => c.name === 'parent_agent_id')) this.db.run('ALTER TABLE raw_events ADD COLUMN parent_agent_id TEXT');
+    if (!rawColumns.some(c => c.name === 'parent_event_id')) this.db.run('ALTER TABLE raw_events ADD COLUMN parent_event_id INTEGER');
+    if (!rawColumns.some(c => c.name === 'payload')) this.db.run('ALTER TABLE raw_events ADD COLUMN payload TEXT');
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS input_rounds (
+        content_session_id TEXT NOT NULL,
+        prompt_number INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('open', 'closed', 'processing', 'completed', 'failed')),
+        opened_at_epoch INTEGER NOT NULL,
+        closed_at_epoch INTEGER,
+        PRIMARY KEY (content_session_id, prompt_number)
+      )
+    `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS round_slices (
+        content_session_id TEXT NOT NULL,
+        prompt_number INTEGER NOT NULL,
+        slice_number INTEGER NOT NULL,
+        start_raw_event_id INTEGER NOT NULL,
+        end_raw_event_id INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'processing', 'completed', 'failed')) DEFAULT 'pending',
+        idempotency_key TEXT NOT NULL UNIQUE,
+        PRIMARY KEY (content_session_id, prompt_number, slice_number),
+        FOREIGN KEY (content_session_id, prompt_number) REFERENCES input_rounds(content_session_id, prompt_number)
+      )
+    `);
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_input_rounds_status ON input_rounds(content_session_id, status)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_round_slices_status ON round_slices(content_session_id, status, prompt_number, slice_number)');
+    const sliceColumns = this.db.query('PRAGMA table_info(round_slices)').all() as TableColumnInfo[];
+    if (!sliceColumns.some(c => c.name === 'result_text')) {
+      this.db.run('ALTER TABLE round_slices ADD COLUMN result_text TEXT');
+    }
   }
 
   private renameSessionIdColumns(): void {
