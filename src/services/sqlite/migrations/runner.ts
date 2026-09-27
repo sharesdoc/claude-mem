@@ -48,6 +48,7 @@ export class MigrationRunner {
     this.createUserPromptsTable();
     this.ensureDiscoveryTokensColumn();
     this.createPendingMessagesTable();
+    this.createRawEventsTable();
     this.renameSessionIdColumns();
     this.addFailedAtEpochColumn();
     this.addOnUpdateCascadeToForeignKeys();
@@ -94,6 +95,46 @@ export class MigrationRunner {
       'INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)'
     ).run(39, new Date().toISOString());
     logger.info('DB', 'Migration v39 applied: admin_login_attempts table');
+  }
+
+  /** v41 — append-only archive for original hook events. */
+  private createRawEventsTable(): void {
+    const applied = this.db.prepare(
+      'SELECT version FROM schema_versions WHERE version = ?'
+    ).get(41) as SchemaVersion | undefined;
+    if (applied) return;
+
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS raw_events (
+        id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+        content_session_id   TEXT NOT NULL,
+        session_db_id        INTEGER,
+        project              TEXT,
+        platform_source      TEXT,
+        event_type           TEXT NOT NULL CHECK(event_type IN ('observation', 'summarize')),
+        tool_use_id          TEXT,
+        tool_name            TEXT,
+        tool_input           TEXT,
+        tool_response        TEXT,
+        cwd                  TEXT,
+        last_assistant_message TEXT,
+        prompt_number        INTEGER,
+        agent_id             TEXT,
+        agent_type           TEXT,
+        created_at_epoch     INTEGER NOT NULL
+      )
+    `);
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_raw_events_session ON raw_events(content_session_id, created_at_epoch DESC)');
+    this.db.run('CREATE INDEX IF NOT EXISTS idx_raw_events_created ON raw_events(created_at_epoch DESC)');
+    this.db.run(`
+      CREATE UNIQUE INDEX IF NOT EXISTS ux_raw_events_tool_use
+      ON raw_events(content_session_id, event_type, tool_use_id)
+      WHERE tool_use_id IS NOT NULL
+    `);
+    this.db.prepare(
+      'INSERT OR IGNORE INTO schema_versions (version, applied_at) VALUES (?, ?)'
+    ).run(41, new Date().toISOString());
+    logger.info('DB', 'Migration v41 applied: raw_events archive');
   }
 
   /**

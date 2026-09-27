@@ -30,6 +30,8 @@ export interface ActiveSession {
   forceInit?: boolean;  
   idleTimedOut?: boolean;  
   lastGeneratorActivity: number;
+  /** Provider failure paused generation; next hook may apply bounded recovery. */
+  recoveryPending?: boolean;
   modelOverride?: string;
   lastSummaryStored?: boolean;
   pendingAgentId?: string | null;

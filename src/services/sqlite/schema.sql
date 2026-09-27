@@ -152,6 +152,34 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_pending_session_tool
   WHERE tool_use_id IS NOT NULL;
 
 -- ─────────────────────────────────────────────────────────────────────
+-- raw_events: append-only archive of original hook payloads.
+-- It intentionally has no FK to sdk_sessions so session cleanup cannot erase it.
+-- ─────────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS raw_events (
+  id                     INTEGER PRIMARY KEY AUTOINCREMENT,
+  content_session_id     TEXT NOT NULL,
+  session_db_id          INTEGER,
+  project                TEXT,
+  platform_source        TEXT,
+  event_type             TEXT NOT NULL CHECK(event_type IN ('observation', 'summarize')),
+  tool_use_id            TEXT,
+  tool_name              TEXT,
+  tool_input             TEXT,
+  tool_response          TEXT,
+  cwd                    TEXT,
+  last_assistant_message TEXT,
+  prompt_number          INTEGER,
+  agent_id               TEXT,
+  agent_type             TEXT,
+  created_at_epoch       INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_raw_events_session ON raw_events(content_session_id, created_at_epoch DESC);
+CREATE INDEX IF NOT EXISTS idx_raw_events_created ON raw_events(created_at_epoch DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS ux_raw_events_tool_use
+  ON raw_events(content_session_id, event_type, tool_use_id)
+  WHERE tool_use_id IS NOT NULL;
+
+-- ─────────────────────────────────────────────────────────────────────
 -- user_prompts: per-prompt history (UI + FTS search).
 -- ─────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS user_prompts (

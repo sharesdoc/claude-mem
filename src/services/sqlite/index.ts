@@ -7,6 +7,7 @@ export {
 } from './Database.js';
 
 export { SessionStore } from './SessionStore.js';
+export { RawEventStore } from './RawEventStore.js';
 
 export { SessionSearch } from './SessionSearch.js';
 

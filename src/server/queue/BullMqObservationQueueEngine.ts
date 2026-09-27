@@ -11,6 +11,7 @@ import type {
   HealthCheckedObservationQueueEngine,
   ObservationQueueHealth,
   ObservationQueueInspection,
+  RecoveryPreparationResult,
 } from './ObservationQueueEngine.js';
 import { getRedisQueueConfig, type RedisQueueConfig } from './redis-config.js';
 
@@ -265,6 +266,36 @@ export class BullMqObservationQueueEngine
       total += await this.getPendingCount(sessionDbId);
     }
     return total;
+  }
+
+  async prepareRecovery(sessionDbId: number, cutoffEpoch: number, maxMessages: number): Promise<RecoveryPreparationResult> {
+    const runtime = this.getSessionRuntime(sessionDbId);
+    const jobs = await runtime.queue.getJobs(QUEUE_JOB_TYPES, 0, -1, true);
+    const sessionJobs = jobs.filter(job => job.data.sessionDbId === sessionDbId);
+    const eligible = sessionJobs.filter(job => job.data.createdAtEpoch >= cutoffEpoch);
+    const shouldSkip = eligible.length > maxMessages;
+    const removable = shouldSkip
+      ? sessionJobs
+      : sessionJobs.filter(job => job.data.createdAtEpoch < cutoffEpoch);
+
+    let discarded = 0;
+    for (const job of removable) {
+      try {
+        await job.remove();
+        discarded++;
+      } catch (error) {
+        throw this.toRedisUnavailableError(error);
+      }
+    }
+    if (discarded > 0) {
+      runtime.events.emit('message');
+      this.options.onMutate?.();
+    }
+    return {
+      eligibleCount: eligible.length,
+      discardedCount: discarded,
+      skippedBecauseOverLimit: shouldSkip,
+    };
   }
 
   async peekPendingTypes(sessionDbId: number): Promise<Array<{ message_type: string; tool_name: string | null }>> {

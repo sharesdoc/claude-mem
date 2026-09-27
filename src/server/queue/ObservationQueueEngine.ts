@@ -14,7 +14,14 @@ export interface ObservationQueueEngine {
   resetProcessingToPending(sessionDbId: number): Promise<number>;
   getPendingCount(sessionDbId: number): Promise<number>;
   getTotalQueueDepth(): Promise<number>;
+  prepareRecovery(sessionDbId: number, cutoffEpoch: number, maxMessages: number): Promise<RecoveryPreparationResult>;
   close(): Promise<void>;
+}
+
+export interface RecoveryPreparationResult {
+  eligibleCount: number;
+  discardedCount: number;
+  skippedBecauseOverLimit: boolean;
 }
 
 // Phase 12 — `lanes` exposes per-queue counts (waiting/active/completed/
@@ -104,6 +111,12 @@ export class SqliteObservationQueueEngine implements InspectableObservationQueue
 
   async getTotalQueueDepth(): Promise<number> {
     return this.store.getTotalQueueDepth();
+  }
+
+  async prepareRecovery(sessionDbId: number, cutoffEpoch: number, maxMessages: number): Promise<RecoveryPreparationResult> {
+    const result = this.store.prepareRecovery(sessionDbId, cutoffEpoch, maxMessages);
+    if (result.discardedCount > 0) this.emit(sessionDbId);
+    return result;
   }
 
   async peekPendingTypes(sessionDbId: number): Promise<Array<{ message_type: string; tool_name: string | null }>> {

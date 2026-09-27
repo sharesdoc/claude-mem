@@ -136,6 +136,9 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_SUMMARY',
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE',
       'CLAUDE_MEM_FOLDER_CLAUDEMD_ENABLED',
+      'CLAUDE_MEM_RAW_EVENT_STORE',
+      'CLAUDE_MEM_RAW_EVENT_MAX_AGE_HOURS',
+      'CLAUDE_MEM_RAW_EVENT_MAX_COMPENSATION',
       'CLAUDE_MEM_QWEN_MODEL',
       'CLAUDE_MEM_QWEN_API_KEY',
       'CLAUDE_MEM_QWEN_URL',
@@ -267,6 +270,19 @@ export class SettingsRoutes extends BaseRouteHandler {
       const obsCount = parseInt(settings.CLAUDE_MEM_CONTEXT_OBSERVATIONS, 10);
       if (isNaN(obsCount) || obsCount < 1 || obsCount > 200) {
         return { valid: false, error: 'CLAUDE_MEM_CONTEXT_OBSERVATIONS must be between 1 and 200' };
+      }
+    }
+
+    if (settings.CLAUDE_MEM_RAW_EVENT_STORE !== undefined &&
+        settings.CLAUDE_MEM_RAW_EVENT_STORE !== 'true') {
+      return { valid: false, error: 'CLAUDE_MEM_RAW_EVENT_STORE must remain "true" because raw events are always retained' };
+    }
+
+    for (const key of ['CLAUDE_MEM_RAW_EVENT_MAX_AGE_HOURS', 'CLAUDE_MEM_RAW_EVENT_MAX_COMPENSATION']) {
+      if (settings[key] === undefined || settings[key] === '') continue;
+      const value = parseInt(settings[key], 10);
+      if (isNaN(value) || value < 1 || value > 168) {
+        return { valid: false, error: `${key} must be between 1 and 168` };
       }
     }
 

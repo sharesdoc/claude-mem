@@ -86,6 +86,21 @@ export async function handleGeneratorExit(
     return;
   }
 
+  if (reason === 'provider-unavailable') {
+    try {
+      await pendingStore.resetProcessingToPending(sessionDbId);
+    } catch (error) {
+      logger.error('SESSION', 'Failed to preserve pending work after provider failure', {
+        sessionId: sessionDbId,
+      }, error instanceof Error ? error : new Error(String(error)));
+    }
+    session.recoveryPending = true;
+    logger.warn('SESSION', 'Provider unavailable; keeping active session paused for bounded recovery', {
+      sessionId: sessionDbId,
+    });
+    return;
+  }
+
   let pendingCount: number;
   try {
     pendingCount = await pendingStore.getPendingCount(sessionDbId);
