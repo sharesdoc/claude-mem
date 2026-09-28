@@ -500,7 +500,7 @@ export class SessionRoutes extends BaseRouteHandler {
     const cleanedPrompt = stripMemoryTagsFromPrompt(prompt);
 
     if (!cleanedPrompt || cleanedPrompt.trim() === '') {
-      this.sessionManager.recordUserInputEvent(sessionDbId, prompt, promptNumber,
+      this.sessionManager.recordUserInputEvent(sessionDbId, cleanedPrompt, promptNumber,
         typeof req.body.agentId === 'string' ? req.body.agentId : undefined,
         typeof req.body.agentType === 'string' ? req.body.agentType : undefined);
       logger.debug('HOOK', 'Session init - prompt entirely private', {
@@ -525,7 +525,7 @@ export class SessionRoutes extends BaseRouteHandler {
     );
 
     if (duplicatePrompt) {
-      this.sessionManager.recordUserInputEvent(sessionDbId, prompt, duplicatePrompt.prompt_number,
+      this.sessionManager.recordUserInputEvent(sessionDbId, cleanedPrompt, duplicatePrompt.prompt_number,
         typeof req.body.agentId === 'string' ? req.body.agentId : undefined,
         typeof req.body.agentType === 'string' ? req.body.agentType : undefined);
       const contextInjected = this.sessionManager.getSession(sessionDbId) !== undefined;
