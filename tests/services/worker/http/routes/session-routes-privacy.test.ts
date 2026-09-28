@@ -197,6 +197,38 @@ describe('SessionRoutes — raw_events privacy regression (Issue-202609281643271
     expect(serialized).not.toContain('<private>');
   });
 
+  it('does not persist fully-private prompt plaintext into sdk_sessions.user_prompt', async () => {
+    const contentSessionId = 'privacy-sdk-session-fully-private';
+    const secret = 'SDK_SESSION_SECRET_ABC123';
+    const prompt = `<private>${secret}</private>`;
+
+    const { req, res, jsonSpy } = createMockReqRes({
+      contentSessionId,
+      project: 'privacy-test',
+      prompt,
+    });
+
+    await runSessionInit(req as Request, res as Response);
+
+    expect(jsonSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        skipped: true,
+        reason: 'private',
+      })
+    );
+
+    const row = store.db.query(`
+      SELECT user_prompt
+      FROM sdk_sessions
+      WHERE content_session_id = ?
+    `).get(contentSessionId) as { user_prompt: string | null } | null;
+
+    expect(row).not.toBeNull();
+    expect(row?.user_prompt).toBe('');
+    expect(row?.user_prompt).not.toContain(secret);
+    expect(row?.user_prompt).not.toContain('<private>');
+  });
+
   it('archives cleanedPrompt, not raw prompt, when dedupe branch is hit', async () => {
     const contentSessionId = 'privacy-deduplicated';
     const visiblePrompt = 'Repeated prompt';

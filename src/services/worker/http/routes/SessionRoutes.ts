@@ -478,8 +478,9 @@ export class SessionRoutes extends BaseRouteHandler {
     });
 
     const store = this.dbManager.getSessionStore();
+    const cleanedPrompt = stripMemoryTagsFromPrompt(prompt);
 
-    const sessionDbId = store.createSDKSession(contentSessionId, project, prompt, customTitle, platformSource);
+    const sessionDbId = store.createSDKSession(contentSessionId, project, cleanedPrompt, customTitle, platformSource);
 
     const dbSession = store.getSessionById(sessionDbId);
     const isNewSession = !dbSession?.memory_session_id;
@@ -496,8 +497,6 @@ export class SessionRoutes extends BaseRouteHandler {
     } else {
       logger.debug('HTTP', `[ALIGNMENT] New Session | contentSessionId=${contentSessionId} | prompt#=${promptNumber} | memorySessionId will be captured on first SDK response`);
     }
-
-    const cleanedPrompt = stripMemoryTagsFromPrompt(prompt);
 
     if (!cleanedPrompt || cleanedPrompt.trim() === '') {
       this.sessionManager.recordUserInputEvent(sessionDbId, cleanedPrompt, promptNumber,
