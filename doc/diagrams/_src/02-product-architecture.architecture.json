@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "claude-mem 产品架构",
+    "subtitle": "用户视角的能力分块 · 捕获 → 记忆核心 → 注入",
+    "output": "02-product-architecture.html",
+    "quality_profile": "standard"
+  },
+  "components": [
+    { "id": "dev", "type": "external", "label": "开发者", "sublabel": "使用 AI 编码助手", "pos": [40, 60], "size": [130, 56] },
+    { "id": "ai", "type": "frontend", "label": "AI 助手", "sublabel": "Claude/Codex/Cursor/Gemini/Windsurf", "pos": [40, 160], "size": [180, 56] },
+    { "id": "ops", "type": "external", "label": "管理者", "sublabel": "运维/团队负责人", "pos": [40, 260], "size": [130, 56] },
+
+    { "id": "hook", "type": "backend", "label": "Hook 系统", "sublabel": "6 生命周期事件捕获", "pos": [290, 110], "size": [150, 56] },
+    { "id": "cli", "type": "backend", "label": "CLI / MCP 入口", "sublabel": "命令 + 工具调用", "pos": [290, 210], "size": [150, 56] },
+
+    { "id": "compress", "type": "backend", "label": "AI 压缩引擎", "sublabel": "Provider 多链路生成", "pos": [520, 110], "size": [150, 56] },
+    { "id": "store", "type": "database", "label": "记忆存储", "sublabel": "SQLite / Postgres", "pos": [520, 210], "size": [150, 56] },
+    { "id": "search", "type": "backend", "label": "检索引擎", "sublabel": "全文 + 向量 + 时间线", "pos": [520, 310], "size": [150, 56] },
+
+    { "id": "inject", "type": "backend", "label": "上下文注入", "sublabel": "CLAUDE.md / 标签 / API", "pos": [750, 110], "size": [150, 56] },
+    { "id": "viewer", "type": "frontend", "label": "Viewer UI", "sublabel": "实时流/统计/报表", "pos": [750, 310], "size": [150, 56] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "① 接入与捕获", "wraps": ["hook", "cli"] },
+    { "kind": "security-group", "label": "② 记忆核心", "wraps": ["compress", "store", "search"] },
+    { "kind": "region", "label": "③ 注入与呈现", "wraps": ["inject", "viewer"] }
+  ],
+  "connections": [
+    { "id": "dev-to-ai", "from": "dev", "to": "ai", "variant": "emphasis" },
+    { "id": "ai-to-hook", "from": "ai", "to": "hook", "label": "事件", "fromSide": "right", "toSide": "left" },
+    { "id": "ai-to-cli", "from": "ai", "to": "cli", "label": "主动检索", "variant": "dashed", "fromSide": "right", "toSide": "left", "labelDy": 10 },
+    { "id": "ops-to-cli", "from": "ops", "to": "cli", "fromSide": "right", "toSide": "left" },
+    { "id": "hook-to-compress", "from": "hook", "to": "compress", "fromSide": "right", "toSide": "left" },
+    { "id": "cli-to-search", "from": "cli", "to": "search", "fromSide": "right", "toSide": "left", "variant": "dashed" },
+    { "id": "compress-to-store", "from": "compress", "to": "store", "fromSide": "bottom", "toSide": "top" },
+    { "id": "store-to-search", "from": "store", "to": "search", "fromSide": "bottom", "toSide": "top" },
+    { "id": "search-to-inject", "from": "search", "to": "inject", "fromSide": "right", "toSide": "left" },
+    { "id": "search-to-viewer", "from": "search", "to": "viewer", "fromSide": "right", "toSide": "left", "variant": "dashed" },
+    { "id": "inject-to-ai", "from": "inject", "to": "ai", "label": "回馈 AI", "variant": "emphasis", "fromSide": "top", "toSide": "top", "via": [[825, 30], [220, 30], [220, 160]] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "三条主链路", "items": ["捕获链：AI→Hook→压缩→存储", "注入链：存储→检索→注入→回馈 AI", "管理链：CLI/Viewer→存储与呈现"] },
+    { "dot": "emerald", "title": "无感 + 主动双形态", "items": ["对开发者无感：Hook 自动捕获与注入", "对 AI 主动：MCP 工具供检索", "对管理者可视：Viewer UI"] }
+  ]
+}

@@ -1,0 +1,1876 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# claude-mem installer — run from repository root
+# Usage: ./install-claude-mem -i|-u|-r|-d <claude|codex|both|all|claude,codex>
+#
+# Data-preservation contract:
+#   -i / -u / -r  NEVER touch $DATA_DIR (default ~/.claude-mem). Database,
+#                 archives, logs, chroma collections all survive reinstalls.
+#   -d            DOES delete $DATA_DIR (after typed YES confirmation).
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# 定义必须先于 _early_native:它在第 33 行 LOCAL_VERSION 求值时即被调用,
+# 若定义在后面,非 Windows 平台会触发一条 "command not found" stderr 噪音
+# (if 条件容错使行为仍正确,但噪音误导排障)。
+is_windows_shell() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+# MSYS2→Windows 路径转换(轻量版,脚本顶部 LOCAL_VERSION 使用)
+# 用 cygpath -m(正斜杠 C:/...)而非 -w(反斜杠 C:\...):这些路径会被嵌入
+# node 的 JS 字符串字面量(require('...') / const path='...'),反斜杠会被 JS
+# 转义吃掉(C:\Users\… → C:Users…)导致写错文件;正斜杠 node 同样接受且不会被吃。
+_early_native() {
+  if [[ "$(uname -s 2>/dev/null)" == *"_NT"* ]] || is_windows_shell; then
+    cygpath -m "$1" 2>/dev/null || echo "$1"
+  else
+    echo "$1"
+  fi
+}
+
+MARKETPLACE_DIR="$HOME/.claude/plugins/marketplaces/thedotmack"
+CLAUDE_SETTINGS="$HOME/.claude/settings.json"
+KNOWN_MARKETPLACES="$HOME/.claude/plugins/known_marketplaces.json"
+INSTALLED_PLUGINS="$HOME/.claude/plugins/installed_plugins.json"
+DATA_DIR="${CLAUDE_MEM_DATA_DIR:-$HOME/.claude-mem}"
+PID_FILE="$DATA_DIR/worker.pid"
+WORKER_SCRIPT="$MARKETPLACE_DIR/plugin/scripts/worker-service.cjs"
+BUILT_MARKER="$SCRIPT_DIR/plugin/scripts/worker-service.cjs"
+LOCAL_VERSION="$(node -p "require('$(_early_native "$SCRIPT_DIR/package.json")').version" 2>/dev/null || echo 13.2.0)"
+PLUGIN_CACHE_DIR="$HOME/.claude/plugins/cache/thedotmack/claude-mem/$LOCAL_VERSION"
+CODEX_MARKETPLACE_NAME="claude-mem-local"
+CODEX_PLUGIN_NAME="claude-mem"
+CODEX_PLUGIN_SELECTOR="${CODEX_PLUGIN_NAME}@${CODEX_MARKETPLACE_NAME}"
+
+# ── Colors ──────────────────────────────────────────────────────────
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
+BLUE=$'\033[0;34m'; BOLD=$'\033[1m'; DIM=$'\033[2m'; RESET=$'\033[0m'
+
+ok()   { printf "  ${GREEN}✓${RESET} %s\n" "$1"; }
+fail() { printf "  ${RED}✗${RESET} %s\n" "$1"; }
+warn() { printf "  ${YELLOW}!${RESET} %s\n" "$1"; }
+info() { printf "  ${BLUE}→${RESET} %s\n" "$1"; }
+step() { printf "\n${BOLD}%s${RESET}\n" "$1"; }
+dbg()  { [[ -n "${DEBUG:-}" ]] && printf "  ${DIM}[debug]${RESET} %s\n" "$1" || true; }
+
+# ── Help ────────────────────────────────────────────────────────────
+show_help() {
+  printf "${BOLD}claude-mem installer${RESET} — run from the repository root.\n\n"
+  printf "${BOLD}Usage:${RESET}\n"
+  printf "  ./install-claude-mem -i <target>   Install\n"
+  printf "  ./install-claude-mem -u <target>   Uninstall (plugin only — DATA preserved)\n"
+  printf "  ./install-claude-mem -r <target>   Reinstall  (uninstall + install — DATA preserved)\n"
+  printf "  ./install-claude-mem -d <target>   ${RED}Destroy${RESET} (uninstall + DELETE all data)\n\n"
+  printf "${BOLD}Targets:${RESET}\n"
+  printf "  claude                 Claude Code\n"
+  printf "  codex                  Codex CLI\n"
+  printf "  both / all             Claude Code + Codex CLI\n"
+  printf "  claude,codex           Comma-separated multiple targets\n\n"
+  printf "${BOLD}Options:${RESET}\n"
+  printf "  -h, --help             Show this help message\n"
+  printf "  --role <client|server> Configure dual-mode sync identity (T-26)\n"
+  printf "  --upstream <URL>       (client) URL of the sync server, e.g. https://mem.acme.com\n"
+  printf "  --label <NAME>         Sync identity (defaults to whoami in client mode)\n"
+  printf "  --api-key <KEY>        Cloud-mode API key; flips auth_mode=apikey\n"
+  printf "  --token <TOKEN>        LAN shared access token (simpler than apiKey)\n"
+  printf "  --reset-token          Force regenerate access token on reinstall\n"
+  printf "  --admin-password <PW>  Set admin password for server-mode viewer auth\n"
+  printf "                         (SHA1 hashed; also unlocks locked account)\n"
+  printf "  --allowed-origins CSV  (server) Comma-separated public origins allowed by CORS,\n"
+  printf "                         e.g. 'https://mem.acme.com'. Required when the viewer is\n"
+  printf "                         served via frpc/nginx on a public HTTPS domain.\n"
+  printf "  --debug                Print verbose diagnostics (set -x)\n"
+  printf "  --info                 Show configuration summary (mode, port, token, DB, etc.)\n\n"
+  printf "${BOLD}Data preservation:${RESET}\n"
+  printf "  ${DIM}-i / -u / -r never touch %s — DB, archives, chroma, logs all survive.${RESET}\n" "$DATA_DIR"
+  printf "  ${DIM}-d explicitly deletes %s after a typed YES confirmation.${RESET}\n\n" "$DATA_DIR"
+  printf "${BOLD}Examples:${RESET}\n"
+  printf "  ./install-claude-mem -i claude     # Install for Claude Code\n"
+  printf "  ./install-claude-mem -u claude     # Uninstall plugin (keep data)\n"
+  printf "  ./install-claude-mem -r claude     # Reinstall (keep data)\n"
+  printf "  ./install-claude-mem -d claude     # Full purge incl. ~/.claude-mem\n"
+  printf "  ./install-claude-mem -i codex      # Install for Codex CLI\n"
+  printf "  ./install-claude-mem -i both       # Install for Claude Code + Codex CLI\n"
+  printf "  ./install-claude-mem -i claude,codex  # Same as 'both'\n"
+  printf "  ./install-claude-mem -i claude --role client --upstream https://mem.acme.com --label ZhangSan\n"
+  printf "  ./install-claude-mem -i claude --role server\n"
+  printf "  ./install-claude-mem -i claude --role client --upstream http://192.168.1.100:37701 --label ZhangSan --token my-shared-secret\n\n"
+  printf "${BOLD}Install flow:${RESET}\n"
+  printf "  Auto-detects state → builds → syncs → registers → starts worker\n\n"
+}
+
+# ── Dependencies ─────────────────────────────────────────────────────
+# Bun release naming: bun-<darwin|linux|windows>-<x64|aarch64>.zip
+# (different from tree-sitter, which uses macos/arm64).
+_detect_bun_archive() {
+  local bun_os bun_arch
+  case "$(uname -s)" in
+    Darwin) bun_os="darwin" ;;
+    Linux)  bun_os="linux"  ;;
+    MINGW*|MSYS*|CYGWIN*) bun_os="windows" ;;
+    *) return 1 ;;
+  esac
+  case "$(uname -m)" in
+    x86_64|amd64) bun_arch="x64" ;;
+    arm64|aarch64) bun_arch="aarch64" ;;
+    *) return 1 ;;
+  esac
+  echo "$SCRIPT_DIR/download/bun-${bun_os}-${bun_arch}.zip"
+}
+
+# Install bun from a local zip in ./download. Mirrors the user-provided
+# download/install-bun reference: unzip → copy to ~/.bun/bin → chmod +x →
+# strip macOS quarantine attr → export PATH. Returns 0 on success.
+_install_bun_from_local() {
+  local zip="$1"
+  if [[ ! -f "$zip" ]]; then return 1; fi
+  if ! command -v unzip &>/dev/null; then
+    warn "unzip not found — cannot use local $zip"
+    return 1
+  fi
+  info "Using local bun archive: $zip"
+  local tmp; tmp="$(mktemp -d)"
+  if ! unzip -q "$zip" -d "$tmp"; then
+    fail "Failed to extract $zip"
+    rm -rf "$tmp"
+    return 1
+  fi
+  local bun_bin; bun_bin="$(find "$tmp" -type f -name bun | head -1)"
+  if [[ -z "$bun_bin" ]]; then
+    fail "bun binary not found inside $zip"
+    rm -rf "$tmp"
+    return 1
+  fi
+  mkdir -p "$HOME/.bun/bin"
+  cp "$bun_bin" "$HOME/.bun/bin/bun"
+  chmod +x "$HOME/.bun/bin/bun"
+  # macOS Gatekeeper quarantine prevents execution of binaries copied from
+  # downloaded zips; strip it silently (no-op on non-macOS).
+  xattr -d com.apple.quarantine "$HOME/.bun/bin/bun" 2>/dev/null || true
+  rm -rf "$tmp"
+  export PATH="$HOME/.bun/bin:$PATH"
+  return 0
+}
+
+ensure_bun() {
+  if command -v bun &>/dev/null; then return 0; fi
+
+  step "Bun not found — auto-installing"
+  # Respect user's existing bun install if it's just not on PATH
+  for candidate in "$HOME/.bun/bin/bun" "/usr/local/bin/bun"; do
+    if [[ -x "$candidate" ]]; then
+      export PATH="$HOME/.bun/bin:$PATH"
+      ok "Found bun at $candidate, added to PATH"
+      return 0
+    fi
+  done
+
+  # Prefer local archive — avoids network entirely on hosts behind a proxy
+  # or offline. Falls through to the bun.sh installer when no matching
+  # download/bun-<os>-<arch>.zip exists.
+  local local_zip; local_zip="$(_detect_bun_archive || true)"
+  if [[ -n "$local_zip" && -f "$local_zip" ]]; then
+    if _install_bun_from_local "$local_zip" && command -v bun &>/dev/null; then
+      ok "bun installed from local archive ($(bun --version))"
+      return 0
+    fi
+    warn "Local archive install failed — falling back to network installer"
+  elif [[ -n "$local_zip" ]]; then
+    dbg "No local bun archive at $local_zip — will use network installer"
+  fi
+
+  info "Downloading and installing bun..."
+  if command -v curl &>/dev/null; then
+    curl -fsSL https://bun.sh/install | bash
+  elif command -v wget &>/dev/null; then
+    wget -qO- https://bun.sh/install | bash
+  else
+    fail "Need curl or wget to install bun. Install one of them and retry."
+    exit 1
+  fi
+
+  export PATH="$HOME/.bun/bin:$PATH"
+  if command -v bun &>/dev/null; then
+    ok "bun installed successfully ($(bun --version))"
+  else
+    fail "bun installation completed but bun is still not on PATH"
+    info "Try: export PATH=\"\$HOME/.bun/bin:\$PATH\" && bun --version"
+    exit 1
+  fi
+}
+
+# ── Detection ───────────────────────────────────────────────────────
+check_built() {
+  [[ -f "$BUILT_MARKER" ]]
+}
+
+check_synced() {
+  # Both marketplace AND versioned cache must be populated, otherwise a partial
+  # sync (e.g. failed mid-run) would be falsely reported as "already synced".
+  [[ -f "$WORKER_SCRIPT" ]] || return 1
+  [[ -f "$PLUGIN_CACHE_DIR/scripts/worker-service.cjs" ]] || return 1
+
+  # Existence alone is NOT enough: Claude Code registers the marketplace by
+  # git-cloning the published thedotmack repo, which ships an OLDER worker
+  # build (e.g. one without the SyncAgent). A bare -f check then made do_sync
+  # report "already synced" and skip the rsync, so the stale worker kept
+  # running forever and client→server sync silently never worked. Require the
+  # deployed worker to be byte-identical to the freshly-built local plugin
+  # worker; any drift → not synced → do_sync re-runs.
+  [[ -f "$SCRIPT_DIR/plugin/scripts/worker-service.cjs" ]] || return 0   # no local build to compare against → trust existence
+
+  # 比对关键文件集而非单个 worker:hooks.json / bun-runner 漂移同样会让运行态
+  # 与本地构建脱节(rev R-003),单文件 cmp 发现不了。
+  # 注意 package.json 不能字节比对:do_sync 会先 patch(摘 tree-sitter-cli 的
+  # postinstall)再同步、之后恢复本地副本,部署副本与本地【故意】不同——字节
+  # 比对会在每次安装后误报 "Sync failed"。对它只比对 version 字段,版本漂移
+  # (如上游 13.5.5 覆盖本地 13.2.0 的事故)仍能被发现。
+  local rel src
+  for rel in scripts/worker-service.cjs scripts/bun-runner.js hooks/hooks.json; do
+    src="$SCRIPT_DIR/plugin/$rel"
+    [[ -f "$src" ]] || continue   # 本地构建里就没有 → 跳过该文件
+    cmp -s "$src" "$MARKETPLACE_DIR/plugin/$rel" || return 1
+    cmp -s "$src" "$PLUGIN_CACHE_DIR/$rel" || return 1
+  done
+
+  _pkgver() { node -p "require('$(windows_native_path "$1")').version" 2>/dev/null || echo "unreadable:$1"; }
+  local v_local v_mp v_cache
+  v_local="$(_pkgver "$SCRIPT_DIR/plugin/package.json")"
+  v_mp="$(_pkgver "$MARKETPLACE_DIR/plugin/package.json")"
+  v_cache="$(_pkgver "$PLUGIN_CACHE_DIR/package.json")"
+  [[ "$v_local" == "$v_mp" && "$v_local" == "$v_cache" ]] || return 1
+  return 0
+}
+
+check_marketplace_registered() {
+  [[ -f "$KNOWN_MARKETPLACES" ]] && grep -q '"thedotmack"' "$KNOWN_MARKETPLACES" 2>/dev/null
+}
+
+check_plugin_enabled() {
+  [[ -f "$CLAUDE_SETTINGS" ]] && grep -q 'claude-mem@thedotmack' "$CLAUDE_SETTINGS" 2>/dev/null
+}
+
+get_worker_port() {
+  dbg "get_worker_port: PID_FILE=$PID_FILE, settings=$DATA_DIR/settings.json"
+  if [[ -f "$PID_FILE" ]]; then
+    local port
+    port=$(grep -o '"port":[[:space:]]*[0-9]*' "$PID_FILE" 2>/dev/null | grep -o '[0-9]*$' || true)
+    if [[ -n "$port" ]]; then
+      dbg "get_worker_port: found port $port in PID file"
+      echo "$port"
+      return
+    fi
+  fi
+  if [[ -f "$DATA_DIR/settings.json" ]]; then
+    local sport
+    sport=$(grep -o '"CLAUDE_MEM_WORKER_PORT":[[:space:]]*"[0-9]*"' "$DATA_DIR/settings.json" 2>/dev/null | grep -o '[0-9]*$' || true)
+    if [[ -n "$sport" ]]; then
+      dbg "get_worker_port: found port $sport in settings.json"
+      echo "$sport"
+      return
+    fi
+  fi
+  local default_port="$(( 37700 + $(id -u) % 100 ))"
+  dbg "get_worker_port: using default port $default_port"
+  echo "$default_port"
+}
+
+check_worker_running() {
+  local port
+  port=$(get_worker_port)
+  dbg "check_worker_running: curl -sf http://127.0.0.1:${port}/api/health --connect-timeout 2 --max-time 3"
+  curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 2 --max-time 3 2>/dev/null
+}
+
+# is_windows_shell 已前移到脚本顶部(_early_native 之前)定义。
+# MSYS2->Windows 路径转换(solutions.md问题1)。
+# 用 cygpath -m(正斜杠 C:/Users/...)而非 -w(反斜杠 C:\Users\...):本函数的
+# 输出全部用于嵌入 node 的 JS 字符串字面量(require('$path') / const path='$file'),
+# 反斜杠会被 JS 字符串转义吃掉(C:\Users\…\settings.json → C:Users…settings.json),
+# 导致 apply_sync_settings 等把配置写到 cwd 下的错误文件而非真正的 settings.json。
+# 正斜杠路径 node 原生接受,且在 MSYS bash 的 [[ -f ]] / > 重定向里同样可用。
+windows_native_path() {
+  if [[ "$(uname -s 2>/dev/null)" == *"_NT"* ]] || is_windows_shell; then
+    cygpath -m "$1" 2>/dev/null || echo "$1"
+  else
+    echo "$1"
+  fi
+}
+
+find_pid_listening_on_port() {
+  local port="$1"
+  local pid=""
+
+  if is_windows_shell; then
+    # Git Bash/MSYS normally lacks lsof/fuser. netstat -ano is available on
+    # Windows and prints the owning PID as the last column.
+    pid=$(netstat -ano 2>/dev/null | awk -v p=":$port" '
+      $0 ~ p && $0 ~ /LISTENING/ { print $NF; exit }
+    ' || true)
+  else
+    if command -v lsof >/dev/null 2>&1; then
+      pid=$(lsof -tiTCP:"${port}" -sTCP:LISTEN 2>/dev/null | head -1 || true)
+    fi
+    if [[ -z "$pid" ]] && command -v fuser >/dev/null 2>&1; then
+      pid=$(fuser "${port}/tcp" 2>/dev/null | grep -o '[0-9]*' | head -1 || true)
+    fi
+  fi
+
+  echo "$pid"
+}
+
+terminate_worker_pid() {
+  local pid="$1"
+  if [[ -z "$pid" ]]; then return 0; fi
+
+  if is_windows_shell && command -v taskkill >/dev/null 2>&1; then
+    taskkill //PID "$pid" //T //F >/dev/null 2>&1 || true
+    return 0
+  fi
+
+  kill "$pid" 2>/dev/null || true
+  sleep 2
+  if ps -p "$pid" >/dev/null 2>&1; then
+    dbg "terminate_worker_pid: force-killing pid=$pid"
+    kill -9 "$pid" 2>/dev/null || true
+  fi
+}
+
+check_codex_cli() {
+  command -v codex &>/dev/null
+}
+
+check_codex_marketplace() {
+  check_codex_cli && codex plugin marketplace list 2>/dev/null | awk -v name="$CODEX_MARKETPLACE_NAME" '$1 == name { found = 1 } END { exit(found ? 0 : 1) }'
+}
+
+check_codex_plugin_available() {
+  check_codex_cli && codex plugin list 2>/dev/null | awk -v selector="$CODEX_PLUGIN_SELECTOR" '$1 == selector { found = 1 } END { exit(found ? 0 : 1) }'
+}
+
+check_codex_plugin_installed() {
+  # Codex lists marketplace-visible plugins even when they are not installed.
+  # Require the STATUS column to be "installed" so reinstall does not skip
+  # the real `codex plugin add` step.
+  check_codex_cli && codex plugin list 2>/dev/null | awk -v selector="$CODEX_PLUGIN_SELECTOR" '$1 == selector && $2 ~ /^installed/ { found = 1 } END { exit(found ? 0 : 1) }'
+}
+
+# ── tree-sitter binary handling (local-first, proxy fallback) ───────
+# tree-sitter-cli@0.26.x postinstall fetches a ~7MB gz from github.com release
+# CDN and hard-wires the URL. To avoid this fragile download we skip its
+# postinstall (by removing from trustedDependencies) and inject the binary
+# ourselves. Source preference:
+#   1. ./download/tree-sitter-<os>-<arch>.gz  in this repo (any committed
+#      platform: macos-x64/arm64, windows-x64, ...) — reused as-is if valid
+#   2. Prompt for SOCKS5 proxy port → curl --socks5-hostname download,
+#      then cache the result into ./download for reuse on the next install
+
+case "$(uname -s)" in
+  Darwin) TS_OS="macos" ;;
+  Linux)  TS_OS="linux" ;;
+  MINGW*|MSYS*|CYGWIN*) TS_OS="windows" ;;
+  *) TS_OS="" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64) TS_ARCH="x64" ;;
+  arm64|aarch64) TS_ARCH="arm64" ;;
+  i386|i686) TS_ARCH="x86" ;;
+  *) TS_ARCH="" ;;
+esac
+LOCAL_TS_BINARY_GZ="$SCRIPT_DIR/download/tree-sitter-${TS_OS}-${TS_ARCH}.gz"
+
+# Files we'll patch in-place (and restore) during sync.
+PKGJSON_BACKUPS=()
+
+ensure_treesitter_binary() {
+  if [[ -z "$TS_OS" || -z "$TS_ARCH" ]]; then
+    fail "Unsupported platform: $(uname -s)/$(uname -m)"
+    exit 1
+  fi
+
+  # Local-first: reuse a committed/cached gz from ./download if it's a valid,
+  # non-empty gzip. A corrupt/partial cached file would otherwise pass the
+  # bare -f check and only blow up later at gunzip-injection time, so we
+  # verify integrity here and fall through to a fresh download if it's bad.
+  if [[ -f "$LOCAL_TS_BINARY_GZ" ]]; then
+    if [[ -s "$LOCAL_TS_BINARY_GZ" ]] && gzip -t "$LOCAL_TS_BINARY_GZ" 2>/dev/null; then
+      ok "Using local tree-sitter binary: $LOCAL_TS_BINARY_GZ"
+      return
+    fi
+    warn "Local tree-sitter binary is empty/corrupt — re-downloading: $LOCAL_TS_BINARY_GZ"
+    rm -f "$LOCAL_TS_BINARY_GZ"
+  fi
+
+  warn "Local tree-sitter binary not found: $LOCAL_TS_BINARY_GZ"
+  info "Will download via SOCKS5 proxy. Provide your local proxy port."
+  printf "  SOCKS5 port [default 7890]: "
+  local user_port
+  read -r user_port
+  user_port="${user_port:-7890}"
+
+  if ! curl -sf --connect-timeout 3 --socks5-hostname "127.0.0.1:$user_port" \
+       https://github.com -o /dev/null 2>/dev/null; then
+    fail "SOCKS5 proxy at 127.0.0.1:$user_port not reachable"
+    exit 1
+  fi
+
+  # Determine tree-sitter-cli version pinned in plugin/package.json (most
+  # specific) — falls back to a known recent version if parsing fails.
+  local ts_version
+  ts_version="$(node -p "
+    const v = require('$(windows_native_path "$SCRIPT_DIR/plugin/package.json")').dependencies['tree-sitter-cli'];
+    v.replace(/^[^0-9]+/, '');
+  " 2>/dev/null || echo '0.26.8')"
+
+  local url="https://github.com/tree-sitter/tree-sitter/releases/download/v${ts_version}/tree-sitter-${TS_OS}-${TS_ARCH}.gz"
+  mkdir -p "$SCRIPT_DIR/download"
+  info "Downloading tree-sitter v${ts_version} via socks5://127.0.0.1:$user_port..."
+  if curl -fL --socks5-hostname "127.0.0.1:$user_port" \
+       --connect-timeout 10 --max-time 120 \
+       -o "$LOCAL_TS_BINARY_GZ" "$url"; then
+    # Validate before caching — a truncated/HTML-error body must not be left
+    # in ./download where the local-first branch would happily reuse it.
+    if [[ -s "$LOCAL_TS_BINARY_GZ" ]] && gzip -t "$LOCAL_TS_BINARY_GZ" 2>/dev/null; then
+      ok "Downloaded and cached to $LOCAL_TS_BINARY_GZ (reused on next install)"
+    else
+      fail "Downloaded file is not a valid gzip: $LOCAL_TS_BINARY_GZ"
+      rm -f "$LOCAL_TS_BINARY_GZ"
+      exit 1
+    fi
+  else
+    fail "Download failed from $url"
+    rm -f "$LOCAL_TS_BINARY_GZ"
+    exit 1
+  fi
+}
+
+patch_pkgjson_skip_treesitter() {
+  # Temporarily remove tree-sitter-cli from trustedDependencies so bun won't
+  # run its postinstall (which hard-codes the github.com download URL).
+  local f
+  for f in "$SCRIPT_DIR/package.json" "$SCRIPT_DIR/plugin/package.json"; do
+    [[ -f "$f" ]] || continue
+    cp -p "$f" "${f}.install-bak"
+    PKGJSON_BACKUPS+=("$f")
+    local tmp
+    tmp="$(mktemp)"
+    jq '.trustedDependencies = ((.trustedDependencies // []) | map(select(. != "tree-sitter-cli")))' \
+       "$f" > "$tmp"
+    cat "$tmp" > "$f"
+    rm -f "$tmp"
+  done
+  info "Disabled tree-sitter-cli postinstall in package.json (will restore after sync)"
+}
+
+restore_pkgjson() {
+  local f
+  for f in "${PKGJSON_BACKUPS[@]:-}"; do
+    [[ -z "$f" ]] && continue
+    if [[ -f "${f}.install-bak" ]]; then
+      mv "${f}.install-bak" "$f"
+    fi
+  done
+  PKGJSON_BACKUPS=()
+}
+
+inject_treesitter_binary() {
+  local target_node_modules="$1"
+  local ts_dir="$target_node_modules/tree-sitter-cli"
+  local ts_exe="tree-sitter"
+  if is_windows_shell; then
+    ts_exe="tree-sitter.exe"
+  fi
+  if [[ ! -d "$ts_dir" ]]; then
+    warn "tree-sitter-cli not in $target_node_modules — skip injection"
+    return
+  fi
+  gunzip -c "$LOCAL_TS_BINARY_GZ" > "$ts_dir/$ts_exe"
+  chmod +x "$ts_dir/$ts_exe"
+  ok "Injected tree-sitter binary: $ts_dir/$ts_exe"
+}
+
+# Restore package.json files even if the script aborts mid-sync.
+trap restore_pkgjson EXIT
+
+# ── Local registration (no npx, no upstream fetch) ──────────────────
+require_jq() {
+  if ! command -v jq >/dev/null 2>&1; then
+    fail "jq not found — required for local registration"
+    info "Install: brew install jq"
+    exit 1
+  fi
+}
+
+json_patch() {
+  # json_patch <file> <jq-filter>  — in-place update; creates {} if missing.
+  # Symlink-safe: writes through the link via shell redirection (`>`) so a
+  # symlinked settings.json keeps pointing at its real target after the patch.
+  local file="$1"
+  local filter="$2"
+  local tmp
+  tmp="$(mktemp)"
+  mkdir -p "$(dirname "$file")"
+  if [[ -f "$file" ]]; then
+    jq "$filter" "$file" > "$tmp"
+  else
+    echo '{}' | jq "$filter" > "$tmp"
+  fi
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
+# 无 claude CLI 时的注册回退:手写 canonical 形态 —— directory 源指向项目根
+# (含 .claude-plugin/marketplace.json),路径经 windows_native_path 规整;
+# installed_plugins 指向版本化 cache。所有路径均由 $SCRIPT_DIR/$HOME 推导,
+# 不写死任何用户目录。
+register_plugin_json_fallback() {
+  local now="$1"
+  local root_native
+  root_native="$(windows_native_path "$SCRIPT_DIR")"
+  json_patch "$KNOWN_MARKETPLACES" \
+    ".\"thedotmack\" = {
+       source: { source: \"directory\", path: \"$root_native\" },
+       installLocation: \"$root_native\",
+       lastUpdated: \"$now\"
+     }"
+  json_patch "$INSTALLED_PLUGINS" \
+    "(.version //= 2) | (.plugins //= {}) |
+     .plugins[\"claude-mem@thedotmack\"] = [{
+       scope: \"user\",
+       installPath: \"$(windows_native_path "$PLUGIN_CACHE_DIR")\",
+       version: \"$LOCAL_VERSION\",
+       installedAt: \"$now\",
+       lastUpdated: \"$now\"
+     }]"
+  ok "Marketplace + plugin registered via JSON patch (v$LOCAL_VERSION, directory 本地源)"
+}
+
+register_plugin_local() {
+  require_jq
+  local now
+  now="$(date -u +%Y-%m-%dT%H:%M:%S.000Z)"
+
+  # 1) marketplace 注册 — 必须用 directory 本地源，而非 github 源。
+  #    踩坑记录1：github 源 + autoUpdate:false 拦不住覆盖——Claude Code 在会话
+  #    启动/插件协调时仍会从 github(已发布的更高版本)拉取并覆盖本地 sync 的
+  #    内容，导致版本错位 → hook 每次 checkVersionMatch 失败反复杀 worker。
+  #    踩坑记录2：手拼 known_marketplaces.json 条目即使 schema 看似正确，也可能
+  #    在 Claude Code 重启时被校验丢弃(实测 directory 源指向 marketplaces/ 镜像
+  #    目录的手写条目被整体清除，连带 installed_plugins 清空)。canonical 形态是
+  #    directory 源指向【项目根目录】(含 .claude-plugin/marketplace.json)。
+  #    因此优先走官方 CLI(claude plugin marketplace add)让 Claude Code 自己写
+  #    注册表；无 claude CLI 时才回退手写 canonical 形态。
+  local cli_registered=0
+  if command -v claude >/dev/null 2>&1; then
+    info "Registering via claude CLI (canonical, restart-safe)..."
+    if (cd "$SCRIPT_DIR" && claude plugin marketplace add "$SCRIPT_DIR" >/dev/null 2>&1); then
+      if claude plugin install claude-mem@thedotmack >/dev/null 2>&1; then
+        cli_registered=1
+        ok "Marketplace + plugin registered via claude CLI (directory 本地源)"
+      else
+        warn "claude plugin install failed — falling back to direct JSON patch"
+      fi
+    else
+      warn "claude CLI marketplace add failed — falling back to direct JSON patch"
+    fi
+  fi
+  if [[ "$cli_registered" != "1" ]]; then
+    register_plugin_json_fallback "$now"
+  fi
+
+  # 2) settings.json — 启用插件 + 禁用 Claude Code 内置 auto-memory
+  json_patch "$CLAUDE_SETTINGS" \
+    "(.enabledPlugins //= {}) |
+     .enabledPlugins[\"claude-mem@thedotmack\"] = true |
+     (.env //= {}) |
+     .env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = \"1\""
+  ok "Plugin enabled in settings.json, auto-memory disabled"
+}
+
+unregister_plugin_local() {
+  require_jq
+
+  if [[ -f "$KNOWN_MARKETPLACES" ]]; then
+    json_patch "$KNOWN_MARKETPLACES" 'del(.thedotmack)'
+    ok "Marketplace entry removed"
+  fi
+
+  if [[ -f "$INSTALLED_PLUGINS" ]]; then
+    json_patch "$INSTALLED_PLUGINS" 'del(.plugins."claude-mem@thedotmack")'
+    ok "Plugin record removed"
+  fi
+
+  if [[ -f "$CLAUDE_SETTINGS" ]]; then
+    json_patch "$CLAUDE_SETTINGS" 'del(.enabledPlugins."claude-mem@thedotmack")'
+    ok "Plugin disabled in settings.json"
+  fi
+}
+
+# ── Shared actions ──────────────────────────────────────────────────
+do_build() {
+  if check_built; then
+    ok "Already built"
+    return
+  fi
+
+  warn "Not built yet — $BUILT_MARKER not found"
+  printf "  Run ${BOLD}npm run build${RESET} now? [Y/n] "
+  read -r answer
+  case "$answer" in
+    n*|N*) fail "Build skipped — cannot continue"; exit 1 ;;
+  esac
+
+  step "Building claude-mem..."
+  (cd "$SCRIPT_DIR" && npm run build)
+  if check_built; then
+    ok "Build complete"
+  else
+    fail "Build failed — check errors above"
+    exit 1
+  fi
+}
+
+do_sync() {
+  step "Syncing to marketplace..."
+  if check_synced; then
+    ok "Already synced to $MARKETPLACE_DIR"
+    return
+  fi
+  # sync-marketplace.cjs rsyncs into <cache>/<version>/ but won't mkdir its
+  # parents — pre-create so a fresh-state install doesn't trip on first run.
+  mkdir -p "$MARKETPLACE_DIR" "$PLUGIN_CACHE_DIR"
+
+  # Make sure the tree-sitter binary is available locally BEFORE we run bun
+  # install, then disable the network-dependent postinstall.
+  ensure_treesitter_binary
+  patch_pkgjson_skip_treesitter
+
+  info "Running npm run sync-marketplace..."
+  # Tell sync-marketplace NOT to fire its own async /api/admin/restart: the
+  # install flow owns the worker lifecycle and does a deterministic stop+start
+  # afterwards (see do_restart_worker). The async trigger would only race that
+  # and was observed leaving the worker stopped. Inline env assignment works
+  # on both macOS (bash/zsh) and Windows Git Bash.
+  (cd "$SCRIPT_DIR" && CLAUDE_MEM_SYNC_NO_RESTART=1 npm run sync-marketplace)
+
+  # Place the binary into both bun-install locations so smart-file-read can
+  # actually call it. The marketplace dir runs at runtime; the versioned cache
+  # is what Claude Code loads from `installed_plugins.json`.
+  inject_treesitter_binary "$MARKETPLACE_DIR/node_modules"
+  inject_treesitter_binary "$PLUGIN_CACHE_DIR/node_modules"
+  restore_pkgjson
+  if check_synced; then
+    ok "Synced to marketplace"
+  else
+    fail "Sync failed"
+    exit 1
+  fi
+}
+
+do_start_worker() {
+  step "Starting worker..."
+  local port
+  port=$(get_worker_port)
+
+  if check_worker_running; then
+    ok "Worker already running on port ${port}"
+    return
+  fi
+
+  if [[ ! -f "$WORKER_SCRIPT" ]]; then
+    fail "Worker script not found at $WORKER_SCRIPT"
+    info "Run sync first: npm run sync-marketplace"
+    return 1
+  fi
+
+  info "Starting local worker via bun..."
+  bun "$WORKER_SCRIPT" start >/dev/null 2>&1 || true
+
+  # A cold worker boot (bun startup + DB init + migrations + SyncAgent) can take
+  # well over 10s on Windows/MSYS, where it was emitting a false "timed out"
+  # warning even though the worker came up moments later. Wait up to 30s.
+  local retries=0
+  while [[ $retries -lt 30 ]]; do
+    if curl -sf "http://127.0.0.1:${port}/api/health" -o /dev/null --connect-timeout 1 --max-time 2 2>/dev/null; then
+      ok "Worker started on port ${port}"
+      return
+    fi
+    retries=$((retries + 1))
+    sleep 1
+  done
+
+  warn "Worker health check timed out — it may still be starting"
+  info "Check status: bun $WORKER_SCRIPT status"
+}
+
+# Deterministically reload the worker onto a freshly-synced build. We reach
+# this only after do_build + do_sync deployed new code, so a bare "start if not
+# already running" (do_start_worker) is wrong: it would leave a STALE worker
+# from the previous build running. Stop any existing worker first, then start.
+# do_stop_worker is a no-op when nothing is running, so this is safe even on a
+# first install. Cross-platform: both helpers use is_windows_shell-aware kill.
+#
+# Idempotent per script run: multi-target installs (-i/-r both) call this once
+# per target, but all targets share the same build/sync output and the same
+# single worker instance — a second stop+start would reload identical code and
+# just waste a cold boot (10s+ on Windows/MSYS). Restart once, then skip.
+_WORKER_RELOADED=0
+do_restart_worker() {
+  if [[ "$_WORKER_RELOADED" == "1" ]]; then
+    ok "Worker already reloaded onto this build (skipping duplicate restart)"
+    return
+  fi
+  do_stop_worker
+  do_start_worker
+  _WORKER_RELOADED=1
+}
+
+do_stop_worker() {
+  step "Stopping worker..."
+  dbg "do_stop_worker: WORKER_SCRIPT=$WORKER_SCRIPT PID_FILE=$PID_FILE DATA_DIR=$DATA_DIR"
+
+  local running
+  if check_worker_running; then
+    running=1
+    dbg "do_stop_worker: worker IS running (health check ok)"
+  else
+    running=0
+    dbg "do_stop_worker: worker is NOT running"
+  fi
+
+  if [[ "$running" -eq 0 ]] && [[ ! -f "$PID_FILE" ]]; then
+    dbg "do_stop_worker: no PID file and not running — nothing to do"
+    ok "Worker not running"
+    return
+  fi
+
+  # Try graceful stop via worker script with a 5s timeout.
+  if [[ -f "$WORKER_SCRIPT" ]]; then
+    if command -v bun >/dev/null 2>&1; then
+      info "Stopping worker via bun (timeout 5s)..."
+      dbg "do_stop_worker: running: bun $WORKER_SCRIPT stop"
+      bun "$WORKER_SCRIPT" stop >/dev/null 2>&1 &
+      local stop_pid=$!
+      dbg "do_stop_worker: bun stop pid=$stop_pid"
+      local waited=0
+      while [[ $waited -lt 5 ]]; do
+        if ! kill -0 "$stop_pid" 2>/dev/null; then
+          dbg "do_stop_worker: bun stop exited after ${waited}s"
+          break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+      done
+      if kill -0 "$stop_pid" 2>/dev/null; then
+        dbg "do_stop_worker: killing hung bun stop (pid=$stop_pid)"
+        kill "$stop_pid" 2>/dev/null || true
+      fi
+      wait "$stop_pid" 2>/dev/null || true
+    else
+      dbg "do_stop_worker: bun not found, skipping graceful stop"
+    fi
+  else
+    dbg "do_stop_worker: WORKER_SCRIPT not found at $WORKER_SCRIPT"
+  fi
+
+  # Belt-and-braces: kill by PID file if still alive.
+  local pid=""
+  if [[ -f "$PID_FILE" ]]; then
+    pid=$(grep -o '"pid":[[:space:]]*[0-9]*' "$PID_FILE" 2>/dev/null | grep -o '[0-9]*$' || true)
+    dbg "do_stop_worker: PID file pid=$pid"
+  fi
+  if [[ -z "$pid" ]] || { ! is_windows_shell && ! ps -p "$pid" >/dev/null 2>&1; }; then
+    # Fallback: find worker by port when PID file is missing or stale
+    local port
+    port=$(get_worker_port)
+    dbg "do_stop_worker: trying to find worker on port $port"
+    pid=$(find_pid_listening_on_port "$port")
+    dbg "do_stop_worker: port-based pid=$pid"
+  fi
+
+  if [[ -n "$pid" ]] && { is_windows_shell || ps -p "$pid" >/dev/null 2>&1; }; then
+    dbg "do_stop_worker: killing pid=$pid"
+    terminate_worker_pid "$pid"
+  fi
+
+  if check_worker_running; then
+    warn "Worker may still be running"
+  else
+    ok "Worker stopped"
+  fi
+}
+
+print_summary() {
+  local label="$1"
+  printf "\n"
+  printf "${BOLD}─────────────────────────────────────────${RESET}\n"
+  printf "${BOLD} %s${RESET}\n" "$label"
+  printf "${BOLD}─────────────────────────────────────────${RESET}\n"
+
+  check_built          && ok "Built"          || fail "Not built"
+  check_synced         && ok "Synced"         || fail "Not synced"
+  check_worker_running && ok "Worker running" || warn "Worker not running"
+}
+
+# ── Claude Code ─────────────────────────────────────────────────────
+do_install_claude() {
+  printf "\n${BOLD}${BLUE}claude-mem — Claude Code Install${RESET}\n\n"
+
+  # Already fully installed? Short-circuit.
+  if check_built && check_synced && check_marketplace_registered && check_plugin_enabled && check_worker_running; then
+    local port; port=$(get_worker_port)
+    ok "Claude Code integration already installed and running"
+    printf "\n"
+    local lan_ip; lan_ip=$(get_lan_ip)
+    printf "  ${DIM}Viewer:${RESET}  http://127.0.0.1:%s" "$port"
+    [[ -n "$lan_ip" && "$lan_ip" != "YOUR-SERVER-IP" ]] && printf "  (LAN: http://%s:%s)" "$lan_ip" "$port"
+    printf "\n"
+    printf "  ${DIM}Health:${RESET}  http://127.0.0.1:%s/api/health\n" "$port"
+    printf "  ${DIM}Use -r claude to reinstall.${RESET}\n\n"
+    return
+  fi
+
+  ensure_bun
+  do_build
+  do_sync
+
+  step "Registering plugin with Claude Code (local-only, no npx)..."
+  register_plugin_local
+
+  # Deterministic reload onto the freshly-synced build (not a bare start —
+  # that would keep a stale worker from the old build alive).
+  do_restart_worker
+
+  print_summary "Claude Code — Install Summary"
+  check_marketplace_registered && ok "Registered"  || fail "Not registered"
+  check_plugin_enabled         && ok "Enabled"      || warn "Not enabled"
+
+  local port; port=$(get_worker_port)
+  local lan_ip; lan_ip=$(get_lan_ip)
+  printf "\n"
+  printf "  ${DIM}Viewer:${RESET}  http://127.0.0.1:%s" "$port"
+  [[ -n "$lan_ip" && "$lan_ip" != "YOUR-SERVER-IP" ]] && printf "  (LAN: http://%s:%s)" "$lan_ip" "$port"
+  printf "\n"
+  printf "  ${DIM}Health:${RESET}  http://127.0.0.1:%s/api/health\n" "$port"
+  printf "  ${DIM}Restart Claude Code to load the plugin.${RESET}\n\n"
+}
+
+do_uninstall_claude() {
+  printf "\n${BOLD}${BLUE}claude-mem — Claude Code Uninstall${RESET}\n\n"
+
+  do_stop_worker
+
+  step "Unregistering plugin (local-only, no npx)..."
+  unregister_plugin_local
+
+  step "Removing marketplace and cache directories..."
+  if [[ -d "$MARKETPLACE_DIR" ]]; then
+    rm -rf "$MARKETPLACE_DIR" && ok "Removed $MARKETPLACE_DIR"
+  fi
+  if [[ -d "$HOME/.claude/plugins/cache/thedotmack" ]]; then
+    rm -rf "$HOME/.claude/plugins/cache/thedotmack" && ok "Removed plugin cache"
+  fi
+  if [[ -d "$HOME/.claude/plugins/data/claude-mem-thedotmack" ]]; then
+    rm -rf "$HOME/.claude/plugins/data/claude-mem-thedotmack" && ok "Removed plugin data"
+  fi
+
+  printf "\n"
+  if check_marketplace_registered || check_plugin_enabled; then
+    warn "Plugin may not be fully removed — check manually"
+  else
+    ok "Plugin fully unregistered"
+  fi
+  # Explicit reminder: we never touch the data dir during uninstall/reinstall.
+  # The user's database, archives, chroma collections etc. survive untouched.
+  if [[ -d "$DATA_DIR" ]]; then
+    ok "Data preserved at ${DIM}$DATA_DIR${RESET} (use ${BOLD}-d${RESET} to fully purge)"
+  fi
+  printf "\n"
+}
+
+# ── Codex CLI ───────────────────────────────────────────────────────
+do_install_codex() {
+  printf "\n${BOLD}${BLUE}claude-mem — Codex CLI Install${RESET}\n\n"
+
+  step "Checking Codex CLI..."
+  if check_codex_cli; then
+    ok "Codex CLI found: $(command -v codex)"
+  else
+    fail "Codex CLI not found"
+    printf "\n"
+    info "Install Codex CLI first:"
+    printf "    npm install -g @openai/codex\n\n"
+    exit 1
+  fi
+
+  # Already fully installed?
+  if check_built && check_synced && check_codex_plugin_installed && check_worker_running; then
+    local port; port=$(get_worker_port)
+    ok "Codex CLI integration already installed and running"
+    printf "\n"
+    printf "  ${DIM}Use -r codex to reinstall.${RESET}\n\n"
+    return
+  fi
+
+  ensure_bun
+  do_build
+  do_sync
+
+  step "Registering Codex marketplace..."
+  if check_codex_marketplace; then
+    ok "Marketplace already registered with Codex"
+  else
+    info "Running codex plugin marketplace add..."
+    (cd "$SCRIPT_DIR" && codex plugin marketplace add "$SCRIPT_DIR" 2>/dev/null) || true
+  fi
+  (cd "$SCRIPT_DIR" && codex plugin marketplace upgrade "$CODEX_MARKETPLACE_NAME" 2>/dev/null) || true
+  (cd "$SCRIPT_DIR" && codex features enable plugin_hooks 2>/dev/null) || true
+
+  if check_codex_plugin_available; then
+    ok "Plugin available in Codex marketplace"
+  else
+    warn "Manual marketplace registration may be needed"
+    info "Run: codex plugin marketplace add $SCRIPT_DIR"
+  fi
+
+  step "Installing Codex plugin..."
+  if check_codex_plugin_installed; then
+    ok "Plugin already installed in Codex"
+  else
+    codex plugin add "$CODEX_PLUGIN_SELECTOR"
+    if check_codex_plugin_installed; then
+      ok "Plugin installed in Codex"
+    else
+      fail "Codex plugin add completed but plugin is still not installed"
+      exit 1
+    fi
+  fi
+
+  # Deterministic reload onto the freshly-synced build (see do_restart_worker).
+  do_restart_worker
+
+  print_summary "Codex CLI — Install Summary"
+  check_codex_marketplace       && ok "Marketplace registered with Codex" || warn "Marketplace not registered"
+  check_codex_plugin_available  && ok "Plugin available in Codex"         || warn "Plugin not available"
+  check_codex_plugin_installed  && ok "Plugin installed in Codex"         || warn "Plugin not installed"
+
+  printf "\n"
+  printf "  ${DIM}Restart Codex CLI to load the plugin.${RESET}\n\n"
+}
+
+# ── Full data purge ─────────────────────────────────────────────────
+# Only -d triggers this. Lists every top-level entry inside $DATA_DIR and
+# requires the user to type YES verbatim before we touch anything. Refuses
+# to run if it can't even list the dir (e.g. permissions) so we don't claim
+# success on a partial wipe.
+do_purge_data() {
+  step "Purging persistent data..."
+
+  if [[ ! -d "$DATA_DIR" ]]; then
+    ok "No data directory at ${DIM}$DATA_DIR${RESET} — nothing to purge"
+    return 0
+  fi
+
+  printf "  ${YELLOW}This will permanently delete the entire directory:${RESET}\n"
+  printf "    ${BOLD}%s${RESET}\n\n" "$DATA_DIR"
+
+  printf "  ${DIM}Top-level contents:${RESET}\n"
+  if ! ls -la "$DATA_DIR" 2>/dev/null | tail -n +2 | awk 'NR>1 {
+    size = $5;
+    name = $NF;
+    if (name == "." || name == "..") next;
+    printf "    %-40s %s\n", name, size
+  }'; then
+    fail "Cannot enumerate $DATA_DIR — refusing to delete"
+    return 1
+  fi
+
+  printf "\n  ${BOLD}${RED}This cannot be undone.${RESET}\n"
+  printf "  Type ${BOLD}YES${RESET} (uppercase) to confirm full purge: "
+  local answer
+  read -r answer
+
+  if [[ "$answer" != "YES" ]]; then
+    warn "Purge cancelled (expected literal 'YES')"
+    return 1
+  fi
+
+  # Refuse to rm -rf a path that's obviously not our data dir. Cheap guard
+  # against a typo'd CLAUDE_MEM_DATA_DIR=/ or similar. Note: HOME itself is
+  # blocked here; any subpath under HOME (the normal case) passes through
+  # to the .claude-mem substring check below.
+  case "$DATA_DIR" in
+    /|/home|/root|/Users|"$HOME")
+      fail "Refusing to delete suspicious path: $DATA_DIR"
+      return 1
+      ;;
+  esac
+  if [[ ! "$DATA_DIR" =~ \.claude-mem ]] && [[ -z "${CLAUDE_MEM_PURGE_FORCE:-}" ]]; then
+    fail "DATA_DIR ($DATA_DIR) does not contain '.claude-mem'; set CLAUDE_MEM_PURGE_FORCE=1 to override"
+    return 1
+  fi
+
+  rm -rf "$DATA_DIR" && ok "Removed $DATA_DIR"
+}
+
+do_destroy_claude() {
+  printf "\n${BOLD}${RED}claude-mem — Claude Code FULL DESTROY${RESET}\n"
+  printf "${DIM}This removes the plugin AND every byte of memory in %s.${RESET}\n" "$DATA_DIR"
+
+  do_uninstall_claude
+  do_purge_data
+}
+
+do_destroy_codex() {
+  printf "\n${BOLD}${RED}claude-mem — Codex CLI FULL DESTROY${RESET}\n"
+  printf "${DIM}This removes the plugin AND every byte of memory in %s.${RESET}\n" "$DATA_DIR"
+
+  do_uninstall_codex
+  do_purge_data
+}
+
+do_uninstall_codex() {
+  printf "\n${BOLD}${BLUE}claude-mem — Codex CLI Uninstall${RESET}\n\n"
+
+  if ! check_codex_cli; then
+    fail "Codex CLI not found — nothing to uninstall"
+    exit 1
+  fi
+
+  step "Removing Codex plugin install..."
+  if check_codex_plugin_installed; then
+    info "Removing $CODEX_PLUGIN_SELECTOR from Codex..."
+    codex plugin remove "$CODEX_PLUGIN_SELECTOR" 2>/dev/null || codex plugin remove "$CODEX_PLUGIN_NAME" --marketplace "$CODEX_MARKETPLACE_NAME" 2>/dev/null || true
+    if check_codex_plugin_installed; then
+      warn "Plugin may need manual removal"
+    else
+      ok "Plugin removed from Codex"
+    fi
+  else
+    ok "Plugin not installed — nothing to do"
+  fi
+  check_codex_marketplace && ok "Marketplace preserved for reinstall" || warn "Marketplace not registered"
+
+  if [[ -d "$DATA_DIR" ]]; then
+    ok "Data preserved at ${DIM}$DATA_DIR${RESET} (use ${BOLD}-d${RESET} to fully purge)"
+  fi
+  printf "\n"
+}
+
+# ── Sync settings writer (T-26) ─────────────────────────────────────
+# Writes/merges role + upstream + user_label + api_key into
+# $DATA_DIR/settings.json. Idempotent: re-running with the same flags
+# is a no-op; running with different values updates them in place.
+#
+# Why a separate helper instead of inlining in do_install_*:
+#   - both claude and codex installers share the same target file
+#   - we want it to happen AFTER the worker has rendered its first
+#     settings.json (defaults), so we only overlay sync keys.
+apply_sync_settings() {
+  local role="${1:-}"          # client | server | ''
+  local upstream="${2:-}"
+  local label="${3:-}"
+  local api_key="${4:-}"
+  local token="${5:-}"
+
+  if [[ -z "$role" && -z "$upstream" && -z "$label" && -z "$api_key" && -z "$token" ]]; then
+    return 0
+  fi
+
+  local file="$(windows_native_path "$DATA_DIR/settings.json")"
+  mkdir -p "$DATA_DIR"
+  if [[ ! -f "$file" ]]; then
+    printf '{"env":{}}\n' > "$file"
+  fi
+
+  # Pre-compute JS-safe string-or-null values before the heredoc.
+  # The old ${var:+\"$var\"}${var:-null} pattern was broken: when var is set,
+  # BOTH branches expand, producing '"value"value' which is a JS syntax error.
+  _js() { if [[ -n "$1" ]]; then printf '"%s"' "$1"; else printf null; fi; }
+  local _role_js;    _role_js="$(_js "$role")"
+  local _upstream_js; _upstream_js="$(_js "$upstream")"
+  local _label_js;    _label_js="$(_js "$label")"
+  local _apikey_js;   _apikey_js="$(_js "$api_key")"
+  local _token_js;    _token_js="$(_js "$token")"
+
+  step "Applying sync settings"
+  # Worker canonicalizes settings.json to FLAT (no env wrapper) on load.
+  # If we write nested env here, the worker's auto-migration silently
+  # drops any pre-existing top-level keys. So normalise to flat up-front.
+  node - <<EOF
+const fs = require('fs');
+const path = '$file';
+let raw = {};
+try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
+let flat = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+if (flat.env && typeof flat.env === 'object') {
+  flat = { ...flat, ...flat.env };
+  delete flat.env;
+}
+
+const role = ${_role_js};
+const upstream = ${_upstream_js};
+const label = ${_label_js};
+const apiKey = ${_apikey_js};
+const token = ${_token_js};
+
+if (role) {
+  flat.CLAUDE_MEM_NODE_ROLE = role;
+  if (role === 'server') {
+    if (!flat.CLAUDE_MEM_SERVER_BIND_HOST) flat.CLAUDE_MEM_SERVER_BIND_HOST = '0.0.0.0';
+  }
+}
+if (upstream) {
+  flat.CLAUDE_MEM_SYNC_UPSTREAM_URL = upstream;
+  if (!flat.CLAUDE_MEM_SYNC_ENABLED) flat.CLAUDE_MEM_SYNC_ENABLED = 'true';
+}
+if (label) flat.CLAUDE_MEM_USER_LABEL = label;
+if (apiKey) {
+  flat.CLAUDE_MEM_SYNC_API_KEY = apiKey;
+  flat.CLAUDE_MEM_SYNC_AUTH_MODE = 'apikey';
+}
+if (token) {
+  flat.CLAUDE_MEM_SYNC_ACCESS_TOKEN = token;
+  flat.CLAUDE_MEM_SERVER_ACCESS_TOKEN = token;
+}
+
+fs.writeFileSync(path, JSON.stringify(flat, null, 2) + '\n');
+console.log(' ✓ settings.json updated');
+EOF
+
+  if [[ "$role" == "server" ]]; then
+    info "Server mode: bind=0.0.0.0"
+  fi
+  if [[ "$role" == "client" && -z "$upstream" ]]; then
+    warn "client mode without --upstream: SyncAgent will not start until you set CLAUDE_MEM_SYNC_UPSTREAM_URL"
+  fi
+}
+
+
+
+# Deprecated: CORS now allows all origins in server mode; kept as no-op for
+# backward compatibility with scripts that pass --allowed-origins.
+apply_allowed_origins() {
+  local origins="${1:-}"
+  [[ -z "$origins" ]] && return 0
+  warn "CLAUDE_MEM_SERVER_ALLOWED_ORIGINS is deprecated — CORS now allows all origins in server mode"
+}
+
+
+# Print a clear warning when -i wrote new settings but the worker
+# was already running, so the user knows to restart manually.
+# Args: $1=worker-was-running-before-install ("1" or "")
+#       $2=settings-flags-were-passed       ("1" or "")
+warn_worker_needs_restart() {
+  local was_running="${1:-}"
+  local had_changes="${2:-}"
+  [[ "$was_running" == "1" && "$had_changes" == "1" ]] || return 0
+  printf "\n${YELLOW}${BOLD}⚠ Settings updated but worker is still running with the OLD config.${RESET}\n"
+  printf "  ${YELLOW}Login / role / admin-password changes will NOT take effect until restart.${RESET}\n"
+  printf "  ${BOLD}Run one of:${RESET}\n"
+  printf "    ${BOLD}./install-claude-mem -r %s${RESET}   ${DIM}(reinstall, preserves data)${RESET}\n" "${3:-claude}"
+  printf "    ${BOLD}./restart-claude-mem${RESET}             ${DIM}(just restart worker)${RESET}\n\n"
+}
+
+# ── Admin password ───────────────────────────────────────────────────
+apply_admin_password() {
+  local password="${1:-}"
+  if [[ -z "$password" ]]; then return 0; fi
+
+  local file="$(windows_native_path "$DATA_DIR/settings.json")"
+  mkdir -p "$DATA_DIR"
+  if [[ ! -f "$file" ]]; then
+    printf '{"env":{}}\n' > "$file"
+  fi
+
+  local hash
+  hash="$(node -e "console.log(require('crypto').createHash('sha1').update(process.argv[1]).digest('hex'))" "$password" 2>/dev/null)" || true
+  if [[ -z "$hash" ]]; then
+    hash="$(printf '%s' "$password" | openssl sha1 2>/dev/null | awk '{print $NF}')" || true
+  fi
+  if [[ -z "$hash" ]]; then
+    fail "Could not hash admin password (need node or openssl)"
+    return 1
+  fi
+
+  step "Setting admin password"
+
+  # Always write flat to match the worker's canonical schema (see comment
+   # in apply_sync_settings).
+  node - <<ENDNODE
+const fs = require('fs');
+const path = '$file';
+let raw = {};
+try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
+let flat = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+if (flat.env && typeof flat.env === 'object') {
+  flat = { ...flat, ...flat.env };
+  delete flat.env;
+}
+flat.CLAUDE_MEM_ADMIN_PASSWORD = '$hash';
+delete flat.CLAUDE_MEM_ADMIN_LOCKED;
+fs.writeFileSync(path, JSON.stringify(flat, null, 2) + '\\n');
+console.log(' ✓ admin password set (SHA1: $hash)');
+ENDNODE
+
+  # Clear login attempts to reset rate limit
+  local db="$DATA_DIR/claude-mem.db"
+  if [[ -f "$db" ]]; then
+    sqlite3 "$db" "DELETE FROM admin_login_attempts;" 2>/dev/null || true
+  fi
+
+  ok "Admin password updated & account unlocked"
+}
+
+# ── Chroma vector-search compatibility ──────────────────────────────
+# chroma-mcp pulls in onnxruntime>=1.20 via uvx. That package no longer
+# ships wheels for macOS Intel (macosx_10_16_x86_64) and only ships
+# arm64 wheels for macOS 14+. We auto-disable Chroma on hosts where the
+# install is guaranteed to fail and leave FTS5 search as the only path.
+# Globals set:
+#   CHROMA_COMPATIBLE — 1 (yes) or 0 (no)
+#   CHROMA_REASON     — human-readable explanation, used in install summary
+detect_chroma_compatibility() {
+  CHROMA_COMPATIBLE=0
+  CHROMA_REASON=""
+  local os arch
+  os="$(uname -s)"
+  arch="$(uname -m)"
+  case "$os" in
+    Linux)
+      CHROMA_COMPATIBLE=1
+      CHROMA_REASON="Linux ${arch} — onnxruntime ships manylinux wheels"
+      ;;
+    Darwin)
+      local ver major
+      ver="$(sw_vers -productVersion 2>/dev/null || echo 0)"
+      major="${ver%%.*}"
+      if [[ "$arch" == "arm64" && "$major" -ge 14 ]]; then
+        CHROMA_COMPATIBLE=1
+        CHROMA_REASON="macOS ${ver} arm64 — onnxruntime ships macosx_14_0_arm64 wheels"
+      elif [[ "$arch" == "arm64" ]]; then
+        CHROMA_REASON="macOS ${ver} arm64 — onnxruntime arm64 wheels require macOS 14+"
+      else
+        CHROMA_REASON="macOS ${ver} Intel (${arch}) — onnxruntime no longer publishes Intel wheels"
+      fi
+      ;;
+    *)
+      CHROMA_REASON="${os} ${arch} — Chroma compatibility unverified, defaulting off"
+      ;;
+  esac
+}
+
+# Write CLAUDE_MEM_CHROMA_ENABLED to settings.json based on detection,
+# overwriting any previous value. Always print the decision so the
+# operator sees it in the install transcript. Also exports CHROMA_CHANGED
+# (0/1) so the dispatcher can fold the change into _had_settings_changes
+# and trigger warn_worker_needs_restart when a stale worker would still
+# be using the old chroma mode in memory.
+apply_chroma_default() {
+  detect_chroma_compatibility
+  local file="$(windows_native_path "$DATA_DIR/settings.json")"
+  local enabled
+  if [[ "$CHROMA_COMPATIBLE" == "1" ]]; then enabled="true"; else enabled="false"; fi
+
+  # Compare against current value before writing, so we know whether a
+  # restart is needed. An unset value defaults to enabled at runtime.
+  local current=""
+  if [[ -f "$file" ]]; then
+    current="$(node -e "try{const s=require('$file');const e=s.env||s;console.log(e.CLAUDE_MEM_CHROMA_ENABLED||'')}catch(e){}" 2>/dev/null || true)"
+  fi
+  CHROMA_CHANGED="0"
+  if [[ "$current" != "$enabled" ]]; then
+    CHROMA_CHANGED="1"
+  fi
+
+  mkdir -p "$DATA_DIR"
+  if [[ ! -f "$file" ]]; then
+    printf '{}\n' > "$file"
+  fi
+  step "Configuring Chroma vector search"
+  if [[ "$enabled" == "true" ]]; then
+    ok "Chroma enabled — ${CHROMA_REASON}"
+  else
+    warn "Chroma disabled — ${CHROMA_REASON}"
+    info "Full-text (FTS5) search remains available; only vector search is off."
+    info "Override later: set CLAUDE_MEM_CHROMA_ENABLED=true in ${file}"
+  fi
+  # Worker canonicalizes settings.json to FLAT (no env wrapper) on load.
+  # Writing nested env here would create a hybrid file whose top-level
+  # keys (server role/token/admin) get dropped by the worker migration.
+  # Match apply_sync_settings: normalise to flat before writing.
+  node - <<EOF
+const fs = require('fs');
+const path = '$file';
+let raw = {};
+try { raw = JSON.parse(fs.readFileSync(path, 'utf-8')); } catch (e) { raw = {}; }
+let flat = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+if (flat.env && typeof flat.env === 'object') {
+  flat = { ...flat, ...flat.env };
+  delete flat.env;
+}
+flat.CLAUDE_MEM_CHROMA_ENABLED = '$enabled';
+fs.writeFileSync(path, JSON.stringify(flat, null, 2) + '\n');
+EOF
+}
+
+# Print the final Chroma decision again at install end so it survives
+# the wall of build/sync output that follows apply_chroma_default.
+print_chroma_summary() {
+  printf "\n${BOLD}Chroma:${RESET} "
+  if [[ "${CHROMA_COMPATIBLE:-0}" == "1" ]]; then
+    printf "${GREEN}enabled${RESET}  (${DIM}%s${RESET})\n" "$CHROMA_REASON"
+  else
+    printf "${YELLOW}disabled${RESET} (${DIM}%s${RESET})\n" "$CHROMA_REASON"
+    printf "  ${DIM}FTS5 full-text search still works.${RESET}\n"
+  fi
+}
+
+print_processing_time_status() {
+  local settings_file="$DATA_DIR/settings.json"
+  local env_val="${CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME:-}"
+  local file_val=""
+  if [[ -f "$settings_file" ]]; then
+    file_val="$(node -e "try{console.log(require('$settings_file').CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME||'')}catch(e){console.log('')}" 2>/dev/null || echo "")"
+  fi
+
+  local effective="${env_val:-${file_val:-false}}"
+  printf "${BOLD}Prompt processing time display:${RESET} "
+  if [[ "$effective" == "true" ]]; then
+    printf "${GREEN}ON${RESET}"
+  else
+    printf "${YELLOW}OFF${RESET} (default)"
+  fi
+  printf "  ${DIM}(env CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME=%s, file: %s)${RESET}\n" \
+    "${env_val:-(unset)}" "${file_val:-(unset)}"
+  if [[ "$effective" != "true" ]]; then
+    printf "  ${DIM}Enable: export CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME=true${RESET}\n"
+    printf "  ${DIM}    or add \"CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME\": \"true\" to %s${RESET}\n" "$settings_file"
+  fi
+}
+
+backfill_missing_settings() {
+  local file="$(windows_native_path "$DATA_DIR/settings.json")"
+  if [[ ! -f "$file" ]]; then return; fi
+
+  node -e "
+    const fs = require('fs');
+    const file = process.argv[1];
+    let raw = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    // Keys that should always exist with defaults
+    const defaults = {
+      CLAUDE_MEM_PROMPT_SHOW_PROCESSING_TIME: 'false',
+      CLAUDE_MEM_THINK_TIME_CAP_MINUTES: '3',
+    };
+    let changed = false;
+    for (const [k, v] of Object.entries(defaults)) {
+      if (!(k in raw)) { raw[k] = v; changed = true; }
+    }
+    if (changed) {
+      fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n');
+      console.log('  \x1b[2m→\x1b[0m Backfilled missing settings defaults');
+    }
+  " "$file" 2>/dev/null || true
+}
+
+# ── Server info generator ───────────────────────────────────────────
+get_lan_ip() {
+  # Collect all IPv4 addresses from every interface, then pick the best
+  # one: 192.168.x.x preferred, then 10.x.x.x, then 172.16-31.x.x,
+  # then any other non-loopback. "YOUR-SERVER-IP" only if nothing found.
+  local all_ips=""
+
+  if command -v ifconfig &>/dev/null; then
+    all_ips="$(ifconfig 2>/dev/null | grep -oE 'inet (addr:)?[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | awk '{print $NF}')"
+  elif command -v ip &>/dev/null; then
+    all_ips="$(ip -4 addr show 2>/dev/null | grep -oE 'inet [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | awk '{print $2}' | cut -d/ -f1)"
+  fi
+
+  if [[ -z "$all_ips" ]]; then
+    echo "YOUR-SERVER-IP"
+    return
+  fi
+
+  # Prefer 192.168.x.x
+  local pick
+  pick="$(echo "$all_ips" | grep -m1 '^192\.168\.')"
+  if [[ -n "$pick" ]]; then echo "$pick"; return; fi
+
+  # Then 10.x.x.x
+  pick="$(echo "$all_ips" | grep -m1 '^10\.')"
+  if [[ -n "$pick" ]]; then echo "$pick"; return; fi
+
+  # Then 172.[16-31].x.x
+  pick="$(echo "$all_ips" | grep -m1 '^172\.')"
+  if [[ -n "$pick" ]]; then echo "$pick"; return; fi
+
+  # Any non-loopback
+  pick="$(echo "$all_ips" | grep -v '^127\.' | head -1)"
+  if [[ -n "$pick" ]]; then echo "$pick"; return; fi
+
+  echo "YOUR-SERVER-IP"
+}
+
+generate_server_info_md() {
+  # This function MUST NOT cause the script to exit (set -e is active).
+  # All commands are guarded so the user always sees token + URL even
+  # when optional steps (IP detection, file write) fail.
+  #
+  # Heredoc uses QUOTED delimiter ('SERVEREOF') so bash does NOT expand
+  # backticks inside markdown code fences (```) as command substitution.
+  # Dynamic values go through __PLACEHOLDER__ → sed after the heredoc.
+  local token="$1"
+  local port
+  port="$(get_worker_port)" || true
+  local ip
+  ip="$(get_lan_ip)" || true
+
+  local file="$SCRIPT_DIR/SERVER-INFO.md"
+  local url="http://${ip}:${port}"
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+
+  cat > "$file" 2>/dev/null <<'SERVEREOF'
+# claude-mem Server Info
+
+> 生成时间：__TS__
+> 此文件描述的是 **本机作为 server** 的接入信息，供其它客户端机器使用。
+> 包含共享密钥，请妥善保管，不要提交到版本库。
+
+## 本机角色
+
+| 项目 | 值 |
+|---|---|
+| **本机角色** | `server`（已通过 `--role server` 安装） |
+| **Server API URL** | `__URL__` |
+| **Access Token** | `__TOKEN__` |
+
+## 客户端机器接入命令（在其它机器上执行）
+
+下面的 `--role client` 是给**其他要连接本 server 的机器**用的，不是本机的角色。
+替换 `<用户名>` 为实际标识（如 `zhangsan`）：
+
+```bash
+./install-claude-mem -i claude \
+  --role client \
+  --upstream __URL__ \
+  --label <用户名> \
+  --token __TOKEN__
+```
+
+## 验证连通性
+
+```bash
+# 在客户端执行
+curl -s -H "Authorization: Bearer __TOKEN__" "__URL__/api/sync/status"
+```
+
+返回 JSON 即表示连通成功。
+
+## 安全提醒
+
+- 此 token 是共享密钥，泄露后任何人都能向 server 推送数据
+- 如需轮换 token，server 端改 `CLAUDE_MEM_SERVER_ACCESS_TOKEN`，所有客户端同步更新
+- 建议将此文件移出共享目录或加密存储
+SERVEREOF
+
+  # Substitute placeholders with actual values.
+  if [[ -s "$file" ]]; then
+    sed "s|__URL__|${url}|g; s|__TOKEN__|${token}|g; s|__TS__|${ts}|g" \
+      "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+  fi
+
+  if [[ -s "$file" ]]; then
+    ok "SERVER-INFO.md generated at $file"
+  else
+    warn "Could not write SERVER-INFO.md (check directory permissions)"
+  fi
+
+  # Token and URL are ALWAYS printed, regardless of file write success.
+  echo ""
+  printf "  ${BOLD}🔑 Access Token:${RESET}  ${GREEN}%s${RESET}\n" "$token"
+  printf "  ${BOLD}🌐 Server URL:  ${RESET} ${BLUE}%s${RESET}\n" "$url"
+  echo ""
+  printf "  ${DIM}将以上信息发给每个需要接入的用户。${RESET}\n"
+  if [[ -s "$file" ]]; then
+    printf "  ${DIM}完整信息已写入 %s${RESET}\n" "$file"
+  fi
+}
+
+# ── Info ────────────────────────────────────────────────────────────
+show_info() {
+  printf "\n${BOLD}${BLUE}claude-mem — Configuration${RESET}\n\n"
+
+  local settings_file="$DATA_DIR/settings.json"
+  local role="client"
+  local label=""
+  local upstream=""
+  local token=""
+  local has_admin_pw="no"
+
+  if [[ -f "$settings_file" ]]; then
+    node -e "
+      const s = JSON.parse(require('fs').readFileSync('$settings_file','utf-8'));
+      const e = s.env || s;
+      console.log(JSON.stringify({
+        role: (e.CLAUDE_MEM_NODE_ROLE || 'client').trim(),
+        label: (e.CLAUDE_MEM_USER_LABEL || '').trim(),
+        upstream: (e.CLAUDE_MEM_SYNC_UPSTREAM_URL || '').trim(),
+        token: (e.CLAUDE_MEM_SYNC_ACCESS_TOKEN || e.CLAUDE_MEM_SERVER_ACCESS_TOKEN || '').trim(),
+        admin_pw: !!(e.CLAUDE_MEM_ADMIN_PASSWORD),
+      }));
+    " 2>/dev/null
+  fi > "$DATA_DIR/.info-tmp.json"
+
+  if [[ -s "$DATA_DIR/.info-tmp.json" ]]; then
+    role=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$DATA_DIR/.info-tmp.json','utf-8')).role)" 2>/dev/null || echo client)
+    label=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$DATA_DIR/.info-tmp.json','utf-8')).label)" 2>/dev/null || echo '')
+    upstream=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$DATA_DIR/.info-tmp.json','utf-8')).upstream)" 2>/dev/null || echo '')
+    token=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$DATA_DIR/.info-tmp.json','utf-8')).token)" 2>/dev/null || echo '')
+    has_admin_pw=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$DATA_DIR/.info-tmp.json','utf-8')).admin_pw?'yes':'no')" 2>/dev/null || echo no)
+  fi
+  rm -f "$DATA_DIR/.info-tmp.json"
+
+  local port
+  port=$(get_worker_port)
+
+  local running="no"
+  check_worker_running && running="yes"
+
+  local version="unknown"
+  [[ -f "$SCRIPT_DIR/package.json" ]] && version=$(node -p "require('$SCRIPT_DIR/package.json').version" 2>/dev/null || echo unknown)
+
+  local db_path="$DATA_DIR/claude-mem.db"
+  local db_size="N/A"
+  local db_obs="N/A"
+  local db_first="N/A"
+  if [[ -f "$db_path" ]] && command -v sqlite3 >/dev/null 2>&1; then
+    local raw_size
+    raw_size=$(wc -c < "$db_path" 2>/dev/null || echo 0)
+    if [[ "$raw_size" -gt 1073741824 ]]; then
+      db_size="$(( (raw_size + 53687091) / 1073741824 )) GB"
+    elif [[ "$raw_size" -gt 1048576 ]]; then
+      db_size="$(( (raw_size + 52428) / 1048576 )) MB"
+    else
+      db_size="$(( (raw_size + 51) / 1024 )) KB"
+    fi
+    db_obs=$(sqlite3 "$db_path" "SELECT COUNT(*) FROM observations;" 2>/dev/null || echo 'N/A')
+    db_first=$(sqlite3 "$db_path" "SELECT MIN(created_at) FROM observations;" 2>/dev/null || echo 'N/A')
+  fi
+
+  local uptime="N/A"
+  if [[ "$running" == "yes" ]]; then
+    local up_sec
+    up_sec=$(curl -sf --connect-timeout 2 --max-time 3 "http://127.0.0.1:${port}/api/health" 2>/dev/null | node -e "const d=require('fs').readFileSync('/dev/stdin','utf-8');try{console.log(JSON.parse(d).uptime||'')}catch(e){}" 2>/dev/null || echo '')
+    if [[ -n "$up_sec" && "$up_sec" =~ ^[0-9]+$ ]]; then
+      local d h m s
+      s=$up_sec
+      d=$((s/86400)); s=$((s%86400))
+      h=$((s/3600));  s=$((s%3600))
+      m=$((s/60));    s=$((s%60))
+      uptime="${d}d ${h}h ${m}m ${s}s"
+    fi
+  fi
+
+  local token_display="(not set)"
+  if [[ -n "$token" ]]; then
+    token_display="${token:0:8}...${token: -4}"
+  fi
+
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Role"        "$role"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Label"       "${label:-(none)}"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Worker port"  "$port"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Worker"       "${running} (port ${port})"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Uptime"       "$uptime"
+  printf "  ${BOLD}%-20s${RESET} %s\n" "Version"      "$version"
+
+  if [[ "$role" == "server" ]]; then
+    local ip
+    ip=$(get_lan_ip 2>/dev/null || echo 'unknown')
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Server URL"     "http://${ip}:${port}"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Access token"   "${token:-(not set)}"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Admin password" "$has_admin_pw"
+  fi
+
+  if [[ "$role" == "client" ]]; then
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Sync server URL" "${upstream:-(not set)}"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Sync token"      "${token:-(not set)}"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Token preview"   "$token_display"
+  fi
+
+  printf "  ${BOLD}%-20s${RESET} %s\n"   "Data dir"    "$DATA_DIR"
+  printf "  ${BOLD}%-20s${RESET} %s\n"   "DB size"     "$db_size"
+  printf "  ${BOLD}%-20s${RESET} %s\n"   "Observations" "$db_obs"
+  printf "  ${BOLD}%-20s${RESET} %s\n"   "First obs"   "$db_first"
+
+  if [[ "$role" == "client" && "$running" == "yes" ]]; then
+    local sync_status
+    sync_status=$(curl -sf --connect-timeout 2 --max-time 3 "http://127.0.0.1:${port}/api/sync/status" 2>/dev/null || echo '{}')
+    local lag_total last_error failures
+    lag_total=$(echo "$sync_status" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.lag?.total??'?')}catch{}})" 2>/dev/null || echo '?')
+    failures=$(echo "$sync_status" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.consecutive_failures??0)}catch{}})" 2>/dev/null || echo '0')
+    last_error=$(echo "$sync_status" | node -e "process.stdin.on('data',d=>{try{const j=JSON.parse(d);console.log(j.last_error||'')}catch{}})" 2>/dev/null || echo '')
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Sync lag"     "$lag_total items"
+    printf "  ${BOLD}%-20s${RESET} %s\n" "Sync failures" "$failures"
+    if [[ -n "$last_error" ]]; then
+      printf "  ${BOLD}%-20s${RESET} %s\n" "Last sync error" "$last_error"
+    fi
+  fi
+
+  printf "\n"
+}
+
+# ── Main ────────────────────────────────────────────────────────────
+
+# 将 target 参数解析为标准数组。支持：
+#   单值:    claude / codex
+#   别名:    both / all  →  claude codex
+#   逗号分隔: claude,codex  →  claude codex
+# 输出: 以换行分隔的标准 target 列表（每个为 claude 或 codex）
+resolve_targets() {
+  local raw="${1:-}"
+  local expanded=""
+  case "$raw" in
+    both|all) expanded="claude codex" ;;
+    *)        expanded="$(echo "$raw" | tr ',' ' ')" ;;
+  esac
+  local validated=""
+  for t in $expanded; do
+    case "$t" in
+      claude|codex) validated="$validated $t" ;;
+      *)  fail "Unknown target: $t"; printf "\n"; show_help; exit 1 ;;
+    esac
+  done
+  echo "$validated" | xargs
+}
+
+main() {
+  local action=""
+  local target=""
+  local sync_role=""
+  local sync_upstream=""
+  local sync_label=""
+  local sync_api_key=""
+  local sync_token=""
+  local reset_token=""
+  local admin_password=""
+  local allowed_origins=""
+  local debug_mode=""
+
+  # T-26: pull sync flags out of the argv first so the existing
+  # action/target positional logic stays unchanged.
+  local args=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --role) sync_role="${2:-}"; shift 2 ;;
+      --role=*) sync_role="${1#--role=}"; shift ;;
+      --upstream) sync_upstream="${2:-}"; shift 2 ;;
+      --upstream=*) sync_upstream="${1#--upstream=}"; shift ;;
+      --label) sync_label="${2:-}"; shift 2 ;;
+      --label=*) sync_label="${1#--label=}"; shift ;;
+      --api-key) sync_api_key="${2:-}"; shift 2 ;;
+      --api-key=*) sync_api_key="${1#--api-key=}"; shift ;;
+      --token) sync_token="${2:-}"; shift 2 ;;
+      --token=*) sync_token="${1#--token=}"; shift ;;
+      --reset-token) reset_token="1"; shift ;;
+      --admin-password) admin_password="${2:-}"; shift 2 ;;
+      --admin-password=*) admin_password="${1#--admin-password=}"; shift ;;
+      --allowed-origins) allowed_origins="${2:-}"; shift 2 ;;
+      --allowed-origins=*) allowed_origins="${1#--allowed-origins=}"; shift ;;
+      --debug) debug_mode="1"; DEBUG="1"; shift ;;
+      --info) show_info; return ;;
+      *) args+=("$1"); shift ;;
+    esac
+  done
+
+  set -- "${args[@]:-}"
+  action="${1:-}"
+  local raw_target="${2:-}"
+  local targets=()
+
+  # Enable trace mode after all local vars are declared.
+  if [[ -n "$debug_mode" ]]; then
+    export DEBUG="1"
+    set -x
+    dbg "Debug mode enabled"
+  fi
+
+  # If sync flags were passed without an action, default to -i so a single
+  # `--role client --upstream … --label …` invocation is enough.
+  if [[ -z "$action" && (-n "$sync_role" || -n "$sync_upstream" || -n "$sync_label" || -n "$sync_api_key" || -n "$sync_token") ]]; then
+    action="-i"
+  fi
+
+  # Default the client `--label` to the OS username when omitted.
+  if [[ "$sync_role" == "client" && -z "$sync_label" ]]; then
+    sync_label="$(whoami)"
+  fi
+
+
+  # Reinstall (-r) without explicit sync flags: read existing config
+  # from settings.json so the user does not need to re-specify everything.
+  if [[ "$action" == "-r" && -z "$sync_role" && -z "$sync_upstream" && -z "$sync_label" && -z "$sync_token" && -z "$sync_api_key" && -z "$allowed_origins" ]]; then
+    if [[ -f "$DATA_DIR/settings.json" ]]; then
+      sync_role="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_NODE_ROLE||'')}catch(e){}" 2>/dev/null || true)"
+      sync_upstream="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_UPSTREAM_URL||'')}catch(e){}" 2>/dev/null || true)"
+      sync_label="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_USER_LABEL||'')}catch(e){}" 2>/dev/null || true)"
+      sync_token="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SYNC_ACCESS_TOKEN||e.CLAUDE_MEM_SERVER_ACCESS_TOKEN||'')}catch(e){}" 2>/dev/null || true)"
+      allowed_origins="$(node -e "try{const c=require('"$DATA_DIR"/settings.json');const e=c.env||c;console.log(e.CLAUDE_MEM_SERVER_ALLOWED_ORIGINS||'')}catch(e){}" 2>/dev/null || true)"
+      if [[ -n "$sync_role" ]]; then
+        ok "Reinstalling with preserved config (role=$sync_role, label=${sync_label:-?})"
+      fi
+    fi
+  fi
+  # Server mode: preserve existing access token on reinstall, regenerate
+  # only on first install or when --reset-token is explicitly passed.
+  if [[ "$sync_role" == "server" && -z "$sync_token" ]]; then
+    if [[ -z "$reset_token" && -f "$DATA_DIR/settings.json" ]]; then
+      # Reuse existing token so connected clients don't break.
+      # Use node to read JSON safely (avoids grep/sed encoding issues
+      # and pipefail + command-substitution bugs in macOS bash 3.2).
+      sync_token="$(node -e "
+try {
+  const raw = require('fs').readFileSync('$DATA_DIR/settings.json','utf-8');
+  const data = JSON.parse(raw);
+  const env = data.env || data;
+  const t = env.CLAUDE_MEM_SERVER_ACCESS_TOKEN || '';
+  if (t) console.log(t);
+} catch(e) {}" 2>/dev/null || true)"
+      if [[ -n "$sync_token" ]]; then
+        ok "Reusing existing access token (use --reset-token to regenerate)"
+      fi
+    fi
+    if [[ -z "$sync_token" ]]; then
+      sync_token="$(node -e "console.log(require('crypto').randomBytes(20).toString('hex'))" 2>/dev/null)"
+      if [[ -z "$sync_token" ]]; then
+        sync_token="$(openssl rand -hex 20 2>/dev/null || echo "change-me-$(date +%s)")"
+      fi
+    fi
+  fi
+
+  # Server mode: default admin password to the access token when not
+  # explicitly overridden. This way the same credential secures both
+  # sync and the viewer login without the operator needing to remember
+  # a second secret.
+  if [[ "$sync_role" == "server" && -z "$admin_password" && -n "$sync_token" ]]; then
+    admin_password="$sync_token"
+    dbg "Defaulting admin password to access token"
+  fi
+
+  # Standalone --admin-password (no install action needed)
+  if [[ -z "$action" && -n "$admin_password" ]]; then
+    apply_admin_password "$admin_password"
+    return
+  fi
+
+  # No args → help
+  if [[ -z "$action" ]]; then
+    show_help
+    return
+  fi
+
+  case "$action" in
+    -h|--help)
+      show_help
+      ;;
+    -i)
+      if [[ -z "$raw_target" ]]; then
+        fail "Missing target. Use: -i claude, -i codex, or -i both"
+        exit 1
+      fi
+      targets=($(resolve_targets "$raw_target"))
+      # Snapshot pre-install worker state + whether any settings flags
+      # were passed, so we can warn the user after install if their new
+      # config is sitting on disk but a stale worker is still running.
+      local _had_settings_changes=""
+      if [[ -n "$sync_role$sync_upstream$sync_label$sync_api_key$sync_token$admin_password$allowed_origins" ]]; then
+        _had_settings_changes="1"
+      fi
+      local _worker_was_running=""
+      check_worker_running && _worker_was_running="1"
+      # 共享设置只应用一次（worker/Chroma/sync/admin）
+      apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+      apply_admin_password "$admin_password"
+      apply_allowed_origins "$allowed_origins"
+      apply_chroma_default
+      [[ "${CHROMA_CHANGED:-0}" == "1" ]] && _had_settings_changes="1"
+      backfill_missing_settings
+      # 逐个目标执行安装
+      for target in "${targets[@]}"; do
+        case "$target" in
+          claude) do_install_claude ;;
+          codex)  do_install_codex ;;
+        esac
+      done
+      [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
+      print_chroma_summary
+      print_processing_time_status
+      warn_worker_needs_restart "$_worker_was_running" "$_had_settings_changes" "$raw_target"
+      ;;
+    -u)
+      if [[ -z "$raw_target" ]]; then
+        fail "Missing target. Use: -u claude, -u codex, or -u both"
+        exit 1
+      fi
+      targets=($(resolve_targets "$raw_target"))
+      for target in "${targets[@]}"; do
+        case "$target" in
+          claude) do_uninstall_claude ;;
+          codex)  do_uninstall_codex ;;
+        esac
+      done
+      ;;
+    -r)
+      if [[ -z "$raw_target" ]]; then
+        fail "Missing target. Use: -r claude, -r codex, or -r both"
+        exit 1
+      fi
+      targets=($(resolve_targets "$raw_target"))
+      # 先卸载所有目标
+      for target in "${targets[@]}"; do
+        case "$target" in
+          claude) do_uninstall_claude ;;
+          codex)  do_uninstall_codex ;;
+        esac
+      done
+      # 共享设置只应用一次
+      apply_sync_settings "$sync_role" "$sync_upstream" "$sync_label" "$sync_api_key" "$sync_token"
+      apply_admin_password "$admin_password"
+      apply_allowed_origins "$allowed_origins"
+      apply_chroma_default
+      # 逐个目标重新安装
+      for target in "${targets[@]}"; do
+        case "$target" in
+          claude) do_install_claude ;;
+          codex)  do_install_codex ;;
+        esac
+      done
+      [[ "$sync_role" == "server" ]] && generate_server_info_md "$sync_token"
+      print_chroma_summary
+      print_processing_time_status
+      ;;
+    -d)
+      if [[ -z "$raw_target" ]]; then
+        fail "Missing target. Use: -d claude, -d codex, or -d both"
+        exit 1
+      fi
+      targets=($(resolve_targets "$raw_target"))
+      for target in "${targets[@]}"; do
+        case "$target" in
+          claude) do_destroy_claude ;;
+          codex)  do_destroy_codex ;;
+        esac
+      done
+      ;;
+    *)
+      printf "${RED}Unknown option: %s${RESET}\n\n" "$action"
+      show_help
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
