@@ -661,14 +661,12 @@ export class SessionRoutes extends BaseRouteHandler {
 
     session.modelOverride = undefined;
 
-    const pendingStore = this.sessionManager.getPendingMessageStore() as unknown as {
-      peekPendingTypesForRound?: (sessionDbId: number, promptNumber: number) => Promise<Array<{ message_type: string; tool_name: string | null }>>;
-    };
+    const pendingStore = this.sessionManager.getPendingMessageStore();
     // The current prompt is still open while a generator is started. When a
     // continuation arrives, only the immediately preceding closed prompt is
     // eligible for this generator; older session queue rows must not affect it.
     const targetPrompt = session.lastPromptNumber - 1;
-    const pending = targetPrompt > 0 && pendingStore.peekPendingTypesForRound
+    const pending = targetPrompt > 0
       ? await pendingStore.peekPendingTypesForRound(session.sessionDbId, targetPrompt)
       : [];
 

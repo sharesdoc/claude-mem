@@ -57,6 +57,12 @@ export interface ObservationQueueHealth {
 export interface ObservationQueueInspection {
   peekPendingTypes(sessionDbId: number): Promise<Array<{ message_type: string; tool_name: string | null }>>;
   peekPendingTypesForPrompt(sessionDbId: number, promptNumber: number): Promise<Array<{ message_type: string; tool_name: string | null }>>;
+  /**
+   * Returns pending/processing messages that belong to round slices for the
+   * specified prompt. Unlike peekPendingTypesForPrompt(), legacy/non-sliced
+   * pending rows for the same prompt are intentionally excluded.
+   */
+  peekPendingTypesForRound(sessionDbId: number, promptNumber: number): Promise<Array<{ message_type: string; tool_name: string | null }>>;
 }
 
 export type InspectableObservationQueueEngine = ObservationQueueEngine & ObservationQueueInspection;
@@ -128,6 +134,10 @@ export class SqliteObservationQueueEngine implements InspectableObservationQueue
 
   async peekPendingTypesForPrompt(sessionDbId: number, promptNumber: number): Promise<Array<{ message_type: string; tool_name: string | null }>> {
     return this.store.peekPendingTypesForPrompt(sessionDbId, promptNumber);
+  }
+
+  async peekPendingTypesForRound(sessionDbId: number, promptNumber: number): Promise<Array<{ message_type: string; tool_name: string | null }>> {
+    return this.store.peekPendingTypesForRound(sessionDbId, promptNumber);
   }
 
   async close(): Promise<void> {

@@ -346,6 +346,16 @@ export class BullMqObservationQueueEngine
       }));
   }
 
+  async peekPendingTypesForRound(sessionDbId: number, promptNumber: number): Promise<Array<{ message_type: string; tool_name: string | null }>> {
+    const jobs = await this.getSessionRuntime(sessionDbId).queue.getJobs(QUEUE_JOB_TYPES, 0, -1, true);
+    return jobs
+      .filter(job => job.data.message.prompt_number === promptNumber && job.data.message.roundSlice != null)
+      .map(job => ({
+        message_type: job.data.message.type,
+        tool_name: job.data.message.tool_name ?? null,
+      }));
+  }
+
   async getHealth(): Promise<ObservationQueueHealth> {
     try {
       const client = this.getHealthClient();
