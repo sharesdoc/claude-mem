@@ -136,7 +136,6 @@ export class SettingsRoutes extends BaseRouteHandler {
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_SUMMARY',
       'CLAUDE_MEM_CONTEXT_SHOW_LAST_MESSAGE',
       'CLAUDE_MEM_FOLDER_CLAUDEMD_ENABLED',
-      'CLAUDE_MEM_RAW_EVENT_STORE',
       'CLAUDE_MEM_RAW_EVENT_MAX_AGE_HOURS',
       'CLAUDE_MEM_RAW_EVENT_MAX_COMPENSATION',
       'CLAUDE_MEM_QWEN_MODEL',
@@ -271,11 +270,6 @@ export class SettingsRoutes extends BaseRouteHandler {
       if (isNaN(obsCount) || obsCount < 1 || obsCount > 200) {
         return { valid: false, error: 'CLAUDE_MEM_CONTEXT_OBSERVATIONS must be between 1 and 200' };
       }
-    }
-
-    if (settings.CLAUDE_MEM_RAW_EVENT_STORE !== undefined &&
-        settings.CLAUDE_MEM_RAW_EVENT_STORE !== 'true') {
-      return { valid: false, error: 'CLAUDE_MEM_RAW_EVENT_STORE must remain "true" because raw events are always retained' };
     }
 
     for (const key of ['CLAUDE_MEM_RAW_EVENT_MAX_AGE_HOURS', 'CLAUDE_MEM_RAW_EVENT_MAX_COMPENSATION']) {

@@ -51,7 +51,6 @@ export interface SettingsDefaults {
   CLAUDE_MEM_FOLDER_MD_EXCLUDE: string;  
   CLAUDE_MEM_SEMANTIC_INJECT: string;        
   CLAUDE_MEM_SEMANTIC_INJECT_LIMIT: string;  
-  CLAUDE_MEM_RAW_EVENT_STORE: string;
   CLAUDE_MEM_RAW_EVENT_MAX_AGE_HOURS: string;
   CLAUDE_MEM_RAW_EVENT_MAX_COMPENSATION: string;
   CLAUDE_MEM_TIER_ROUTING_ENABLED: string;   
@@ -200,7 +199,6 @@ export class SettingsDefaultsManager {
     CLAUDE_MEM_FOLDER_MD_EXCLUDE: '[]',  // JSON array of folder paths to exclude from CLAUDE.md generation
     CLAUDE_MEM_SEMANTIC_INJECT: 'false',             // Inject relevant past observations on every UserPromptSubmit (experimental, disabled by default)
     CLAUDE_MEM_SEMANTIC_INJECT_LIMIT: '5',           // Top-N most relevant observations to inject per prompt
-    CLAUDE_MEM_RAW_EVENT_STORE: 'true',              // Keep original hook events independently of summary generation
     CLAUDE_MEM_RAW_EVENT_MAX_AGE_HOURS: '24',        // Automatic recovery window for active sessions
     CLAUDE_MEM_RAW_EVENT_MAX_COMPENSATION: '10',     // Per-session recovery cap; larger batches are skipped
     CLAUDE_MEM_TIER_ROUTING_ENABLED: 'true',         // Route observations to models by complexity
