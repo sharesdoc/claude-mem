@@ -305,7 +305,7 @@ Settings are managed in `~/.claude-mem/settings.json` (auto-created with default
 
 Memory generation vendors are selected via `CLAUDE_MEM_PROVIDER` (`claude` default, `qwen`, `gemini`, `openrouter`, `deepseek`), each with its own `_API_KEY` / `_MODEL` group (`_URL` for the OpenAI-compatible qwen/deepseek endpoints). The daily/weekly report AI section uses `CLAUDE_MEM_REPORT_PROVIDER` (empty = disabled).
 
-Hook payloads are archived independently of the summary queue. `CLAUDE_MEM_RAW_EVENT_STORE` is enabled by default; automatic recovery only considers active sessions, events from the last 24 hours, and at most 10 events per session. These limits can be adjusted with `CLAUDE_MEM_RAW_EVENT_MAX_AGE_HOURS` and `CLAUDE_MEM_RAW_EVENT_MAX_COMPENSATION`. Events beyond the recovery limit remain in the raw archive but are not automatically summarized.
+Hook payloads are archived independently of the summary queue. Automatic recovery only considers active sessions, events from the last 24 hours, and at most 10 events per session. These limits can be adjusted with `CLAUDE_MEM_RAW_EVENT_MAX_AGE_HOURS` and `CLAUDE_MEM_RAW_EVENT_MAX_COMPENSATION`. Events beyond the recovery limit remain in the raw archive but are not automatically summarized.
 
 See the **[Configuration Guide](https://docs.claude-mem.ai/configuration)** for all available settings and examples.
 
