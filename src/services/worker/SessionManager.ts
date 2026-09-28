@@ -384,6 +384,12 @@ export class SessionManager {
       const events = rounds.getSliceEvents(session.contentSessionId, slice);
       if (events.length === 0) continue;
       const firstEvent = events[0];
+      // Round slices intentionally do not participate in tier routing's simple/summary
+      // classification today. These fixed placeholders describe the slice envelope,
+      // not the real mix of events inside it, so tier routing keeps the default model
+      // for round-slice work. Restoring model-cost savings here requires the
+      // batch-content-aware classification described as option 1 in
+      // doc/Issue-20260928183041382-P1.md; that redesign is not implemented yet.
       queued += await queue.enqueue(sessionDbId, session.contentSessionId, {
         type: 'observation',
         tool_name: 'input_round_slice',
