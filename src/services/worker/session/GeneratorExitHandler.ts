@@ -28,6 +28,7 @@ function isHardStopReason(reason: ActiveSession['abortReason']): boolean {
  *   1. Always: ensure SDK subprocess is dead.
  *   2. Hard-stop reasons (shutdown / restart-guard / overflow / quota): clear pending rows for the session and finalize.
  *   3. Otherwise (idle / natural completion):
+ *        - Flush the final open input round before inspecting pending work.
  *        - If 0 pending → finalize.
  *        - If pending > 0 and restart guard allows → respawn with backoff.
  *        - If guard tripped → clear pending and finalize.
@@ -103,10 +104,15 @@ export async function handleGeneratorExit(
 
   let pendingCount: number;
   try {
+    // The final input round may not have been materialized into queue work yet.
+    // Flush it before deciding whether the session is safe to finalize.
+    // flushInputRound() is idempotent and returns 0 when there is no open round.
+    await sessionManager.flushInputRound(sessionDbId);
+
     pendingCount = await pendingStore.getPendingCount(sessionDbId);
   } catch (e) {
     const normalized = e instanceof Error ? e : new Error(String(e));
-    logger.error('SESSION', 'Error during recovery pending-count check; aborting to prevent leaks', {
+    logger.error('SESSION', 'Error during recovery flush/pending-count check; aborting to prevent leaks', {
       sessionId: sessionDbId
     }, normalized);
     await terminateSession('Recovery abort', true);

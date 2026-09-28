@@ -26,6 +26,10 @@ export class SessionCompletionHandler {
 
     sessionStore.markSessionCompleted(sessionDbId);
 
+    // Defensive fallback for finalizeSession() callers that do not go through
+    // GeneratorExitHandler (e.g. completeByDbId()). Natural generator
+    // completion already pre-flushes before checking pending work, so this
+    // is an idempotent no-op on that path.
     let flushed = 0;
     try {
       flushed = await this.sessionManager.flushInputRound(sessionDbId);
